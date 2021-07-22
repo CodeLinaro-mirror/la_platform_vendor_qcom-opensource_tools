@@ -175,7 +175,13 @@ class FtraceParser(RamParser):
                 ring_trace_buffer_base_addr = self.ramdump.frame_field_offset(
                     'rb_wake_up_waiters','struct ring_buffer', 'buffers')
                 if ring_trace_buffer_base_addr is None:
-                    ring_trace_buffer_base_addr = 0x58
+                    ring_trace_buffer_base_addr = self.ramdump.field_offset(
+                            'struct ring_buffer', 'buffers')
+                if ring_trace_buffer_base_addr is None:
+                    if self.ramdump.arm64:
+                        ring_trace_buffer_base_addr = 0x58
+                    else:
+                        ring_trace_buffer_base_addr = 0x38
             ring_trace_buffer_nr_pages = self.ramdump.field_offset(
                 'struct ring_buffer_per_cpu', 'nr_pages')
 
@@ -244,8 +250,10 @@ class FtraceParser(RamParser):
                     nr_pages =  self.ramdump.read_u64(
                         b + ring_trace_buffer_nr_pages)
                 else:
-                    nr_pages =  self.ramdump.read_u64(
+                    nr_pages =  self.ramdump.read_u32(
                         b + ring_trace_buffer_nr_pages)
+                if nr_pages is None:
+                    continue
                 nr_total_buffer_pages = nr_total_buffer_pages +  nr_pages
 
                 nr_pages_per_buffer.append(nr_pages)
