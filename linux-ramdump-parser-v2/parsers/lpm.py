@@ -518,27 +518,54 @@ class lpm(RamParser):
                 cpuidle_drv_states = cpuidle_drv + self.ramdump.field_offset(
                                                                 'struct cpuidle_driver',
                                                                 'states')
-                cpuidle_state_usage_offset = self.ramdump.field_offset(
+                if (self.ramdump.kernel_version >= (5, 10, 0)):
+                    cpuidle_kobj_offset = self.ramdump.field_offset(
+                                                                'struct cpuidle_device',
+                                                                'kobjs')
+                    kobjs_base = cpuidle_dev + cpuidle_kobj_offset
+                    cpu = "CPU{}".format(i)
+                    usage_details[cpu] = {}
+                    for state_idx in range(state_count):
+                        if state_count < 10: # CPUIDLE_STATE_MAX
+                            temp = kobjs_base + state_idx * self.ramdump.sizeof('void*')
+                            cpuidle_state_usage_base = self.ramdump.read_u64(kobjs_base + state_idx * self.ramdump.sizeof('void*'))
+                            if cpuidle_state_usage_base != 0x0:                               
+                                state_usage_offset = cpuidle_state_usage_base + self.ramdump.field_offset('struct cpuidle_state_kobj','state_usage')
+                                state_usage_addr = self.ramdump.read_u64(state_usage_offset)
+                                cpuidle_drv_offset = cpuidle_state_usage_base + self.ramdump.field_offset('struct cpuidle_state_kobj','state')
+                                cpuidle_drv_state = self.ramdump.read_u64(cpuidle_drv_offset)
+                                state_name = self.ramdump.read_cstring(cpuidle_drv_state, 16)
+                                desc_offset = self.ramdump.field_offset('struct cpuidle_state', 'desc')
+                                state_desc = self.ramdump.read_cstring(cpuidle_drv_state + desc_offset, 32)
+                                # Usage data per cpu per state
+                                state = "state{}({})".format(state_idx, state_name)
+                                state_dict[state_name] = state_desc
+                                usage_details[cpu][state] = self.get_cpuidle_usage_details(state_usage_addr)
+                            else:
+                                usage_details[cpu][state] = 0
+
+                else:
+                    cpuidle_state_usage_offset = self.ramdump.field_offset(
                                                                 'struct cpuidle_device',
                                                                 'states_usage')
-                cpuidle_state_usage_base = cpuidle_dev + cpuidle_state_usage_offset
-                cpu = "CPU{}".format(i)
-                usage_details[cpu] = {}
-                for state in range(state_count):
-                    if state_count < 10: # CPUIDLE_STATE_MAX
-                        state_usage_addr = cpuidle_state_usage_base + \
-                                           state * self.ramdump.sizeof('struct cpuidle_state_usage')
-                        cpuidle_drv_state = cpuidle_drv_states + \
-                                           state * self.ramdump.sizeof('struct cpuidle_state')
-                        state_name = self.ramdump.read_cstring(cpuidle_drv_state, 16)
-                        desc_offset = self.ramdump.field_offset('struct cpuidle_state', 'desc')
-                        state_desc = self.ramdump.read_cstring(cpuidle_drv_state + desc_offset, 32)
-                        # Usage data per cpu per state
-                        state = "state{}({})".format(state, state_name)
-                        state_dict[state_name] = state_desc
-                        usage_details[cpu][state] = self.get_cpuidle_usage_details(state_usage_addr)
-                    else:
-                        break
+                    cpuidle_state_usage_base = cpuidle_dev + cpuidle_state_usage_offset
+                    cpu = "CPU{}".format(i)
+                    usage_details[cpu] = {}
+                    for state in range(state_count):
+                        if state_count < 10: # CPUIDLE_STATE_MAX
+                            state_usage_addr = cpuidle_state_usage_base + \
+                                               state * self.ramdump.sizeof('struct cpuidle_state_usage')
+                            cpuidle_drv_state = cpuidle_drv_states + \
+                                               state * self.ramdump.sizeof('struct cpuidle_state')
+                            state_name = self.ramdump.read_cstring(cpuidle_drv_state, 16)
+                            desc_offset = self.ramdump.field_offset('struct cpuidle_state', 'desc')
+                            state_desc = self.ramdump.read_cstring(cpuidle_drv_state + desc_offset, 32)
+                            # Usage data per cpu per state
+                            state = "state{}({})".format(state, state_name)
+                            state_dict[state_name] = state_desc
+                            usage_details[cpu][state] = self.get_cpuidle_usage_details(state_usage_addr)
+                        else:
+                            break
             self.print_state_description(state_dict)
             self.print_cpuidle_stats(usage_details)
         except Exception as err:

@@ -424,13 +424,14 @@ if __name__ == '__main__':
             sys.stderr.write("\n")
         if options.minidump:
             if p.cls.__name__ not in default_list:
-                sys.stderr.write("    [%d/%d] %s ... not supported in minidump \n" %
+                print("    [%d/%d] %s ... not supported in minidump \n" %
                                  (i + 1, len(parsers_to_run), p.longopt))
                 continue
 
 
-        sys.stderr.write("    [%d/%d] %s ... " %
-                         (i + 1, len(parsers_to_run), p.longopt))
+
+        print("    [%d/%d] %s ... " %
+                         (i + 1, len(parsers_to_run), p.longopt), end='')
         before = time.time()
         with print_out_section(p.cls.__name__):
             try:
@@ -446,11 +447,10 @@ if __name__ == '__main__':
                 if not options.debug:
                     print_out_str('!!! Exception while running {0}'.format(p.cls.__name__))
                     print_out_exception()
-                    sys.stderr.write("FAILED! ")
+                    print("FAILED! ")
                 else:
                     raise
-        sys.stderr.write("%fs\n" % (time.time() - before))
-        sys.stderr.flush()
+        print("%fs" % (time.time() - before))
         flush_outfile()
 
     sys.stderr.write("\n")

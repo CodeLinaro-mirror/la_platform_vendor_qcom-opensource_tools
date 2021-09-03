@@ -239,7 +239,7 @@ class DebugImage_v2():
 
         return
 
-    def parse_cpu_ctx(self, version, start, end, client_id, ram_dump):
+    def parse_cpu_ctx(self, version, start, end, client_id, ram_dump,dump_data_name=None):
         core = client_id - client.MSM_DUMP_DATA_CPU_CTX
 
         if version == 32 or version == "32":
@@ -310,7 +310,12 @@ class DebugImage_v2():
                     regset_name_addr[regset_name] = [regset_addr,regset_end]
                 regs = TZRegDump_v2()
                 cpu_index_num = "{0:x}".format(cpu_index >> 8)
-                core = "vcpu"+str(cpu_index_num)
+                print("dump_data_name = {0}".format(dump_data_name))
+                if dump_data_name and "vm_3" not in dump_data_name:
+                    core = "vcpu" + str(cpu_index_num) + "_" + dump_data_name.split('_vcpu_')[0]
+                else:
+                    core = "vcpu"+str(cpu_index_num)
+                    
                 regs_flag = regs.init_regs_v2(version, regset_name_addr, core, ram_dump)
                 if regs_flag == False:
                     print_out_str('!!! Could not get registers from TZ dump')
@@ -880,9 +885,14 @@ class DebugImage_v2():
                         print_out_str("!!! Magic {0:x} doesn't match! No context will be parsed".format(dump_data_magic))
                         continue
 
-                    getattr(DebugImage_v2, func)(
-                        self, dump_data_version, dump_data_addr,
-                        dump_data_addr + dump_data_len, client_id, ram_dump)
+                    if "parse_cpu_ctx" in func:
+                        getattr(DebugImage_v2, func)(
+                            self, dump_data_version, dump_data_addr,
+                            dump_data_addr + dump_data_len, client_id, ram_dump,dump_data_name=dump_data_name)
+                    else:
+                        getattr(DebugImage_v2, func)(
+                            self, dump_data_version, dump_data_addr,
+                            dump_data_addr + dump_data_len, client_id, ram_dump)
             sdi_dump_out.close()
         else:
             dump_table_num_entry_offset = ram_dump.field_offset(

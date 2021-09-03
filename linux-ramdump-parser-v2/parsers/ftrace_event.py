@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from collections import OrderedDict
+import re
 
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
@@ -581,17 +582,30 @@ class FtraceParser_Event(object):
                                 pr_f.append(str(ki).replace(" ",""))
                 for item,item_list in offset_data.items():
                     type_str,offset,size = item_list
-                    if 'unsigned char' in type_str or 'long' in type_str or 'int' in type_str or 'u32' in type_str or 'bool' in type_str or 'pid_t' in type_str:
+                    if 'long' in type_str or 'int' in type_str or 'u32' in type_str or 'bool' in type_str or 'pid_t' in type_str:
                         v = self.ramdump.read_u32(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
-                    elif 'char' in type_str or '__data_loc char' in type_str or 'const char *' in type_str or '__data_loc char[]' in type_str:
-                        if '__data_loc' in type_str:
-                            v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                            v = self.ramdump.read_cstring(ftrace_raw_entry + (v & 0xffff), (v >> 16))
-                            if isinstance(v, bytes):
-                                v = self.ramdump.read_cstring(ftrace_raw_entry + (offset*4))
+                    elif 'const' in type_str and 'char *' in type_str:
+                        v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
+                        v = self.ramdump.read_cstring(v)
+                        fmt_name_value_map[item] = v
+                    elif type_str.startswith('__data_loc') and type_str.endswith('char[]'):
+                        v = self.ramdump.read_u32(ftrace_raw_entry + offset)
+                        v = self.ramdump.read_cstring(ftrace_raw_entry + (v & 0xffff), (v >> 16))
+                        if isinstance(v, bytes):
+                            v = self.ramdump.read_cstring(ftrace_raw_entry + (offset*4))
+                        fmt_name_value_map[item] = v
+                    elif 'char[' in type_str:
+                        length = re.match(r'(?:unsigned )?char\[(\d+)\]', type_str)
+                        if length:
+                            length = int(length.group(1))
                         else:
-                            v = self.ramdump.read_cstring(ftrace_raw_entry + offset)
+                            print_out_str("ftrace: unknown length for {} ({})".format(item,))
+                            length = 12  # Chosen arbitrarily
+                        v = self.ramdump.read_cstring(ftrace_raw_entry + offset, max_length=length)
+                        fmt_name_value_map[item] = v
+                    elif 'char' in type_str:
+                        v = self.ramdump.read_u8(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
                     elif 'unsigned long' in type_str or 'u64' in type_str or 'void *' in type_str:
                         if self.ramdump.arm64:

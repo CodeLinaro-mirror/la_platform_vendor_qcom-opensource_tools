@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -191,63 +191,37 @@ class CacheDumpType_v2(object):
 
     def kryo_cache_parse(self, cmd, offset, outfile_name):
         #expected cmdline arguments for kryo cache parser.
-        opts_flgs = ["-i", "-o", "-t", "-c", "-s"]
+        opts_flgs = ["-i", "-o", "-t", "-c", "-s", "--sets"]
         infile_path = os.path.join(self.ramdump.outdir, self.infile_name)
         outfile_path = os.path.join(self.ramdump.outdir, outfile_name)
         cpu_name = self.cpu_name
         offset_str = str(offset)
-        opts_params = [infile_path, outfile_path, cmd, cpu_name, offset_str]
+        numsets = self.NumSets
+        opts_params = [infile_path, outfile_path, cmd, cpu_name, offset_str, numsets]
         argv = [None] * (2 * len(opts_flgs))
+        #get the path for the kryo_cache_tlb_parser.py in this directory
+        exec_path = sys.argv[0].strip("ramparse.py")
+        exec_path += "kryo_cache_tlb_json_parser.py"
+
         for i in range(len(opts_flgs)):
             argv[2 * i] = opts_flgs[i]
             argv[(2 * i) + 1] = opts_params[i]
 
-        with self.ramdump.open_file(outfile_name) as outfile_fd:
-            exec_name = "kryo_cache_tlb_parser.py"
-            exec_abspath = os.path.join(self.ramdump.get_srcdir(), exec_name)
-            args = [sys.executable, exec_abspath]
-            args.extend(argv)
-            p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               universal_newlines=True)
-            if p.returncode < 0:
-                print_out_str("{} Failed with error {}".format(p.args, p.returncode))
-            print_out_str(p.stderr)
-            outfile_fd.write(p.stdout)
-
-
-    def post_process(self, datafile_name, tagfile_name):
-        tagfd = self.ramdump.open_file(tagfile_name, 'rt')
-        datafd = self.ramdump.open_file(datafile_name, 'rt')
-
-        #discard first line since it's just a header
-        tagfd.readline()
-        datafd.readline()
-
-        tag_line = tagfd.readline()
-        data_line = datafd.readline()
-
-        while(tag_line != "" and data_line != ""):
-            tag_line = tag_line.strip(" ")
-            data_line = data_line.strip(" ")
-            output_arr = []
-            tag_line_arr = tag_line.split()
-            data_line_arr = data_line.split()
-            #always skip set and ways in the second file, since you already
-            #have it
-            data_line_arr = data_line_arr[2:]
-            for entry in tag_line_arr:
-                output_arr.append(int(entry.strip("\n"), 16))
-            for entry in data_line_arr:
-                output_arr.append(int(entry.strip("\n"), 16))
-            self.tableformat.printline(output_arr, self.outfile)
-            tag_line = tagfd.readline()
-            data_line = datafd.readline()
-
-        tagfd.close()
-        datafd.close()
-
-        self.ramdump.remove_file(tagfile_name)
-        self.ramdump.remove_file(datafile_name)
+        argv_str = " ".join(str(x) for x in argv)
+        exec_name = "kryo_cache_tlb_json_parser.py"
+        exec_abspath = os.path.join(self.ramdump.get_srcdir(), exec_name)
+        args = ["py -2", exec_abspath]
+        args.extend(argv)
+        args_str = " ".join(str(x) for x in args)
+        """We must do this, since the parser's main() function does not take
+           any arguments; they must be passed through the command line"""
+        p = subprocess.run(args_str, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True)
+        if p.returncode < 0:
+            print_out_str("{} Failed with error {}".format(p.args, p.returncode))
+        print_out_str(p.stderr)
+        self.outfile.close()
+        os.remove(self.outfile.name)
 
 class CacheDumpType_v3(object):
     def __init__(self):
@@ -272,12 +246,13 @@ class CacheDumpType_v3(object):
 
     def kryo_cache_parse(self, cmd, offset, outfile_name):
         #expected cmdline arguments for kryo cache parser.
-        opts_flgs = ["-i", "-o", "-t", "-c", "-s"]
+        opts_flgs = ["-i", "-o", "-t", "-c", "-s", "--sets"]
         infile_path = os.path.join(self.ramdump.outdir, self.infile_name)
         outfile_path = os.path.join(self.ramdump.outdir, outfile_name)
         cpu_name = self.cpu_name
         offset_str = str(offset)
-        opts_params = [infile_path, outfile_path, cmd, cpu_name, offset_str]
+        numsets = self.NumSets
+        opts_params = [infile_path, outfile_path, cmd, cpu_name, offset_str, numsets]
         argv = [None] * (2 * len(opts_flgs))
         #get the path for the kryo_cache_tlb_parser.py in this directory
         exec_path = sys.argv[0].strip("ramparse.py")
@@ -287,11 +262,23 @@ class CacheDumpType_v3(object):
             argv[2 * i] = opts_flgs[i]
             argv[(2 * i) + 1] = opts_params[i]
 
-        argv_str = " ".join(str(x) for x in argv)
 
         """We must do this, since the parser's main() function does not take
            any arguments; they must be passed through the command line"""
-        os.system("python " + exec_path + " " + argv_str)
+        exec_name = "kryo_cache_tlb_json_parser.py"
+        exec_abspath = os.path.join(self.ramdump.get_srcdir(), exec_name)
+        args = ["py -2", exec_abspath]
+        args.extend(argv)
+        args_str = " ".join(str(x) for x in args)
+        """We must do this, since the parser's main() function does not take
+           any arguments; they must be passed through the command line"""
+        p = subprocess.run(args_str, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True)
+        if p.returncode < 0:
+            print_out_str("{} Failed with error {}".format(p.args, p.returncode))
+        print_out_str(p.stderr)
+        self.outfile.close()
+        os.remove(self.outfile.name)
 
 
 class L1_DCache_A53(CacheDumpType_v1):
@@ -740,7 +727,7 @@ L1_ICache_KYRO2XX_SILVER = L1_ICache_A53
 class L1_ICache_KRYO4XX_SILVER(CacheDumpType_v2):
     def __init__(self):
         super(L1_ICache_KRYO4XX_SILVER, self).__init__()
-        self.cpu_name = "KRYO4SILVER"
+        self.cpu_name = "Kryo4Silver"
         self.tableformat = TableOutputFormat()
         self.tableformat.addColumn('Set', '{0:03x}', 3)
         self.tableformat.addColumn('Way', '{0:01x}', 1)
@@ -769,19 +756,10 @@ class L1_ICache_KRYO4XX_SILVER(CacheDumpType_v2):
         self.RegSize = 4
 
     def parse_dump(self):
-        tagfile_name = 'tag_scratch'
-        self.kryo_cache_parse("ICT", 0, tagfile_name)
+        tagfile_name = 'MSM_DUMP_DATA' + self.outfile.name[-4:]
+        self.kryo_cache_parse("CACHEDUMP_CACHE_ID_L1_I_TAG_DATA", 0, tagfile_name)
 
-        datafile_name = 'data_scratch'
-        """the input file is the dump for this ICACHE, and this is divided into
-           two parts: the tag contents for all of the ICACHE, followed by the
-           data contents for all of the ICACHE. As such, you must calculate the
-           size of the tag content for the ICACHE to get the offset into the
-           dump where the data contents start."""
-        data_offset = self.NumWays * self.NumSets * self.RegSize *\
-                      self.NumTagRegs
-        self.kryo_cache_parse("ICD", data_offset, datafile_name)
-        self.post_process(datafile_name, tagfile_name)
+
 
 
 class L1_DCache_KRYO4XX_SILVER(CacheDumpType_v2):
@@ -817,28 +795,17 @@ class L1_DCache_KRYO4XX_SILVER(CacheDumpType_v2):
         self.NumWays = 4
         self.NumTagRegs = 2
         self.RegSize = 4
-        self.cpu_name = "KRYO4SILVER"
+        self.cpu_name = "Kryo4Silver"
 
     def parse_dump(self):
-        tagfile_name = 'tag_scratch'
-        self.kryo_cache_parse("DCT", 0, tagfile_name)
-
-        datafile_name = 'data_scratch'
-        """the input file is the dump for this DCACHE, and this is divided into
-           two parts: the tag contents for all of the DCACHE, followed by the
-           data contents for all of the DCACHE. As such, you must calculate the
-           size of the tag content for the DCACHE to get the offset into the
-           dump where the data contents start."""
-        data_offset = self.NumWays * self.NumSets * self.RegSize *\
-                      self.NumTagRegs
-        self.kryo_cache_parse("DCD", data_offset, datafile_name)
-        self.post_process(datafile_name, tagfile_name)
+        tagfile_name = 'MSM_DUMP_DATA' + self.outfile.name[-4:]
+        self.kryo_cache_parse("CACHEDUMP_CACHE_ID_L1_D_TAG_DATA", 0, tagfile_name)
 
 
 class L1_ICache_KRYO4XX_GOLD(CacheDumpType_v2):
     def __init__(self):
         super(L1_ICache_KRYO4XX_GOLD, self).__init__()
-        self.cpu_name = "KRYO4GOLD"
+        self.cpu_name = "Kryo4Gold"
         self.tableformat = TableOutputFormat()
         self.tableformat.addColumn('Set', '{0:03x}', 3)
         self.tableformat.addColumn('Way', '{0:01x}', 1)
@@ -868,24 +835,13 @@ class L1_ICache_KRYO4XX_GOLD(CacheDumpType_v2):
         self.RegSize = 4
 
     def parse_dump(self):
-        tagfile_name = 'tag_scratch'
-        self.kryo_cache_parse("ICT", 0, tagfile_name)
-
-        datafile_name = 'data_scratch'
-        """the input file is the dump for this ICACHE, and this is divided into
-           two parts: the tag contents for all of the ICACHE, followed by the
-           data contents for all of the ICACHE. As such, you must calculate the
-           size of the tag content for the ICACHE to get the offset into the
-           dump where the data contents start."""
-        data_offset = self.NumWays * self.NumSets * self.RegSize *\
-                      self.NumTagRegs
-        self.kryo_cache_parse("ICD", data_offset, datafile_name)
-        self.post_process(datafile_name, tagfile_name)
+        tagfile_name = 'MSM_DUMP_DATA' + self.outfile.name[-4:]
+        self.kryo_cache_parse("CACHEDUMP_CACHE_ID_L1_I_TAG_DATA", 0, tagfile_name)
 
 class L1_DCache_KRYO4XX_GOLD(CacheDumpType_v2):
     def __init__(self):
         super(L1_DCache_KRYO4XX_GOLD, self).__init__()
-        self.cpu_name = "KRYO4GOLD"
+        self.cpu_name = "Kryo4Gold"
         self.NumSets = 0x100
         self.NumWays = 4
         self.NumTagRegs = 1
@@ -916,24 +872,14 @@ class L1_DCache_KRYO4XX_GOLD(CacheDumpType_v2):
         self.tableformat.addColumn('3C', '{0:08x}', 8)
 
     def parse_dump(self):
-        tagfile_name = 'tag_scratch'
-        self.kryo_cache_parse("DCT", 0, tagfile_name)
+        tagfile_name = 'MSM_DUMP_DATA' + self.outfile.name[-4:]
+        self.kryo_cache_parse("CACHEDUMP_CACHE_ID_L1_D_TAG_DATA", 0, tagfile_name)
 
-        datafile_name = 'data_scratch'
-        """the input file is the dump for this DCACHE, and this is divided into
-           two parts: the tag contents for all of the DCACHE, followed by the
-           data contents for all of the DCACHE. As such, you must calculate the
-           size of the tag content for the DCACHE to get the offset into the
-           dump where the data contents start."""
-        data_offset = self.NumWays * self.NumSets * self.RegSize *\
-                      self.NumTagRegs
-        self.kryo_cache_parse("DCD", data_offset, datafile_name)
-        self.post_process(datafile_name, tagfile_name)
 
 class L2_Cache_KRYO4XX_GOLD(CacheDumpType_v2):
     def __init__(self, numsets):
         super(L2_Cache_KRYO4XX_GOLD, self).__init__()
-        self.cpu_name = "KRYO4GOLD"
+        self.cpu_name = "Kryo4Gold"
         self.NumSets = numsets
         self.NumWays = 8
         self.NumTagRegs = 2
@@ -968,24 +914,9 @@ class L2_Cache_KRYO4XX_GOLD(CacheDumpType_v2):
         self.tableformat.addColumn('3C', '{0:08x}', 8)
 
     def parse_dump(self):
-        tagfile_name = 'tag_scratch'
-        if(self.NumSets == 0x200):
-            cmds = ["L2256CT", "L2256CD"]
-        else:
-            cmds = ["L2512CT", "L2512CD"]
+        tagfile_name = 'MSM_DUMP_DATA' + self.outfile.name[-4:]
 
-        self.kryo_cache_parse(cmds[0], 0, tagfile_name)
-
-        datafile_name = 'data_scratch'
-        """the input file is the dump for the cache, and this is divided into
-           two parts: the tag contents for all of the cache, followed by the
-           data contents for all of the cache. As such, you must calculate the
-           size of the tag content for the cache to get the offset into the
-           dump where the data contents start."""
-        data_offset = self.NumWays * self.NumSets * self.RegSize *\
-                      self.NumTagRegs
-        self.kryo_cache_parse(cmds[1], data_offset, datafile_name)
-        self.post_process(datafile_name, tagfile_name)
+        self.kryo_cache_parse("CACHEDUMP_CACHE_ID_L2_TAG_DATA", 0, tagfile_name)
 
 
 

@@ -98,10 +98,10 @@ class kgsl_snapshot_gmu_mem(Structure):
 
 def gmu_log(devp, dump, chipid):
     if chipid >= 0x7000000:
-        gmu_dev = dump.sibling_field_addr(devp, 'struct genc_device',
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
         gmu_logs = dump.read_structure_field(gmu_dev,
-                                             'struct genc_gmu_device',
+                                             'struct gen7_gmu_device',
                                              'gmu_log')
     else:
         gmu_dev = dump.sibling_field_addr(devp, 'struct a6xx_device',
@@ -109,25 +109,37 @@ def gmu_log(devp, dump, chipid):
         gmu_logs = dump.read_structure_field(gmu_dev,
                                              'struct a6xx_gmu_device',
                                              'gmu_log')
-
-    gmu_log_hostptr = dump.read_structure_field(gmu_logs,
-                                                'struct gmu_memdesc',
-                                                'hostptr')
-    gmu_log_size = dump.read_structure_field(gmu_logs,
-                                             'struct gmu_memdesc', 'size')
-    gmu_log_gmuaddr = dump.read_structure_field(gmu_logs,
-                                                'struct gmu_memdesc',
-                                                'gmuaddr')
-    return (gmu_log_hostptr, gmu_log_size, gmu_log_gmuaddr)
+    if dump.kernel_version >= (5, 10, 0):
+        gmu_log_hostptr = dump.read_structure_field(gmu_logs,
+                                                    'struct kgsl_memdesc',
+                                                    'hostptr')
+        gmu_log_size = dump.read_structure_field(gmu_logs,
+                                                 'struct kgsl_memdesc', 'size')
+        gmu_log_gpuaddr = dump.read_structure_field(gmu_logs,
+                                                    'struct kgsl_memdesc',
+                                                    'gpuaddr')
+        # Set gmuaddr to 0 since it is not present in kgsl_memdesc
+        gmu_log_gmuaddr = 0
+    else:
+        gmu_log_hostptr = dump.read_structure_field(gmu_logs,
+                                                    'struct gmu_memdesc',
+                                                    'hostptr')
+        gmu_log_size = dump.read_structure_field(gmu_logs,
+                                                 'struct gmu_memdesc', 'size')
+        gmu_log_gmuaddr = dump.read_structure_field(gmu_logs,
+                                                    'struct gmu_memdesc',
+                                                    'gmuaddr')
+        gmu_log_gpuaddr = 0
+    return (gmu_log_hostptr, gmu_log_size, gmu_log_gmuaddr, gmu_log_gpuaddr)
 
 
 def hfi_mem(devp, dump, chipid):
     if chipid >= 0x7000000:
-        gmu_dev = dump.sibling_field_addr(devp, 'struct genc_device',
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
-        hfi = dump.struct_field_addr(gmu_dev, 'struct genc_gmu_device',
+        hfi = dump.struct_field_addr(gmu_dev, 'struct gen7_gmu_device',
                                      'hfi')
-        hfi_mem = dump.read_structure_field(hfi, 'struct genc_hfi',
+        hfi_mem = dump.read_structure_field(hfi, 'struct gen7_hfi',
                                             'hfi_mem')
     else:
         gmu_dev = dump.sibling_field_addr(devp, 'struct a6xx_device',
@@ -136,25 +148,37 @@ def hfi_mem(devp, dump, chipid):
                                      'hfi')
         hfi_mem = dump.read_structure_field(hfi, 'struct a6xx_hfi',
                                             'hfi_mem')
-
-    hfi_mem_hostptr = dump.read_structure_field(hfi_mem,
-                                                'struct gmu_memdesc',
-                                                'hostptr')
-    hfi_mem_size = dump.read_structure_field(hfi_mem,
-                                             'struct gmu_memdesc', 'size')
-    hfi_mem_gmuaddr = dump.read_structure_field(hfi_mem,
-                                                'struct gmu_memdesc',
-                                                'gmuaddr')
-    return (hfi_mem_hostptr, hfi_mem_size, hfi_mem_gmuaddr)
+    if dump.kernel_version >= (5, 10, 0):
+        hfi_mem_hostptr = dump.read_structure_field(hfi_mem,
+                                                    'struct kgsl_memdesc',
+                                                    'hostptr')
+        hfi_mem_size = dump.read_structure_field(hfi_mem,
+                                                 'struct kgsl_memdesc', 'size')
+        hfi_mem_gpuaddr = dump.read_structure_field(hfi_mem,
+                                                    'struct kgsl_memdesc',
+                                                    'gpuaddr')
+        # Set gmuaddr to 0 since it is not present in kgsl_memdesc
+        hfi_mem_gmuaddr = 0
+    else:
+        hfi_mem_hostptr = dump.read_structure_field(hfi_mem,
+                                                    'struct gmu_memdesc',
+                                                    'hostptr')
+        hfi_mem_size = dump.read_structure_field(hfi_mem,
+                                                 'struct gmu_memdesc', 'size')
+        hfi_mem_gmuaddr = dump.read_structure_field(hfi_mem,
+                                                    'struct gmu_memdesc',
+                                                    'gmuaddr')
+        hfi_mem_gpuaddr = 0
+    return (hfi_mem_hostptr, hfi_mem_size, hfi_mem_gmuaddr, hfi_mem_gpuaddr)
 
 
 def snapshot_gmu_mem_section(devp, dump, chipid, file, hdr_type):
     if hdr_type == SNAPSHOT_GMU_MEM_HFI:
-        (gmu_mem_hostptr, gmu_mem_size, gmu_mem_gmuaddr) = hfi_mem(devp, dump,
-                                                                   chipid)
+        (gmu_mem_hostptr, gmu_mem_size, gmu_mem_gmuaddr, gmu_mem_gpuaddr) = \
+            hfi_mem(devp, dump, chipid)
     elif hdr_type == SNAPSHOT_GMU_MEM_LOG:
-        (gmu_mem_hostptr, gmu_mem_size, gmu_mem_gmuaddr) = gmu_log(devp, dump,
-                                                                   chipid)
+        (gmu_mem_hostptr, gmu_mem_size, gmu_mem_gmuaddr, gmu_mem_gpuaddr) = \
+            gmu_log(devp, dump, chipid)
     else:
         return
 
@@ -169,7 +193,7 @@ def snapshot_gmu_mem_section(devp, dump, chipid, file, hdr_type):
     mem_hdr.type = hdr_type
     mem_hdr.hostaddr = gmu_mem_hostptr
     mem_hdr.gmuaddr = gmu_mem_gmuaddr
-    mem_hdr.gpuaddr = 0
+    mem_hdr.gpuaddr = gmu_mem_gpuaddr
     file.write(mem_hdr)
 
     data = dump.read_binarystring(gmu_mem_hostptr, gmu_mem_size)

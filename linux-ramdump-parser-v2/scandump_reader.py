@@ -227,6 +227,9 @@ class Scandump_v2():
         for reg_name, t32_name, print_pc in register_names:
             if re.match('(.*)reserved(.*)', reg_name):
                 continue
+            if not reg_name in self.regs:
+                print_out_str (reg_name + " not captured in scandump")
+                continue
             if print_pc:
                 a = ramdump.unwind_lookup(self.regs[reg_name])
                 if a is not None:
@@ -242,7 +245,7 @@ class Scandump_v2():
                               reg_name, self.regs[reg_name], pc_string))
             else:
                 print_out_str('   {0:8} = 0x{1:016x}'.format(
-                              reg_name, self.regs[reg_name]))
+                          reg_name, self.regs[reg_name]))
 
     def dump_all_regs(self, ram_dump):
         print_out_str('core{0} regs:'.format(self.core))

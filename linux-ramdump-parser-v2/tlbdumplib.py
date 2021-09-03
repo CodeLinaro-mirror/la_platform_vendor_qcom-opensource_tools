@@ -1,4 +1,4 @@
-# Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -235,77 +235,31 @@ class TlbDumpType_v3(object):
         offset_str = str(offset)
         opts_params = [infile_path, outfile_path, cmd, cpu_name, offset_str]
         argv = [None] * (2 * len(opts_flgs))
+        #get the path for the kryo_cache_tlb_parser.py in this directory
+        exec_path = sys.argv[0].strip("ramparse.py")
+        exec_path += "kryo_cache_tlb_json_parser.py"
+
         for i in range(len(opts_flgs)):
             argv[2 * i] = opts_flgs[i]
             argv[(2 * i) + 1] = opts_params[i]
 
-        with self.ramdump.open_file(outfile_name) as outfile_fd:
-            exec_name = "kryo_cache_tlb_parser.py"
-            exec_abspath = os.path.join(self.ramdump.get_srcdir(), exec_name)
-            args = [sys.executable, exec_abspath]
-            args.extend(argv)
-            p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               universal_newlines=True)
-            if p.returncode < 0:
-                print_out_str("{} Failed with error {}".format(p.args, p.returncode))
-            print_out_str(p.stderr)
-            outfile_fd.write(p.stdout)
+        """We must do this, since the parser's main() function does not take
+           any arguments; they must be passed through the command line"""
+        exec_name = "kryo_cache_tlb_json_parser.py"
+        exec_abspath = os.path.join(self.ramdump.get_srcdir(), exec_name)
+        args = ["py -2", exec_abspath]
+        args.extend(argv)
+        args_str = " ".join(str(x) for x in args)
+        """We must do this, since the parser's main() function does not take
+           any arguments; they must be passed through the command line"""
+        p = subprocess.run(args_str, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True)
+        if p.returncode < 0:
+            print_out_str("{} Failed with error {}".format(p.args, p.returncode))
+        print_out_str(p.stderr)
+        self.outfile.close()
+        os.remove(self.outfile.name)
 
-    def post_process(self, datafile_name, tagfile_name=None):
-        if(tagfile_name is not None and datafile_name is not None):
-            tagfd = self.ramdump.open_file(tagfile_name, mode='rt')
-            datafd = self.ramdump.open_file(datafile_name, mode='rt')
-
-            #discard first line since it's just a header
-            tagfd.readline()
-            datafd.readline()
-
-            tag_line = tagfd.readline()
-            data_line = datafd.readline()
-
-            while(tag_line != "" and data_line != ""):
-                tag_line = tag_line.strip(" ")
-                data_line = data_line.strip(" ")
-                output_arr = []
-                tag_line_arr = tag_line.split()
-                data_line_arr = data_line.split()
-                #always skip set and ways in the second file, since you already
-                #have it
-                data_line_arr = data_line_arr[2:]
-                for entry in tag_line_arr:
-                    output_arr.append(int(entry.strip("\n"), 16))
-                for entry in data_line_arr:
-                    output_arr.append(int(entry.strip("\n"), 16))
-                self.tableformat.printline(output_arr, self.outfile)
-                tag_line = tagfd.readline()
-                data_line = datafd.readline()
-
-            tagfd.close()
-            datafd.close()
-
-            self.ramdump.remove_file(tagfile_name)
-            self.ramdump.remove_file(datafile_name)
-
-        elif(tagfile_name is None and datafile_name is not None):
-            datafd = self.ramdump.open_file(datafile_name, mode='rt')
-
-            #discard first line since it's just a header
-            datafd.readline()
-
-            data_line = datafd.readline()
-
-            while(data_line != ""):
-                data_line = data_line.strip(" ")
-                output_arr = []
-                data_line_arr = data_line.split()
-                for entry in data_line_arr:
-                    output_arr.append(int(entry.strip("\n"), 16))
-                self.tableformat.printline(output_arr, self.outfile)
-                data_line = datafd.readline()
-
-            datafd.close()
-
-            self.ramdump.remove_file(datafile_name)
 
 class TlbDumpType_v4(object):
     def __init__(self):
@@ -349,8 +303,20 @@ class TlbDumpType_v4(object):
 
         """We must do this, since the parser's main() function does not take
            any arguments; they must be passed through the command line"""
-        os.system("python " + exec_path + " " + argv_str)
-
+        exec_name = "kryo_cache_tlb_json_parser.py"
+        exec_abspath = os.path.join(self.ramdump.get_srcdir(), exec_name)
+        args = ["py -2", exec_abspath]
+        args.extend(argv)
+        args_str = " ".join(str(x) for x in args)
+        """We must do this, since the parser's main() function does not take
+           any arguments; they must be passed through the command line"""
+        p = subprocess.run(args_str, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True)
+        if p.returncode < 0:
+            print_out_str("{} Failed with error {}".format(p.args, p.returncode))
+        print_out_str(p.stderr)
+        self.outfile.close()
+        os.remove(self.outfile.name)
 
 class L1_TLB_KRYO2XX_GOLD(TlbDumpType_v2):
     def __init__(self):
@@ -646,9 +612,8 @@ class L1_ITLB_KRYO4XX_GOLD(TlbDumpType_v3):
         self.tableformat.addColumn('NS', '{0:01x}', 1)
 
     def parse_dump(self):
-        datafile_name = "data_scratch"
-        self.kryo_tlb_parse("L1ITLB", 0, datafile_name)
-        self.post_process(datafile_name)
+        datafile_name = "MSM_DUMP_DATA" + self.outfile.name[-4:]
+        self.kryo_tlb_parse("CACHEDUMP_CACHE_ID_L1_I_TLB", 0, datafile_name)
 
 
 class L1_DTLB_KRYO4XX_GOLD(TlbDumpType_v3):
@@ -673,9 +638,8 @@ class L1_DTLB_KRYO4XX_GOLD(TlbDumpType_v3):
         self.tableformat.addColumn('PBHA', '{0:01x}', 1)
 
     def parse_dump(self):
-        datafile_name = "data_scratch"
-        self.kryo_tlb_parse("L1DTLB", 0, datafile_name)
-        self.post_process(datafile_name)
+        datafile_name = "MSM_DUMP_DATA" + self.outfile.name[-4:]
+        self.kryo_tlb_parse("CACHEDUMP_CACHE_ID_L1_D_TLB", 0, datafile_name)
 
 class L2_TLB_KRYO4XX_SILVER(TlbDumpType_v3):
     def __init__(self):
@@ -716,19 +680,8 @@ class L2_TLB_KRYO4XX_SILVER(TlbDumpType_v3):
         self.RegSize = 4
 
     def parse_dump(self):
-        tagfile_name = "tag_scratch"
-        self.kryo_tlb_parse("TLBT", 0, tagfile_name)
-
-        datafile_name = "data_scratch"
-        """the input file is the dump for this TLB, and this is divided into
-           two parts: the tag contents for all of the TLB, followed by the data
-           contents for all of the TLB. As such, you must calculate the size of
-           the tag content for the TLB to get the offset into the dump where the
-           data contents start."""
-        data_offset = self.NumWays * self.NumSets * self.RegSize *\
-                      self.NumTagRegs
-        self.kryo_tlb_parse("TLBD", data_offset, datafile_name)
-        self.post_process(datafile_name, tagfile_name)
+        tagfile_name = 'MSM_DUMP_DATA' + self.outfile.name[-4:]
+        self.kryo_tlb_parse("CACHEDUMP_CACHE_ID_L2_TLB_TAG_DATA", 0, tagfile_name)
 
 
 class L2_TLB_KRYO4XX_GOLD(TlbDumpType_v3):
@@ -757,9 +710,8 @@ class L2_TLB_KRYO4XX_GOLD(TlbDumpType_v3):
         self.tableformat.addColumn('TxlnRegime(0x)', '{0:01x}', 1)
 
     def parse_dump(self):
-        datafile_name = "data_scratch"
-        self.kryo_tlb_parse("TLBD", 0, datafile_name)
-        self.post_process(datafile_name)
+        datafile_name = "MSM_DUMP_DATA" + self.outfile.name[-4:]
+        self.kryo_tlb_parse("CACHEDUMP_CACHE_ID_L2_TAG_DATA", 0, datafile_name)
 
 
 if os.path.exists(os.path.join(os.path.dirname(__file__), 'extensions', 'cache_tlb_config.py')):
