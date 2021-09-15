@@ -1,4 +1,4 @@
-# Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -256,7 +256,10 @@ class RunQueues(RamParser):
             else:
                 stack_addr = stack_addr & 0xFFFFFFFF
 
-            stack_addr = self.ramdump.read_u64(stack_addr)
+            if self.ramdump.kernel_version >= (5, 10, 0) and self.ramdump.minidump:
+                stack_addr = stack_addr
+            else:
+                stack_addr = self.ramdump.read_u64(stack_addr)
 
             if self.ramdump.arm64:
                 stack_align = 8
