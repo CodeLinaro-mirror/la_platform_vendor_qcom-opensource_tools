@@ -217,7 +217,11 @@ class DebugImage_v2():
             print_out_str('Could not find cpuss_parser_path . Please define cpuss_parser_path in local_settings')
             return
         offset = None
-        for eb_file in ram_dump.ebi_files:
+        if not ram_dump.minidump:
+            ebi_files = ram_dump.ebi_files
+        else:
+            ebi_files = ram_dump.ebi_files_minidump
+        for eb_file in ebi_files:
             if start >= eb_file[1] and start <= eb_file[2]:
                 input = eb_file[3]
                 offset = start - eb_file[1]
@@ -281,7 +285,6 @@ class DebugImage_v2():
                 if regset_addr_offset is None:
                     regset_addr_offset = 0x8
                 cpu_index = ram_dump.read_u32(start + cpu_index_offset,False)
-                
                 print_out_str(
                     'Parsing CPU{2:x} context start {0:x} end {1:x} version {3} client_id-> {4:x}'.format(start, end, cpu_index,version,client_id))
                 cpu_type = ram_dump.read_u32(start + cpu_type_offset,False)
@@ -315,7 +318,6 @@ class DebugImage_v2():
                     core = "vcpu" + str(cpu_index_num) + "_" + dump_data_name.split('_vcpu_')[0]
                 else:
                     core = "vcpu"+str(cpu_index_num)
-                    
                 regs_flag = regs.init_regs_v2(version, regset_name_addr, core, ram_dump)
                 if regs_flag == False:
                     print_out_str('!!! Could not get registers from TZ dump')
@@ -748,7 +750,7 @@ class DebugImage_v2():
         for i in range(0, cpus):
             self.dump_data_id_lookup_table[client.MSM_DUMP_DATA_L2_TLB + i] = 'MSM_DUMP_DATA_L2_TLB'
 
-        if not ram_dump.minidump:
+        if not ram_dump.minidump or (ram_dump.minidump and ram_dump.kernel_version > (5,10,0)):
             dump_table_ptr_offset = ram_dump.field_offset(
                 'struct msm_memory_dump', 'table')
             dump_table_version_offset = ram_dump.field_offset(
@@ -827,12 +829,12 @@ class DebugImage_v2():
                     entry_addr + dump_table_version_offset, False)
                 if table_version is None:
                     print_out_str('Dump table entry version is bogus! Can\'t parse debug image')
-                    return
+                    continue
                 table_num_entries = ram_dump.read_u32(
                     entry_addr + dump_table_num_entry_offset, False)
                 if table_num_entries is None or table_num_entries > MAX_NUM_ENTRIES:
                     print_out_str('Dump table entry num_entries is bogus! Can\'t parse debug image')
-                    return
+                    continue
 
                 print_out_str(
                     'Debug image version: {0}.{1} Entry type: {2} Number of entries: {3}'.format(
@@ -948,7 +950,7 @@ class DebugImage_v2():
         if ram_dump.sysreg:
             self.parse_sysreg(ram_dump)
         self.qdss.dump_standard(ram_dump)
-        if not ram_dump.skip_qdss_bin:
+        if not ram_dump.skip_qdss_bin and not ram_dump.minidump:
             self.qdss.save_etf_bin(ram_dump)
             self.qdss.save_etf_swao_bin(ram_dump)
             self.qdss.save_etr_bin(ram_dump)

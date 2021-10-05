@@ -605,7 +605,7 @@ class FtraceParser_Event(object):
                         v = self.ramdump.read_cstring(ftrace_raw_entry + offset, max_length=length)
                         fmt_name_value_map[item] = v
                     elif 'char' in type_str:
-                        v = self.ramdump.read_u8(ftrace_raw_entry + offset)
+                        v = self.ramdump.read_byte(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
                     elif 'unsigned long' in type_str or 'u64' in type_str or 'void *' in type_str:
                         if self.ramdump.arm64:

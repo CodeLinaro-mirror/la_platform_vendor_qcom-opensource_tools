@@ -163,6 +163,11 @@ class RTB(RamParser):
             rtb = self.ramdump.address_of('msm_rtb')
         else:
             rtb = self.ramdump.read_pointer(rtb_ptr)
+        if rtb is None and self.ramdump.minidump:
+            rtb_seg = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KRTB_BUF'), None)
+            if rtb_seg is not None:
+                rtb = rtb_seg['sh_addr']
+                rtb_ptr = True # Not a pointer, but used below to determine whether new RTB layout is used
         if rtb is None:
             print_out_str(
                 '[!] RTB was not enabled in this build. No RTB files will be generated')

@@ -21,6 +21,7 @@ class module_table_entry():
         self.sym_path = ''
         self.kallsyms_addr = 0
         self.kallsyms_table = []
+        self.section_offsets = {}
 
     def num_symbols(self):
         return len(self.sym_lookup_table)

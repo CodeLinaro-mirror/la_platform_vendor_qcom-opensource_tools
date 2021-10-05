@@ -182,6 +182,7 @@ if __name__ == '__main__':
         default_list.append("Slabinfo")
         default_list.append("RunQueues")
         default_list.append("PStore")
+        default_list.append("Kconfig")
 
     if options.outdir:
         if not os.path.exists(options.outdir):

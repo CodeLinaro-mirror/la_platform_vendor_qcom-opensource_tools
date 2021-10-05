@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2015, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2014-2015, 2020-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -117,18 +117,31 @@ class DmesgLib(object):
         log_size = self.ramdump.sizeof(self.struct_name)
 
         first_idx = self.ramdump.read_u32(first_idx_addr)
+        if self.ramdump.is_config_defined('CONFIG_PRINTK_CALLER'):
+            callerid_off = self.ramdump.field_offset(self.struct_name, 'caller_id')
         last_idx = self.ramdump.read_u32(last_idx_addr)
 
         curr_idx = logbuf_addr + first_idx
 
         while curr_idx != logbuf_addr + last_idx and self.wrap_cnt < 2:
             timestamp = self.ramdump.read_dword(curr_idx + time_offset)
+            if self.ramdump.is_config_defined('CONFIG_PRINTK_CALLER'):
+                caller_data = self.ramdump.read_u32(curr_idx + callerid_off)
+                tid_info = "T"
+                if (caller_data & 0x80000000):
+                    tid_info = "C"
+                caller_id_data = caller_data & ~0x80000000
+                caller_id_data = tid_info + str(caller_id_data)
             text_len = self.ramdump.read_u16(curr_idx + text_len_offset)
             text_str = self.ramdump.read_cstring(curr_idx + log_size, text_len)
             if text_str is not None:
                 for partial in text_str.split('\n'):
-                    f = '[{0:>5}.{1:0>6d}] {2}\n'.format(
-                        timestamp // 1000000000, (timestamp % 1000000000) // 1000, partial)
+                    if self.ramdump.is_config_defined('CONFIG_PRINTK_CALLER'):
+                        f = '[{0:>5}.{1:0>6d}] [{caller_id_data:>6}] {2}\n'.format(
+                        timestamp // 1000000000, (timestamp % 1000000000) // 1000, partial, caller_id_data=caller_id_data)
+                    else:
+                        f = '[{0:>5}.{1:0>6d}] {2}\n'.format(
+                            timestamp // 1000000000, (timestamp % 1000000000) // 1000, partial)
                     self.outfile.write(f)
                 curr_idx = self.log_next(curr_idx, logbuf_addr)
                 curr_idx = self.verify_log(curr_idx, logbuf_addr, last_idx)
