@@ -1,4 +1,4 @@
-# Copyright (c) 2012, 2014-2018, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2012, 2014-2018, 2020-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -235,6 +235,20 @@ class QDSSDump():
             offset, name = b
             tmc_etf_out.write('{0} ({1}): {2:x}\n'.format(
                 a, name, ram_dump.read_u32(self.tmc_etf_start + offset, False)))
+        tmc_etf_out.close()
+
+    def print_tmc_etf_swao(self, ram_dump):
+        if self.tmc_etf_swao_reg_start is None:
+            print_out_str(
+                "!!! TMC-ETF-SWAO address has not been set! I can't continue!")
+            return
+
+        print_out_str('Now printing TMC-ETF-SWAO registers to file')
+        tmc_etf_out = ram_dump.open_file('tmc_etf_swao.txt')
+        for a, b in tmc_registers.items():
+            offset, name = b
+            tmc_etf_out.write('{0} ({1}): {2:x}\n'.format(
+                a, name, ram_dump.read_u32(self.tmc_etf_swao_reg_start + offset, False)))
         tmc_etf_out.close()
 
     def print_tmc_etr(self, ram_dump):
@@ -526,6 +540,7 @@ class QDSSDump():
 
     def dump_standard(self, ram_dump):
         self.print_tmc_etf(ram_dump)
+        self.print_tmc_etf_swao(ram_dump)
         self.print_tmc_etr(ram_dump)
         self.print_dbgui_registers(ram_dump)
         self.print_all_etm_register(ram_dump)
