@@ -310,7 +310,17 @@ class ClockDumps(RamParser):
         else:
             self.print_clk_onecell_data(data)
 
-
+    def print_a7_cpu_frequency(self):
+        cpu_clks_hws = self. ramdump.read_u32('cpu_clks_hws')
+        if cpu_clks_hws is not None:
+            clk_offset  = self.ramdump.read_u32(cpu_clks_hws + 0x4)
+            core_offset = self.ramdump.read_u32(clk_offset)
+            clk_rate_offset  = self.ramdump.field_offset('struct clk_core',
+                                                    'rate')
+            dbg_name_address = core_offset + self.ramdump.field_offset('struct clk_core', 'name')
+            dbg_name = self.ramdump.read_cstring(self.ramdump.read_word(dbg_name_address, True), 48)
+            cpu_frequency = self.ramdump.read_u32(core_offset + clk_rate_offset)
+            self.output_file.write("{0} =  {1} \n".format(dbg_name, cpu_frequency))
 
     def parse(self):
         self.output_file = self.ramdump.open_file('ClockDumps.txt')
@@ -319,6 +329,6 @@ class ClockDumps(RamParser):
             self.printclocks('CLOCKS')
         self.get_clk_providers()
         self.printclocks('CLK_PROVIDERS')
-
+        self.print_a7_cpu_frequency()
         self.output_file.close()
         print_out_str("--- Wrote the output to ClockDumps.txt")

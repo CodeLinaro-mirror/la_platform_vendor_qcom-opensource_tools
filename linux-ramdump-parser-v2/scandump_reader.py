@@ -135,6 +135,13 @@ class Scandump_v2():
         self.regs['cpu_state_4'] = 0
         self.regs['cpu_state_5'] = 0
 
+    def get_reg(self, reg_name):
+        try:
+            return self.regs[reg_name]
+        except KeyError as err:
+            print_out_str('{0} not found in scandump'.format(reg_name))
+            return None
+
     def alt_pc_selection(self, pc_val):
         max_32_int = int(self.max_32, 16)
         if pc_val != "":
@@ -231,55 +238,71 @@ class Scandump_v2():
                 print_out_str (reg_name + " not captured in scandump")
                 continue
             if print_pc:
-                a = ramdump.unwind_lookup(self.regs[reg_name])
+                a = ramdump.unwind_lookup(self.get_reg(reg_name))
                 if a is not None:
                     symname, offset = ramdump.unwind_lookup(
-                        self.regs[reg_name])
+                        self.get_reg(reg_name))
                     pc_string = '[{0}+0x{1:x}]'.format(symname, offset)
                 else:
                     pc_string = None
             else:
                 pc_string = None
             if pc_string is not None:
-                print_out_str('   {0:8} = 0x{1:016x} {2}'.format(
-                              reg_name, self.regs[reg_name], pc_string))
+                try:
+                    print_out_str('   {0:8} = 0x{1:016x} {2}'.format(
+                                  reg_name, self.get_reg(reg_name), pc_string))
+                except TypeError as err:
+                    print_out_str(str(err))
             else:
-                print_out_str('   {0:8} = 0x{1:016x}'.format(
-                          reg_name, self.regs[reg_name]))
-
+                try:
+                    print_out_str('   {0:8} = 0x{1:016x}'.format(
+                              reg_name, self.get_reg(reg_name)))
+                except TypeError as err:
+                    print_out_str(str(err))
     def dump_all_regs(self, ram_dump):
         print_out_str('core{0} regs:'.format(self.core))
         self.print_regs(ram_dump)
 
     def dump_core_pc(self, ram_dump):
-        pc = self.regs['pc']
+        pc = self.get_reg('pc')
         if ram_dump.arm64:
-            lr = self.regs['x30']
-            bt = self.regs['sp_el1']
-            fp = self.regs['x29']
+            lr = self.get_reg('x30')
+            bt = self.get_reg('sp_el1')
+            fp = self.get_reg('x29')
         else:
-            lr = self.regs['r14_svc']
-            bt = self.regs['r13_svc']
-            fp = self.regs['r11']
+            lr = self.get_reg('r14_svc')
+            bt = self.get_reg('r13_svc')
+            fp = self.get_reg('r11')
 
-        a = ram_dump.unwind_lookup(pc)
-        if a is not None:
-            symname, offset = a
-        else:
-            symname = 'UNKNOWN'
-            offset = 0
-        print_out_str(
-            'Core {3} PC: {0}+{1:x} <{2:x}>'.format(symname, offset,
-                                                    pc, self.core))
-        a = ram_dump.unwind_lookup(lr)
-        if a is not None:
-            symname, offset = a
-        else:
-            symname = 'UNKNOWN'
-            offset = 0
-        print_out_str(
-            'Core {3} LR: {0}+{1:x} <{2:x}>'.format(symname, offset,
-                                                    lr, self.core))
+        if pc is not None:
+            a = ram_dump.unwind_lookup(pc)
+            if a is not None:
+                symname, offset = a
+            else:
+                symname = 'UNKNOWN'
+                offset = 0
+            try:
+                print_out_str(
+                    'Core {3} PC: {0}+{1:x} <{2:x}>'.format(symname, offset,
+                                                            pc, self.core))
+            except TypeError as err:
+                print_out_str(str(err))
+
+        if lr is not None:
+            a = ram_dump.unwind_lookup(lr)
+            if a is not None:
+                symname, offset = a
+            else:
+                symname = 'UNKNOWN'
+                offset = 0
+
+            try:
+                print_out_str(
+                    'Core {3} LR: {0}+{1:x} <{2:x}>'.format(symname, offset,
+                                                            lr, self.core))
+            except TypeError as err:
+                print_out_str(str(err))
         print_out_str('')
-        ram_dump.unwind.unwind_backtrace(bt, fp, pc, lr, '')
+        if pc is not None and lr is not None:
+            ram_dump.unwind.unwind_backtrace(bt, fp, pc, lr, '')
         print_out_str('')

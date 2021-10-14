@@ -1,4 +1,4 @@
-# Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1336,6 +1336,10 @@ def get_wdog_timing(ramdump):
     last_jiffies_update = ramdump.read_s64('last_jiffies_update')
     tick_do_timer_cpu = ramdump.read_s32('tick_do_timer_cpu')
     wdog_data_addr = ramdump.read_word('wdog_data')
+    if wdog_data_addr is None and ramdump.minidump:
+        wdog_seg = next((s for s in ramdump.elffile.iter_sections() if s.name == 'KWDOGDATA'), None)
+        if wdog_seg is not None:
+            wdog_data_addr = wdog_seg['sh_addr']
     pet_timer_off = ramdump.field_offset(
         'struct msm_watchdog_data', 'pet_timer')
     timer_expires_off = ramdump.field_offset('struct timer_list', 'expires')

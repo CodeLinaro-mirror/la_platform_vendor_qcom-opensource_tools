@@ -14,6 +14,7 @@ import re
 import subprocess
 import module_table
 from print_out import print_out_str
+from tempfile import NamedTemporaryFile
 
 GDB_SENTINEL = '(gdb) '
 GDB_DATA_LINE = '~'
@@ -116,11 +117,13 @@ class GdbMI(object):
 
     def setup_module_table(self, module_table):
         self.mod_table = module_table
-        d = {"\\":"\\\\"}
-        for mod_tbl_ent in self.mod_table.module_table:
-            load_mod_sym_cmd = 'add-symbol-file %s 0x%x' % (mod_tbl_ent.get_sym_path(), mod_tbl_ent.module_offset)
-            gdb_cmd = ''.join(d.get(c, c) for c in load_mod_sym_cmd)
-            self._run(gdb_cmd)
+        for mod in self.mod_table.module_table:
+            if not mod.get_sym_path():
+                continue
+            load_mod_sym_cmd = ['add-symbol-file', mod.get_sym_path().replace('\\', '\\\\'), '0x{:x}'.format(mod.module_offset - self.kaslr_offset)]
+            for segment, offset in mod.section_offsets.items():
+                load_mod_sym_cmd += ['-s', segment, '0x{:x}'.format(offset - self.kaslr_offset) ]
+            self._run(' '.join(load_mod_sym_cmd))
 
     def _run(self, cmd, skip_cache=False, save_in_cache=True):
         """Runs a gdb command and returns a GdbMIResult of the result. Results
@@ -367,6 +370,12 @@ class GdbMI(object):
         elif match_2:
              return match_2.group(1).replace('\\\\n\\"', "")
         return None
+
+    def read_memory(self, start, end):
+        """Reads memory from within elf (e.g. const data). start and end should be kaslr-offset values"""
+        tmpfile = NamedTemporaryFile(mode='rb')
+        self._run("dump binary memory {} {}-{} {}-{}".format(tmpfile.name, start, self.kaslr_offset, end, self.kaslr_offset))
+        return tmpfile.read()
 
 
 if __name__ == '__main__':

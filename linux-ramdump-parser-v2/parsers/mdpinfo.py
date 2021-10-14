@@ -2768,7 +2768,7 @@ class MDPinfo(RamParser):
             self.outfile.write('---------------------------------\n[dbgbus_sde]\n---------------------------------\n')
             while (i < dbgbus_sde_cmn.content_size):
                 j = 0
-                self.outfile.write("0x%x| " % (i))
+                self.outfile.write("0x%-.8x| " % (i))
                 while (j < 16):
                     self.outfile.write('%-.8x ' % (self.ramdump.read_u32(dbgbus_sde_cmn.dumped_content + (i*4) + j)))
                     j = j + 4
@@ -2779,7 +2779,7 @@ class MDPinfo(RamParser):
             self.outfile.write('\n---------------------------------\n[dbgbus_vbif_rt]\n---------------------------------\n')
             while (i < dbgbus_vbif_cmn.content_size):
                 j = 0
-                self.outfile.write("0x%x| " % (i))
+                self.outfile.write("0x%-.8x| " % (i))
                 while (j < 16):
                     self.outfile.write('%-.8x ' % (self.ramdump.read_u32(dbgbus_vbif_cmn.dumped_content + (i*4) + j)))
                     j = j + 4
@@ -2790,7 +2790,7 @@ class MDPinfo(RamParser):
             self.outfile.write('\n---------------------------------\n[dbgbus_dsi]\n---------------------------------\n')
             while (i < dbgbus_dsi_cmn.content_size):
                 j = 0
-                self.outfile.write("0x%x| " % (i))
+                self.outfile.write("0x%-.8x| " % (i))
                 while (j < 16):
                     self.outfile.write('%-.8x ' % (self.ramdump.read_u32(dbgbus_dsi_cmn.dumped_content + (i*4) + j)))
                     j = j + 4
@@ -2801,7 +2801,7 @@ class MDPinfo(RamParser):
             self.outfile.write('\n---------------------------------\n[dbgbus_rsc]\n---------------------------------\n')
             while (i < dbgbus_rsc_cmn.content_size):
                 j = 0
-                self.outfile.write("0x%x| " % (i))
+                self.outfile.write("0x%-.8x| " % (i))
                 while (j < 16):
                     self.outfile.write('%-.8x ' % (self.ramdump.read_u32(dbgbus_rsc_cmn.dumped_content + (i*4) + j)))
                     j = j + 4
@@ -2812,7 +2812,7 @@ class MDPinfo(RamParser):
             self.outfile.write('\n---------------------------------\n[dbgbus_lutdma]\n---------------------------------\n')
             while (i < dbgbus_lutdma_cmn.content_size):
                 j = 0
-                self.outfile.write("0x%x| " % (i))
+                self.outfile.write("0x%-.8x| " % (i))
                 while (j < 16):
                     self.outfile.write('%-.8x ' % (self.ramdump.read_u32(dbgbus_lutdma_cmn.dumped_content + (i*4) + j)))
                     j = j + 4
@@ -2823,7 +2823,7 @@ class MDPinfo(RamParser):
             self.outfile.write('\n---------------------------------\n[dbgbus_dp]\n---------------------------------\n')
             while (i < dbgbus_dp_cmn.content_size):
                 j = 0
-                self.outfile.write("0x%x| " % (i))
+                self.outfile.write("0x%-.8x| " % (i))
                 while (j < 16):
                     self.outfile.write('%-.8x ' % (self.ramdump.read_u32(dbgbus_dp_cmn.dumped_content + (i*4) + j)))
                     j = j + 4
