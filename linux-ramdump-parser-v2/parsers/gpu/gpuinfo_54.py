@@ -29,6 +29,9 @@ PAGE_SIZE = 4096
 
 kgsl_ctx_type = ['ANY', 'GL', 'CL', 'C2D', 'RS', 'VK']
 
+adreno_preempt_state = ['NONE', 'START', 'TRIGGERED', 'FAULTED', 'PENDING',
+                        'COMPLETE']
+
 
 def strhex(x): return str(hex(x))
 def str_convert_to_kb(x): return str(x//1024) + 'kb'
@@ -45,6 +48,7 @@ class GpuParser_54(RamParser):
             (self.parse_kgsl_mem, "KGSL Memory Stats", 'gpuinfo.txt'),
             (self.parse_rb_inflight_data, "Ringbuffer and Inflight Queues",
              'gpuinfo.txt'),
+            (self.parse_preempt_data, "Preemption", 'gpuinfo.txt'),
             (self.parse_dispatcher_data, "Dispatcher", 'gpuinfo.txt'),
             (self.parse_mutex_data, "KGSL Mutexes", 'gpuinfo.txt'),
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
@@ -65,6 +69,7 @@ class GpuParser_54(RamParser):
             (self.parse_kgsl_mem_54, "KGSL Memory Stats", 'gpuinfo.txt'),
             (self.parse_rb_inflight_data, "Ringbuffer and Inflight Queues",
              'gpuinfo.txt'),
+            (self.parse_preempt_data, "Preemption", 'gpuinfo.txt'),
             (self.parse_dispatcher_data_54, "Dispatcher", 'gpuinfo.txt'),
             (self.parse_mutex_data, "KGSL Mutexes", 'gpuinfo.txt'),
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
@@ -260,6 +265,7 @@ class GpuParser_54(RamParser):
 
     def parse_kgsl_data(self, dump):
         open_count = dump.read('device_3d0.dev.open_count')
+        active_cnt = dump.read('device_3d0.dev.active_cnt')
         state = dump.read('device_3d0.dev.state')
         requested_state = dump.read('device_3d0.dev.requested_state')
         reg_phys = dump.read('device_3d0.dev.reg_phys')
@@ -281,6 +287,7 @@ class GpuParser_54(RamParser):
                                                'id')
 
         self.writeln('open_count: ' + str(open_count))
+        self.writeln('active_cnt: ' + str(active_cnt))
         self.writeln('state: ' + str(state))
         self.writeln('requested_state: ' + str(requested_state))
         self.writeln('reg_phys: ' + strhex(reg_phys))
@@ -297,9 +304,10 @@ class GpuParser_54(RamParser):
         self.writeln('prev_rb_id: ' + str(prev_rb_id))
 
     def parse_kgsl_data_54(self, dump):
-        open_count = dump.read_structure_field(self.devp,
-                                               'struct kgsl_device',
+        open_count = dump.read_structure_field(self.devp, 'struct kgsl_device',
                                                'open_count')
+        active_cnt = dump.read_structure_field(self.devp, 'struct kgsl_device',
+                                               'active_cnt')
         state = dump.read_structure_field(self.devp,
                                           'struct kgsl_device', 'state')
         requested_state = dump.read_structure_field(self.devp,
@@ -360,6 +368,7 @@ class GpuParser_54(RamParser):
                                                'id')
 
         self.writeln('open_count: ' + str(open_count))
+        self.writeln('active_cnt: ' + str(active_cnt))
         self.writeln('state: ' + str(state))
         self.writeln('requested_state: ' + str(requested_state))
         self.writeln('reg_phys: ' + strhex(reg_phys))
@@ -468,6 +477,22 @@ class GpuParser_54(RamParser):
         for i in range(KGSL_MAX_POOLS):
             self.writeln('\t' + str(pool_order[i]) + ' order pool size: ' +
                          str_convert_to_kb(pool_size[i]*PAGE_SIZE))
+
+    def parse_preempt_data(self, dump):
+        preempt_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'preempt')
+        state = dump.read_structure_field(preempt_addr,
+                                          'struct adreno_preemption', 'state')
+        count = dump.read_structure_field(preempt_addr,
+                                          'struct adreno_preemption', 'count')
+        preempt_level = dump.read_structure_field(preempt_addr,
+                                                  'struct adreno_preemption',
+                                                  'preempt_level')
+
+        self.writeln('state: ' + adreno_preempt_state[state])
+        self.writeln('count: ' + str(count))
+        self.writeln('preempt_level: ' + str(preempt_level))
 
     def parse_dispatcher_data(self, dump):
         inflight = dump.read('device_3d0.dispatcher.inflight')
@@ -713,6 +738,9 @@ class GpuParser_54(RamParser):
         bus_ab_mbytes = dump.read_structure_field(pwrctrl_address,
                                                   'struct kgsl_pwrctrl',
                                                   'bus_ab_mbytes')
+        idle_timer = dump.read_structure_field(pwrctrl_address,
+                                               'struct kgsl_pwrctrl',
+                                               'interval_timeout')
         pwr_levels_result = []
         pwrlevels_base_address = pwrctrl_address + \
             dump.field_offset('struct kgsl_pwrctrl', 'pwrlevels')
@@ -747,6 +775,7 @@ class GpuParser_54(RamParser):
         self.writeln('bus_percent_ab:  ' + str(bus_percent_ab))
         self.writeln('bus_width:  ' + str(bus_width))
         self.writeln('bus_ab_mbytes:  ' + str(bus_ab_mbytes))
+        self.writeln('idle_timer:  ' + str(idle_timer))
         self.writeln()
 
         self.writeln('pwrlevels_base_address:  '
@@ -1044,6 +1073,22 @@ class GpuParser_54(RamParser):
         self.writeln('preallocations: ' + str(preallocations))
         self.writeln('log_stream_enable: ' + str(log_stream_enable))
         self.writeln('cm3_fault: ' + str(cm3_fault))
+
+        domain = dump.read_structure_field(a6xx_gmu_dev,
+                                           'struct a6xx_gmu_device', 'domain')
+        msm_iommu = dump.container_of(domain, 'struct msm_iommu_domain',
+                                      'iommu_domain')
+        arm_smmu = dump.container_of(msm_iommu,
+                                     'struct arm_smmu_domain', 'domain')
+        pgtbl_ops = dump.read_structure_field(arm_smmu,
+                                              'struct arm_smmu_domain',
+                                              'pgtbl_ops[0]')
+        pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
+                                            'struct io_pgtable', 'ops', 'cfg')
+        ttbr0_val = dump.read_structure_field(pgtbl_cfg,
+                                              'struct io_pgtable_cfg',
+                                              'arm_lpae_s1_cfg.ttbr[0]')
+        self.writeln('ttbr0: ' + strhex(ttbr0_val))
 
         num_clks = dump.read_structure_field(a6xx_gmu_dev,
                                              'struct a6xx_gmu_device',

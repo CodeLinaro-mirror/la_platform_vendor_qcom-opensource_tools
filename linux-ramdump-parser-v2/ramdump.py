@@ -777,8 +777,15 @@ class RamDump():
             else:
                 self.kasan_shadow_size = 1 << (va_bits - 3)
 
-            self.kimage_vaddr = self.page_end + self.kasan_shadow_size + modules_vsize + \
-                                bpf_jit_vsize
+            self.kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
+            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
+            # The KASAN shadow region is reconfigured so that it ends at the start of
+            # the vmalloc region, and grows downwards. That way, the arrangement of
+            # the vmalloc space (which contains kernel mappings, modules, BPF region,
+            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
+            # which aids debugging.
+            if self.get_kernel_version() < (5, 11, 0):
+                self.kimage_vaddr += self.kasan_shadow_size
         else:
             va_bits = 39
             modules_vsize = 0x08000000
@@ -850,7 +857,10 @@ class RamDump():
             self.mmu = Armv8MMU(self)
         elif pg_dir_size == 0x4000:
             print_out_str('Using non-LPAE MMU')
-            self.mmu = Armv7MMU(self)
+            if self.minidump:
+                self.mmu = None
+            else:
+                self.mmu = Armv7MMU(self)
         elif pg_dir_size == 0x5000:
             print_out_str('Using LPAE MMU')
             text_offset = 0x8000
@@ -1109,27 +1119,42 @@ class RamDump():
         return False
 
     def print_socinfo(self):
-        try:
-            if self.read_pointer('socinfo') is None:
-              return None
-            content_socinfo = hex(self.read_pointer('socinfo'))
-            content_socinfo = content_socinfo.strip('L')
+        if self.kernel_version < (5, 4, 0):
+            try:
+                if self.read_pointer('socinfo') is None:
+                  return None
+                content_socinfo = hex(self.read_pointer('socinfo'))
+                content_socinfo = content_socinfo.strip('L')
 
-            sernum_offset = self.field_offset('struct socinfo_v10', 'serial_number')
-            if sernum_offset is None:
-                sernum_offset = self.field_offset('struct socinfo_v0_10', 'serial_number')
+                sernum_offset = self.field_offset('struct socinfo_v10', 'serial_number')
                 if sernum_offset is None:
-                    print_out_str("No serial number information available")
-                    return False
-            addr_of_sernum = hex(int(content_socinfo, 16) + sernum_offset)
-            addr_of_sernum = addr_of_sernum.strip('L')
-            serial_number = self.read_u32(int(addr_of_sernum, 16))
-            if serial_number is not None:
-                print_out_str('Serial number %s' % hex(serial_number))
-                return True
-        except:
-            pass
-        return False
+                    sernum_offset = self.field_offset('struct socinfo_v0_10', 'serial_number')
+                    if sernum_offset is None:
+                        print_out_str("No serial number information available")
+                        return False
+                addr_of_sernum = hex(int(content_socinfo, 16) + sernum_offset)
+                addr_of_sernum = addr_of_sernum.strip('L')
+                serial_number = self.read_u32(int(addr_of_sernum, 16))
+                if serial_number is not None:
+                    print_out_str('Serial number %s' % hex(serial_number))
+                    return True
+            except:
+                pass
+            return False
+        else:
+            socinfo = self.address_of('socinfo')
+            if socinfo is None:
+                return None
+            socinfo = self.read_pointer(socinfo)
+            if socinfo is None:
+                return None
+            ver = self.read_structure_field(socinfo, 'struct socinfo', 'ver')
+            chip_ver_major = (ver & 0xFFFF0000) >> 16
+            chip_ver_minor = (ver & 0x0000FFFF)
+            print_out_str("Chip Version: v{0}.{1}".format(chip_ver_major, chip_ver_minor))
+            serial_num = self.read_structure_field(socinfo, 'struct socinfo', 'serial_num')
+            print_out_str("Chip Serial Number 0x{0:x}".format(serial_num))
+            return True
 
     def auto_parse(self, file_path, minidump):
         for cls in sorted(AutoDumpInfo.__subclasses__(),
@@ -1644,9 +1669,12 @@ class RamDump():
 
         if self.kernel_version > (4, 9, 0):
             module_core_offset = self.field_offset('struct module', 'core_layout.base')
-            sect_name_offset = self.field_offset('struct module_sect_attr', 'battr') + self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
+
+        if self.kernel_version > (4, 18, 0):
+            sect_name_offset = self.field_offset('struct module_sect_attr', 'battr') + self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
+        else:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'name')
 
         kallsyms_offset = self.field_offset('struct module', 'kallsyms')
