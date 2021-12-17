@@ -30,6 +30,9 @@ PAGE_SIZE = 4096
 
 kgsl_ctx_type = ['ANY', 'GL', 'CL', 'C2D', 'RS', 'VK']
 
+adreno_preempt_state = ['NONE', 'START', 'TRIGGERED', 'FAULTED', 'PENDING',
+                        'COMPLETE']
+
 
 def strhex(x): return str(hex(x))
 def str_convert_to_kb(x): return str(x//1024) + 'kb'
@@ -46,6 +49,7 @@ class GpuParser_510(RamParser):
             (self.parse_kgsl_mem, "KGSL Memory Stats", 'gpuinfo.txt'),
             (self.parse_rb_inflight_data, "Ringbuffer and Inflight Queues",
              'gpuinfo.txt'),
+            (self.parse_preempt_data, "Preemption", 'gpuinfo.txt'),
             (self.parse_dispatcher_data, "Dispatcher", 'gpuinfo.txt'),
             (self.parse_mutex_data, "KGSL Mutexes", 'gpuinfo.txt'),
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
@@ -229,9 +233,10 @@ class GpuParser_510(RamParser):
                 hex(gpuaddr), strhex(flags), str(pending_free)))
 
     def parse_kgsl_data(self, dump):
-        open_count = dump.read_structure_field(self.devp,
-                                               'struct kgsl_device',
+        open_count = dump.read_structure_field(self.devp, 'struct kgsl_device',
                                                'open_count')
+        active_cnt = dump.read_structure_field(self.devp, 'struct kgsl_device',
+                                               'active_cnt')
         state = dump.read_structure_field(self.devp,
                                           'struct kgsl_device', 'state')
         requested_state = dump.read_structure_field(self.devp,
@@ -288,6 +293,7 @@ class GpuParser_510(RamParser):
                                                'id')
 
         self.writeln('open_count: ' + str(open_count))
+        self.writeln('active_cnt: ' + str(active_cnt))
         self.writeln('state: ' + str(state))
         self.writeln('requested_state: ' + str(requested_state))
         self.writeln('ft_policy: ' + str(ft_policy))
@@ -343,6 +349,22 @@ class GpuParser_510(RamParser):
 
     def parse_eventlog_data(self, dump):
         parse_eventlog_buffer(self.writeln, dump)
+
+    def parse_preempt_data(self, dump):
+        preempt_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'preempt')
+        state = dump.read_structure_field(preempt_addr,
+                                          'struct adreno_preemption', 'state')
+        count = dump.read_structure_field(preempt_addr,
+                                          'struct adreno_preemption', 'count')
+        preempt_level = dump.read_structure_field(preempt_addr,
+                                                  'struct adreno_preemption',
+                                                  'preempt_level')
+
+        self.writeln('state: ' + adreno_preempt_state[state])
+        self.writeln('count: ' + str(count))
+        self.writeln('preempt_level: ' + str(preempt_level))
 
     def parse_dispatcher_data(self, dump):
         dispatcher_addr = dump.struct_field_addr(self.devp,
@@ -578,6 +600,9 @@ class GpuParser_510(RamParser):
         bus_ab_mbytes = dump.read_structure_field(pwrctrl_address,
                                                   'struct kgsl_pwrctrl',
                                                   'bus_ab_mbytes')
+        idle_timer = dump.read_structure_field(pwrctrl_address,
+                                               'struct kgsl_pwrctrl',
+                                               'interval_timeout')
         pwr_levels_result = []
         pwrlevels_base_address = pwrctrl_address + \
             dump.field_offset('struct kgsl_pwrctrl', 'pwrlevels')
@@ -612,6 +637,7 @@ class GpuParser_510(RamParser):
         self.writeln('bus_percent_ab:  ' + str(bus_percent_ab))
         self.writeln('bus_width:  ' + str(bus_width))
         self.writeln('bus_ab_mbytes:  ' + str(bus_ab_mbytes))
+        self.writeln('idle_timer:  ' + str(idle_timer))
         self.writeln()
 
         self.writeln('pwrlevels_base_address:  '
@@ -894,6 +920,19 @@ class GpuParser_510(RamParser):
             self.writeln('preallocations: ' + str(preallocations))
             self.writeln('log_stream_enable: ' + str(log_stream_enable))
         self.writeln('cm3_fault: ' + str(cm3_fault))
+
+        domain = dump.read_structure_field(gmu_dev_addr, gmu_device, 'domain')
+        arm_smmu = dump.container_of(domain,
+                                     'struct arm_smmu_domain', 'domain')
+        pgtbl_ops = dump.read_structure_field(arm_smmu,
+                                              'struct arm_smmu_domain',
+                                              'pgtbl_ops')
+        pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
+                                            'struct io_pgtable', 'ops', 'cfg')
+        ttbr0_val = dump.read_structure_field(pgtbl_cfg,
+                                              'struct io_pgtable_cfg',
+                                              'arm_lpae_s1_cfg.ttbr')
+        self.writeln('ttbr0: ' + strhex(ttbr0_val))
 
         num_clks = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                              'num_clks')

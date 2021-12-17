@@ -384,9 +384,12 @@ if __name__ == '__main__':
             sys.exit(1)
 
     if options.minidump:
-        if not dump.print_socinfo_minidump():
-            print_out_str('!!! No serial number information '
-                          'available for this minidump.')
+        try:
+            if not dump.print_socinfo_minidump():
+                print_out_str('!!! No serial number information '
+                              'available for this minidump.')
+        except Exception as err:
+            print_out_str('Unable to extract serial number information')
     else:
         if not dump.print_socinfo():
             print_out_str('!!! No serial number information available.')
