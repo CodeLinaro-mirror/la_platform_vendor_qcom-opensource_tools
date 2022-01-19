@@ -1443,6 +1443,11 @@ class RamDump():
             if self.kaslr_addr is None:
                 print_out_str('!!!! Kaslr addr is not provided.')
             else:
+                if self.minidump:
+                    for a in self.ebi_files:
+                        if "md_SHRDIMEM" in a[3]:
+                            self.kaslr_addr = a[1] + 0x6d0
+                            break
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
                 if kaslr_magic != 0xdead4ead:
                     print_out_str('!!!! Kaslr magic does not match.')
