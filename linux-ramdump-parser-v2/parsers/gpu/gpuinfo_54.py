@@ -26,6 +26,7 @@ KGSL_MAX_PWRLEVELS = 16
 KGSL_MAX_POOLS = 6
 PAGE_SIZE = 4096
 
+KGSL_CONTEXT_SECURE = 0x00020000
 
 kgsl_ctx_type = ['ANY', 'GL', 'CL', 'C2D', 'RS', 'VK']
 
@@ -92,7 +93,7 @@ class GpuParser_54(RamParser):
         self.devp = self.ramdump.read_pointer('kgsl_driver.devp')
         if self.ramdump.kernel_version >= (5, 4, 0):
             self.parser_list = self.parser_list_54
-        elif self.ramdump.kernel_version >= (4, 19, 0):
+        elif self.ramdump.kernel_version >= (4, 9, 0):
             global KGSL_MAX_PWRLEVELS, KGSL_MAX_POOLS
             KGSL_MAX_PWRLEVELS = 10
             KGSL_MAX_POOLS = 4
@@ -141,11 +142,11 @@ class GpuParser_54(RamParser):
                                              'struct adreno_context', 'type')
         flags = dump.read_structure_field(ctx_addr,
                                           'struct kgsl_context', 'flags')
+        is_secure = bool(flags & KGSL_CONTEXT_SECURE)
+
         ktimeline_offset = dump.field_offset('struct kgsl_context',
                                              'ktimeline')
         ktimeline_addr = dump.read_pointer(ctx_addr + ktimeline_offset)
-        name_offset = dump.field_offset('struct kgsl_sync_timeline', 'name')
-        ktimeline_name = dump.read_cstring(ktimeline_addr + name_offset)
         ktimeline_last_ts = dump.read_structure_field(
                 ktimeline_addr, 'struct kgsl_sync_timeline', 'last_timestamp')
 
@@ -164,15 +165,15 @@ class GpuParser_54(RamParser):
 
         self.writeln(format_str.format(context_id, str(upid), comm,
                      strhex(ctx_addr), kgsl_ctx_type[ctx_type], strhex(flags),
-                     ktimeline_name, str(ktimeline_last_ts), str(soptimestamp),
-                     str(eoptimestamp)))
+                     str(is_secure), str(ktimeline_last_ts),
+                     str(soptimestamp), str(eoptimestamp)))
 
     def parse_context_data(self, dump):
         format_str = '{0:10} {1:10} {2:20} {3:28} {4:12} ' + \
-                     '{5:12} {6:36} {7:16} {8:14} {9:14}'
+                     '{5:12} {6:12} {7:16} {8:14} {9:14}'
         self.writeln(format_str.format("CTX_ID", "PID", "PROCESS_NAME",
                                        "ADRENO_DRAWCTX_PTR", "CTX_TYPE",
-                                       "FLAGS", "KTIMELINE",
+                                       "FLAGS", "IS_SECURE",
                                        "TIMELINE_LST_TS", "SOP_TS", "EOP_TS"))
         context_idr = dump.struct_field_addr(self.devp, 'struct kgsl_device',
                                              'context_idr')
@@ -181,10 +182,10 @@ class GpuParser_54(RamParser):
 
     def parse_active_context_data(self, dump):
         format_str = '{0:10} {1:10} {2:20} {3:28} {4:12} ' + \
-                     '{5:12} {6:36} {7:16} {8:14} {9:14}'
+                     '{5:12} {6:12} {7:16} {8:14} {9:14}'
         self.writeln(format_str.format("CTX_ID", "PID", "PROCESS_NAME",
                                        "ADRENO_DRAWCTX_PTR", "CTX_TYPE",
-                                       "FLAGS", "KTIMELINE",
+                                       "FLAGS", "IS_SECURE",
                                        "TIMELINE_LST_TS", "SOP_TS", "EOP_TS"))
         node_addr = dump.struct_field_addr(self.devp, 'struct adreno_device',
                                            'active_list')
@@ -1047,6 +1048,8 @@ class GpuParser_54(RamParser):
 
         a6xx_gmu_dev = dump.sibling_field_addr(self.devp, 'struct a6xx_device',
                                                'adreno_dev', 'gmu')
+        gmu_fw_ver = dump.read_u32(a6xx_gmu_dev)
+        pwr_fw_ver = dump.read_u32(a6xx_gmu_dev + 8)
         flags = dump.read_structure_field(a6xx_gmu_dev,
                                           'struct a6xx_gmu_device', 'flags')
         idle_level = dump.read_structure_field(a6xx_gmu_dev,
@@ -1067,6 +1070,9 @@ class GpuParser_54(RamParser):
                                               'struct a6xx_gmu_device',
                                               'cm3_fault')
 
+        self.writeln('GMU Firmware Version: ' + strhex(gmu_fw_ver))
+        self.writeln('Power Firmware Version: ' + strhex(pwr_fw_ver))
+        self.writeln()
         self.writeln('idle_level: ' + str(idle_level))
         self.writeln('internal gmu flags: ' + strhex(flags))
         self.writeln('global_entries: ' + str(global_entries))
