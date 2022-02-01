@@ -65,9 +65,9 @@ class Logcat_base(RamParser):
         try:
             self.zstd = __import__('zstandard')
         except ImportError as result:
-            print_out_str(str(result)+", try to use command 'py -3 -m pip install Zstandard' to install")
+            print_out_str(str(result)+", try to use command 'py -3 -m pip install zstandard' to install")
             print("\033[1;31m" + str(result) +
-                    ", try to use command 'py -3 -m pip install Zstandard' to install \033[0m")
+                    ", try to use command 'py -3 -m pip install zstandard' to install \033[0m")
         if self.ramdump.arm64:
             self.addr_length    = 8
         else:
@@ -151,19 +151,29 @@ class Logcat_base(RamParser):
             return None
 
     def get_evt_data(self, data_array, pos):
+        if (pos + 1) > len(data_array):
+            return -1, -1, -1
         evt_type = struct.unpack('<B', data_array[pos : pos + 1])[0]
         length = 0
         msg=""
         if evt_type == self.EVENT_TYPE_INT :
+            if (pos + self.SIZEOF_EVT_INT_T) > len(data_array):
+                return -1, -1, -1
             msg = str(struct.unpack('<I', data_array[pos+1 : pos + self.SIZEOF_EVT_INT_T])[0])
             length = self.SIZEOF_EVT_INT_T
         elif evt_type == self.EVENT_TYPE_LONG:
+            if (pos + self.SIZEOF_EVT_LONG_T) > len(data_array):
+                return -1, -1, -1
             msg = str(struct.unpack('<Q', data_array[pos+1 : pos + self.SIZEOF_EVT_LONG_T])[0])
             length = self.SIZEOF_EVT_LONG_T
         elif evt_type == self.EVENT_TYPE_FLOAT:
+            if (pos + self.SIZEOF_EVT_FLOAT_T) > len(data_array):
+                return -1, -1, -1
             msg = str(struct.unpack('<f', data_array[pos+1 : pos + self.SIZEOF_EVT_FLOAT_T])[0])
             length = self.SIZEOF_EVT_FLOAT_T
         elif evt_type == self.EVENT_TYPE_STRING:
+            if (pos + self.SIZEOF_EVT_STRING_T) > len(data_array):
+                return -1, -1, -1
             #for event log, msg_len may be 0 like "I 1397638484: [121035042,4294967295,]"
             msg_len = struct.unpack('I', data_array[pos+1 : pos + self.SIZEOF_EVT_STRING_T])[0]
             # last msg_len-1 bytes
@@ -226,10 +236,14 @@ class Logcat_base(RamParser):
             msg_len = logEntry[6]
             priority = self.ANDROID_LOG_INFO
             timestamp = self.format_time(tv_sec, tv_nsec)
+            if pos + self.SIZEOF_HEADER_T > len(_data):
+                break
             tagidx = struct.unpack('<I', _data[pos : pos + self.SIZEOF_HEADER_T])[0] #4 bytes
             pos = pos + self.SIZEOF_HEADER_T
             evt_type, tmpmsg, length = self.get_evt_data(_data,pos)
             pos = pos + length
+            if evt_type == -1:
+                break
             if evt_type != self.EVENT_TYPE_LIST:
                 msg =str(tagidx) + ": " + tmpmsg
                 fmt_msg = "%s %5d %5d %5d %c %s\n" % (timestamp,
@@ -237,7 +251,8 @@ class Logcat_base(RamParser):
 
                 ret += fmt_msg
                 continue #--> read next log entry
-
+            if pos + self.SIZEOF_EVT_LIST_T > len(_data):
+                break
             list_t = struct.unpack('<BB', _data[pos : pos + self.SIZEOF_EVT_LIST_T])
             pos = pos + self.SIZEOF_EVT_LIST_T
             evt_type = list_t[0]
@@ -246,6 +261,8 @@ class Logcat_base(RamParser):
             msg = ""
             while i < evt_cnt:
                 evt_type, tmpmsg, length = self.get_evt_data(_data,pos)
+                if evt_type == -1:
+                    break
                 pos = pos + length
                 msg = msg + tmpmsg
                 if i < evt_cnt -1:
