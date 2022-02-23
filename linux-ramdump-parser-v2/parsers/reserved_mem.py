@@ -1,5 +1,6 @@
 # Copyright (c) 2018-2020,2021 The Linux Foundation. All rights reserved.
-#
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -175,9 +176,10 @@ class CmaAreas(RamParser):
             self.page_ext_size = self.ramdump.sizeof("struct page_ext")
             if self.ramdump.kernel_version >= (4, 9, 0):
                 self.page_owner_size = self.ramdump.sizeof("struct page_owner")
-                self.page_ext_size = self.page_ext_size + self.page_owner_size
-                self.page_owner_ops_offset = self.ramdump.read_structure_field(
-                    'page_owner_ops', 'struct page_ext_operations', 'offset')
+                if self.page_owner_size is not None:
+                    self.page_ext_size = self.page_ext_size + self.page_owner_size
+                    self.page_owner_ops_offset = self.ramdump.read_structure_field(
+                        'page_owner_ops', 'struct page_ext_operations', 'offset')
 
         '''
         Following based upon definition in include/linux/mmzone.h

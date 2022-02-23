@@ -1,4 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -52,7 +53,7 @@ def is_ramdump_file(val, minidump):
     if not minidump:
         ddr = re.compile(r'(DDR|EBI)[0-9_CS]+[.]BIN', re.IGNORECASE)
         imem = re.compile(r'.*IMEM.BIN', re.IGNORECASE)
-        if ddr.match(val) or imem.match(val):
+        if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
     else:
         if val == 'MD_SMEMINFO.BIN' or val == 'MD_SHRDIMEM.BIN':
