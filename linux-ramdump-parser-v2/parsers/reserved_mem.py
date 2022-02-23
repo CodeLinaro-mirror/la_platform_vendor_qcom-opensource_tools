@@ -1,5 +1,6 @@
 # Copyright (c) 2018-2020,2021 The Linux Foundation. All rights reserved.
-#
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -175,9 +176,10 @@ class CmaAreas(RamParser):
             self.page_ext_size = self.ramdump.sizeof("struct page_ext")
             if self.ramdump.kernel_version >= (4, 9, 0):
                 self.page_owner_size = self.ramdump.sizeof("struct page_owner")
-                self.page_ext_size = self.page_ext_size + self.page_owner_size
-                self.page_owner_ops_offset = self.ramdump.read_structure_field(
-                    'page_owner_ops', 'struct page_ext_operations', 'offset')
+                if self.page_owner_size is not None:
+                    self.page_ext_size = self.page_ext_size + self.page_owner_size
+                    self.page_owner_ops_offset = self.ramdump.read_structure_field(
+                        'page_owner_ops', 'struct page_ext_operations', 'offset')
 
         '''
         Following based upon definition in include/linux/mmzone.h
@@ -440,35 +442,35 @@ class CmaAreas(RamParser):
         byte_index = 0
         PFNS_PER_BYTE = 8
         COUNT_TO_BYTE = cma_count // PFNS_PER_BYTE
-
+        list = []
         while byte_index < COUNT_TO_BYTE:
+            value = ramdump.read_byte(bitmap + byte_index)
+            list.append([bitmap + byte_index, value])
             pfn_index = 0
-            pfn = 0
-            while byte_index < COUNT_TO_BYTE:
-                value = ramdump.read_byte(bitmap + byte_index)
-                byte_to_advance = 1
-                while pfn_index < PFNS_PER_BYTE:
-                    pfn = base_pfn + byte_index * PFNS_PER_BYTE + pfn_index
-                    bit_value = (value >> pfn_index) & 0x1
+            while pfn_index < PFNS_PER_BYTE:
+                pfn = base_pfn + byte_index * PFNS_PER_BYTE + pfn_index
+                bit_value = (value >> pfn_index) & 0x1
+                cma = 0
+                if bit_value != 0:
+                    cma = 1
+                else:
                     cma = 0
-                    if bit_value != 0:
-                        cma = 1
-                    else:
-                        cma = 0
-                    pfn_to_avance = 1
-                    pfn_to_avance = self.parse_pfn(ramdump, pfn, cma, op_file, dict)
-                    pfn_index = pfn_index + pfn_to_avance
-                    if pfn_index >= PFNS_PER_BYTE:
-                        byte_to_advance = pfn_index // PFNS_PER_BYTE
-                        pfn_index = pfn_index % 8
-                        byte_index = byte_index + byte_to_advance
-                        if byte_index >= COUNT_TO_BYTE:
-                            break
-                byte_index = byte_index + 1
+                if cma == 1:
+                    self.parse_pfn(ramdump, pfn, cma, op_file, dict)
+                pfn_index = pfn_index + 1
+            byte_index = byte_index + 1
 
         sort_list = sorted(dict.items(), key=lambda kv: kv[1], reverse=True)
         for k, v in sort_list:
             print("PID %-8d alloc times %-8d" % (k, v), file=op_file)
+        line_break = 0
+        print("bitmap: " % (), file=op_file)
+        for item in list:
+            print("%02x" % (item[1]), file=op_file, end="")
+            line_break = line_break + 1
+            if line_break == 16:
+                print("%s" % (" "), file=op_file)
+                line_break = 0
         op_file.close()
 
     def print_cma_areas(self, ramdump):

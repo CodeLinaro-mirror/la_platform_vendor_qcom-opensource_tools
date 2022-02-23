@@ -1,4 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -52,7 +53,7 @@ def is_ramdump_file(val, minidump):
     if not minidump:
         ddr = re.compile(r'(DDR|EBI)[0-9_CS]+[.]BIN', re.IGNORECASE)
         imem = re.compile(r'.*IMEM.BIN', re.IGNORECASE)
-        if ddr.match(val) or imem.match(val):
+        if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
     else:
         if val == 'MD_SMEMINFO.BIN' or val == 'MD_SHRDIMEM.BIN':
@@ -1443,6 +1444,11 @@ class RamDump():
             if self.kaslr_addr is None:
                 print_out_str('!!!! Kaslr addr is not provided.')
             else:
+                if self.minidump:
+                    for a in self.ebi_files:
+                        if "md_SHRDIMEM" in a[3]:
+                            self.kaslr_addr = a[1] + 0x6d0
+                            break
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
                 if kaslr_magic != 0xdead4ead:
                     print_out_str('!!!! Kaslr magic does not match.')
