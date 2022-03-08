@@ -1,3 +1,4 @@
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -1419,6 +1420,7 @@ class MDPinfo(RamParser):
                         self.parser_optional(sde_dbg_evtlog_log[i],output_fd)
                 i=i+1
             except:
+                self.default_parse(sde_dbg_evtlog_log[i], output_fd)
                 i=i+1
 
     def optional(advanced_input):
