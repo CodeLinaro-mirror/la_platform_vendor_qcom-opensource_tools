@@ -948,6 +948,10 @@ class RamDump():
             sys.exit(1)
         return f
 
+    def chmod(self, file_name, mode):
+        file_path = os.path.join(self.outdir, file_name)
+        return os.chmod(file_path, mode)
+
     def remove_file(self, file_name):
         file_path = os.path.join(self.outdir, file_name)
         try:
@@ -1414,7 +1418,7 @@ class RamDump():
             t32_sh.write('#!/bin/sh\n\n')
             t32_sh.write('{0} -c {1}/t32_config.t32, {1}/t32_startup_script.cmm &\n'.format(t32_binary, out_path))
             t32_sh.close()
-            os.chmod(launch_file, stat.S_IRWXU)
+            self.chmod(launch_file, stat.S_IRWXU)
 
         print_out_str(
             '--- Created a T32 Simulator launcher (run {})'.format(launch_file))
