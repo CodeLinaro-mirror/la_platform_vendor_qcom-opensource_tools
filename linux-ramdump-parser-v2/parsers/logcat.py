@@ -290,19 +290,19 @@ class Logcat(RamParser):
             mmu = Armv8MMU(self.ramdump, pgdp)
             propertyParser = Properties(self.ramdump)
             try:
-                ver = propertyParser.find_property_from_file(mmu, mmap,
-                        "ro.build.version.sdk","u:object_r:build_prop:s0")
+                ver = int(propertyParser.find_property_from_file(mmu, mmap,
+                        "ro.build.version.sdk","u:object_r:build_prop:s0"))
             except:
                 ver = -1
 
             if not ver or ver == -1: #secondary prop
                 try:
-                    ver = propertyParser.find_property_from_file(mmu, mmap,
-                            "ro.vndk.version","u:object_r:vndk_prop:s0")
+                    ver = int(propertyParser.find_property_from_file(mmu, mmap,
+                            "ro.vndk.version","u:object_r:vndk_prop:s0"))
                 except:
                     ver = -1
             print_out_str("Current sdk version is "+ str(ver))
-            if ver == '31': # Android S
+            if ver >= 31: # Android S
                 from parsers.logcat_v3 import Logcat_v3
                 logcat = Logcat_v3(self.ramdump, mmu, logd_task)
                 is_success = False
