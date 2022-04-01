@@ -1,4 +1,5 @@
 # Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -138,6 +139,24 @@ def dump_rq_lock_information(ramdump):
             print_out_str("\n cpu {0} ->rq_lock owner cpu {1}".format(i,hex(lock_owner_cpu)))
         print_out_str("\n ")
 
+def dump_isolation_data(ramdump):
+    try:
+        cpus_paused_by_us = ramdump.read_word('cpus_paused_by_us')
+        cpus_in_max_cooling_level = ramdump.read_word('cpus_in_max_cooling_level')
+        the_hcd = ramdump.read_word('the_hcd')
+        our_paused_cpus = ramdump.read_structure_field(the_hcd, 'struct hyp_core_ctl_data', 'our_paused_cpus.bits')
+        print_out_str("hyp_core_ctl_data->our_paused_cpus: {0:08b}".format(our_paused_cpus))
+        if our_paused_cpus == 0x60:
+            print_out_str('cpus 5 and 6 are isolated because Secondary VM is running)\n')
+        print_out_str("core isolated by thermal: {0:08b}".format(cpus_in_max_cooling_level))
+        if cpus_in_max_cooling_level == 0x0:
+            print_out_str("thermal has not isolated any cpus\n")
+        print_out_str("core_ctl cpus_paused_by_us: {0:08b}".format(cpus_paused_by_us))
+        if cpus_paused_by_us == 0x0:
+            print_out_str("core_ctl realizes that there is load in the system and hence has asked to UNisolate all the cpus\n")
+    except Exception as err:
+        pass
+
 def dump_cpufreq_data(ramdump):
     cpufreq_data_addr = ramdump.address_of('cpufreq_cpu_data')
     cpuinfo_off = ramdump.field_offset('struct cpufreq_policy', 'cpuinfo')
@@ -246,3 +265,4 @@ class Schedinfo(RamParser):
             print_out_str("\t\t sysctl_sched_uclamp_util_min Default:{0} and Value in dump:{1}\n".format(SCHED_CAPACITY_SCALE, sched_uclamp_util_min))
             print_out_str("\t\t sysctl_sched_uclamp_util_max Default:{0} and Value in dump:{1}\n".format(SCHED_CAPACITY_SCALE, sched_uclamp_util_max))
         dump_rq_lock_information(self.ramdump)
+        dump_isolation_data(self.ramdump)
