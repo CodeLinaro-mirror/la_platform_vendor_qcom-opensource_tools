@@ -596,17 +596,17 @@ class RamDump():
 
             if self.get_kernel_version() < (5, 11, 0):
                 kimage_vaddr = kimage_vaddr + self.kasan_shadow_size
+        else:
+            va_bits = 39
+            modules_vsize = 0x08000000
+            self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
+            if self.address_of("kasan_init") is None:
+                self.kasan_shadow_size = 0
             else:
-                va_bits = 39
-                modules_vsize = 0x08000000
-                self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
-                if self.address_of("kasan_init") is None:
-                    self.kasan_shadow_size = 0
-                else:
-                    self.kasan_shadow_size = 1 << (va_bits - 3)
-                kimage_vaddr = self.va_start + self.kasan_shadow_size + \
-                               modules_vsize
-            return kimage_vaddr
+                self.kasan_shadow_size = 1 << (va_bits - 3)
+            kimage_vaddr = self.va_start + self.kasan_shadow_size + \
+                           modules_vsize
+        return kimage_vaddr
 
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
@@ -1463,7 +1463,7 @@ class RamDump():
                 if kaslr_magic != 0xdead4ead:
                     print_out_str('!!!! Kaslr magic does not match.')
                     self.kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    if self.kimage_vaddr_va:
+                    try:
                         kimage_vaddr = self.get_kimage_vaddr()
                         kimage_vaddr_phy = self.phys_offset + self.kimage_vaddr_va - kimage_vaddr
                         kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
@@ -1472,7 +1472,7 @@ class RamDump():
                         self.kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("kaslr_offset = %x" % self.kaslr_offset)
                         return self.kaslr_offset
-                    else:
+                    except:
                         return self.kaslr_offset
                 else:
                     self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
