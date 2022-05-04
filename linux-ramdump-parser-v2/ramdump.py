@@ -573,6 +573,41 @@ class RamDump():
 
         return 0
 
+    def get_kimage_vaddr(self):
+        kimage_vaddr = None
+        if self.get_kernel_version() > (4, 20, 0):
+            va_bits = 39
+            modules_vsize = 0x08000000
+            bpf_jit_vsize = 0x08000000
+            self.page_end = (0xffffffffffffffff << (
+                        va_bits - 1)) & 0xffffffffffffffff
+            if self.address_of("kasan_init") is None:
+                self.kasan_shadow_size = 0
+            else:
+                self.kasan_shadow_size = 1 << (va_bits - 3)
+            kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
+
+            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
+            # The KASAN shadow region is reconfigured so that it ends at the start of
+            # the vmalloc region, and grows downwards. That way, the arrangement of
+            # the vmalloc space (which contains kernel mappings, modules, BPF region,
+            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
+            # which aids debugging.
+
+            if self.get_kernel_version() < (5, 11, 0):
+                kimage_vaddr = kimage_vaddr + self.kasan_shadow_size
+        else:
+            va_bits = 39
+            modules_vsize = 0x08000000
+            self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
+            if self.address_of("kasan_init") is None:
+                self.kasan_shadow_size = 0
+            else:
+                self.kasan_shadow_size = 1 << (va_bits - 3)
+            kimage_vaddr = self.va_start + self.kasan_shadow_size + \
+                           modules_vsize
+        return kimage_vaddr
+
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
         self.ebi_files_minidump = []
@@ -602,6 +637,7 @@ class RamDump():
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
+        self.kimage_vaddr_va = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -767,41 +803,11 @@ class RamDump():
                 '[!!!] Page offset was set to {0:x}'.format(page_offset))
             self.page_offset = options.page_offset
         self.setup_symbol_tables()
-
-        if self.get_kernel_version() > (4, 20, 0):
-            va_bits = 39
-            modules_vsize = 0x08000000
-            bpf_jit_vsize = 0x08000000
-            self.page_end = (0xffffffffffffffff << (va_bits - 1)) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
-
-            self.kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
-            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
-            # The KASAN shadow region is reconfigured so that it ends at the start of
-            # the vmalloc region, and grows downwards. That way, the arrangement of
-            # the vmalloc space (which contains kernel mappings, modules, BPF region,
-            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
-            # which aids debugging.
-            if self.get_kernel_version() < (5, 11, 0):
-                self.kimage_vaddr += self.kasan_shadow_size
-        else:
-            va_bits = 39
-            modules_vsize = 0x08000000
-            self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
-
-            self.kimage_vaddr = self.va_start + self.kasan_shadow_size + \
-                                modules_vsize
-
+        kimage_vaddr = self.get_kimage_vaddr()
         print_out_str("Kernel version vmlinux: {0}".format(self.kernel_version))
         self.field_offset("struct trace_entry", "preempt_count")
-        self.kimage_vaddr = self.kimage_vaddr + self.get_kaslr_offset()
+        print_out_str("kimage_vaddr is" ": {:x}".format(kimage_vaddr))
+        self.kimage_vaddr = kimage_vaddr + self.get_kaslr_offset()
         self.modules_end = self.page_offset
         if self.arm64:
             self.kimage_voffset = self.address_of("kimage_voffset")
@@ -1456,6 +1462,18 @@ class RamDump():
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
                 if kaslr_magic != 0xdead4ead:
                     print_out_str('!!!! Kaslr magic does not match.')
+                    self.kimage_vaddr_va = self.address_of('kimage_vaddr')
+                    try:
+                        kimage_vaddr = self.get_kimage_vaddr()
+                        kimage_vaddr_phy = self.phys_offset + self.kimage_vaddr_va - kimage_vaddr
+                        kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
+                        kimage_va = struct.unpack('<Q', kimage_va_temp)
+                        kimage_va = int(kimage_va[0])
+                        self.kaslr_offset = kimage_va - kimage_vaddr
+                        print_out_str("kaslr_offset = %x" % self.kaslr_offset)
+                        return self.kaslr_offset
+                    except:
+                        return self.kaslr_offset
                 else:
                     self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
                     print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
@@ -1682,7 +1700,7 @@ class RamDump():
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
 
-        if self.field_offset('struct module_sect_attr', 'battr'):
+        if self.field_offset('struct module_sect_attr', 'battr') is not None:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'battr') + self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
         else:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'name')
