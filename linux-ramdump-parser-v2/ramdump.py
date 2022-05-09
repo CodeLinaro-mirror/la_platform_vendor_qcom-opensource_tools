@@ -1368,7 +1368,7 @@ class RamDump():
                     startup_script.write(
                         'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux.men\n')
 
-        if self.cpu_type == 'ARMV9-A':
+        if self.cpu_type == 'ARMV9-A' and not self.minidump:
             mod_dir = os.path.dirname(self.vmlinux)
             mod_dir = os.path.abspath(mod_dir)
             startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\autoload.cmm"' + '\n')
@@ -1381,8 +1381,17 @@ class RamDump():
             for mod_tbl_ent in self.module_table.module_table:
                 mod_sym_path = mod_tbl_ent.get_sym_path()
                 if mod_sym_path != '':
+                    ld_mod_sym = ''
                     where = os.path.abspath(mod_sym_path)
-                    if 'wlan' in mod_tbl_ent.name:
+                    if self.minidump:
+                        if mod_tbl_ent.section_offsets:
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            if ".data" in mod_tbl_ent.section_offsets.keys():
+                                ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
+                            if ".bss" in mod_tbl_ent.section_offsets.keys() :
+                                ld_mod_sym += " /RELOC .bss at " + str(hex(mod_tbl_ent.section_offsets['.bss']))
+                            ld_mod_sym += "\n"
+                    elif 'wlan' in mod_tbl_ent.name:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " " + str(hex(mod_tbl_ent.module_offset)) +  " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
                     else:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
@@ -1774,6 +1783,12 @@ class RamDump():
                 mod_tbl_ent = module_table.module_table_entry()
                 mod_tbl_ent.name = m.group(1)
                 mod_tbl_ent.module_offset = int(m.group(2), base=16)
+                n = re.search(r"\.bss: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.bss'] = int(n.group(1), base=16)
+                n = re.search(r"\.data: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.data'] = int(n.group(1), base=16)
                 self.module_table.add_entry(mod_tbl_ent)
 
     def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_list):
