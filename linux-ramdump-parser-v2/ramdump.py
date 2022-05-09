@@ -631,6 +631,7 @@ class RamDump():
         self.gdb_ndk_path = gdb_ndk_path
         self.objdump_path = objdump_path
         self.outdir = options.outdir
+        self.ftrace_args = options.ftrace_args
         self.imem_fname = None
         self.gdbmi = None
         self.gdbmi_hyp = None
