@@ -56,11 +56,8 @@ def is_ramdump_file(val, minidump):
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
     else:
-        if val == 'MD_SMEMINFO.BIN' or val == 'MD_SHRDIMEM.BIN' or val == 'md_SMEMINFO.BIN' or val == 'md_SHRDIMEM.BIN':
-            return True
-        if 'md_vm_3_vcpu' in val:
-            return True
-        if 'md_TZ_IMEM' in val:
+        ddr = re.compile(r'(md_)[0-9_A-Z]+[.]BIN', re.IGNORECASE)
+        if ddr.match(val):
             return True
     return False
 
