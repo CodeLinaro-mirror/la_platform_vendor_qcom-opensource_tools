@@ -1371,11 +1371,17 @@ class RamDump():
                     startup_script.write(
                         'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux.men\n')
 
-        if self.cpu_type == 'ARMV9-A' and not self.minidump:
+        if self.get_kernel_version() >= (5, 10) and not self.minidump:
             mod_dir = os.path.dirname(self.vmlinux)
             mod_dir = os.path.abspath(mod_dir)
             startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\autoload.cmm"' + '\n')
-            startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
+            if self.module_table.sym_path_list:
+                startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
+                if len(self.module_table.sym_path_list) > 1 :
+                    for path in self.module_table.sym_path_list[1:]:
+                        startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
+            else:
+                startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
             startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
             startup_script.write('TASK.sYmbol.Option AutoLoad noprocess\n')
             startup_script.write('sYmbol.AutoLOAD.List\n')
