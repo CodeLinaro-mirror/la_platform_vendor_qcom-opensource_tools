@@ -13,6 +13,7 @@
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
 import linux_list as llist
+import traceback
 
 TSENS_MAX_SENSORS = 16
 DEBUG_SIZE = 10
@@ -168,7 +169,7 @@ class Thermal_info(RamParser):
             thermal_cdev_dict[cdev_id] = cdev_data_struct
         return
 
-    def parse_thermal_zone_fields(self, tz_device_addr, thermal_tzone_dict:dict, triggered_zones:list):
+    def parse_thermal_zone_fields(self, tz_device_addr, thermal_tzone_dict:list, triggered_zones:list):
         tzone_data_dict = {}
         tzone_id = None
         try:
@@ -187,20 +188,20 @@ class Thermal_info(RamParser):
             algo_type_off = self.ramdump.field_offset('struct thermal_zone_device', 'governor')
             tzone_data_dict["algo_type"] = self.ramdump.read_structure_cstring(tz_device_addr + algo_type_off,
                                                             'struct thermal_governor', 'name')
-            tzone_data_dict["temperature"] = self.ramdump.read_structure_field(tz_device_addr,
-                                                          'struct thermal_zone_device', 'temperature')
-            tzone_data_dict["last_temperature"] = self.ramdump.read_structure_field(tz_device_addr,
-                                                          'struct thermal_zone_device', 'last_temperature')
+            tzone_data_dict["temperature"] = self.ramdump.read_s32(tz_device_addr +
+                        self.ramdump.field_offset('struct thermal_zone_device', 'temperature'))
+            tzone_data_dict["last_temperature"] = self.ramdump.read_s32(tz_device_addr +
+                        self.ramdump.field_offset('struct thermal_zone_device', 'last_temperature'))
             tzone_data_dict["polling_delay"] = self.ramdump.read_structure_field(tz_device_addr,
                                                           'struct thermal_zone_device', 'polling_delay')
             tzone_data_dict["passive_delay"] = self.ramdump.read_structure_field(tz_device_addr,
                                                           'struct thermal_zone_device', 'passive_delay')
             tzone_data_dict["passive"] = self.ramdump.read_structure_field(tz_device_addr,
                                                           'struct thermal_zone_device', 'passive')
-            tzone_data_dict["prev_low_trip"] = self.ramdump.read_structure_field(tz_device_addr,
-                                                          'struct thermal_zone_device', 'prev_low_trip')
-            tzone_data_dict["prev_high_trip"] = self.ramdump.read_structure_field(tz_device_addr,
-                                                          'struct thermal_zone_device', 'prev_high_trip')
+            tzone_data_dict["prev_low_trip"] = self.ramdump.read_s32(tz_device_addr +
+                        self.ramdump.field_offset('struct thermal_zone_device', 'prev_low_trip'))
+            tzone_data_dict["prev_high_trip"] = self.ramdump.read_s32(tz_device_addr +
+                        self.ramdump.field_offset('struct thermal_zone_device', 'prev_high_trip'))
             tzone_data_dict["trip_count"] = self.ramdump.read_structure_field(tz_device_addr,
                                                           'struct thermal_zone_device', 'trips')
             tzone_data_dict["trips_disabled"] = self.ramdump.read_structure_field(tz_device_addr,
@@ -266,11 +267,11 @@ class Thermal_info(RamParser):
             tzone_data_dict["exception"] = str(e)
 
         if tzone_data_dict and tzone_id is not None:
-            thermal_tzone_dict[tzone_id] = tzone_data_dict
+            thermal_tzone_dict.append(tzone_data_dict)
         return
 
     def parse_thremal_zone_data(self, dump):
-        self.tzone_struct_list = {}
+        self.tzone_struct_list = []
         self.triggered_zones = []
         # thermal_zone data
         thermal_tz_list = self.ramdump.read('thermal_tz_list.next')
@@ -278,22 +279,19 @@ class Thermal_info(RamParser):
         list_walker = llist.ListWalker(self.ramdump, thermal_tz_list, list_offset)
         list_walker.walk(thermal_tz_list, self.parse_thermal_zone_fields,
                          self.tzone_struct_list, self.triggered_zones)
-        tzone_id_list = self.tzone_struct_list.keys()
-        if not tzone_id_list:
+        if len(self.tzone_struct_list) == 0:
             self.writeln("No thermal Zones or exception in parsing")
             return
 
         self.writeln("")
+        self.writeln("Total Tzones: {0}".format(len(self.tzone_struct_list)))
         self.writeln("Trip violated Tzones: {0}".format(",".join(self.triggered_zones)))
         self.writeln("")
-
         format_str = "{0:<35} {1}"
-        tzone_id_list = sorted(tzone_id_list)
-        for tzone_id in tzone_id_list:
-            tzone_struct = self.tzone_struct_list[tzone_id]
-
+        self.tzone_struct_list.sort(key=lambda x: float(x["temperature"]), reverse=True)
+        for tzone_struct in self.tzone_struct_list:
             self.writeln("")
-            self.writeln("[THERMAL_ZONE_{0}]".format(tzone_id))
+            self.writeln("[THERMAL_ZONE_{0}]".format(tzone_struct["tzone_id"]))
             self.writeln(format_str.format("algo_type", tzone_struct.get("algo_type")))
             self.writeln(format_str.format("sensor", tzone_struct.get("type")))
 
