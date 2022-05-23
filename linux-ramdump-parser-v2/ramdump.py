@@ -56,11 +56,8 @@ def is_ramdump_file(val, minidump):
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
     else:
-        if val == 'MD_SMEMINFO.BIN' or val == 'MD_SHRDIMEM.BIN' or val == 'md_SMEMINFO.BIN' or val == 'md_SHRDIMEM.BIN':
-            return True
-        if 'md_vm_3_vcpu' in val:
-            return True
-        if 'md_TZ_IMEM' in val:
+        ddr = re.compile(r'(md_)[0-9_A-Z]+[.]BIN', re.IGNORECASE)
+        if ddr.match(val):
             return True
     return False
 
@@ -543,7 +540,7 @@ class RamDump():
         vmalloc_start = self.modules_end - self.kaslr_offset
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
 
-            phys_base = 0xffffffff
+            phys_base = 0x1ffffffff
             phys_end = 0
             for a in self.ebi_files:
                 _, start, end, path = a
@@ -553,8 +550,10 @@ class RamDump():
                     if end > phys_end:
                         phys_end = end
 
-            if phys_end > 0xffffffff:
-                phys_end = 0xffffffff
+            if phys_end > 0x1ffffffff:
+                phys_end = 0x1ffffffff
+            #mask phys_base lower address for alignment
+            phys_base = phys_base & 0xfffff0000
 
             print_out_str("phys_base: {0:x} phys_end: {1:x} step: {2:x}".format(
                             phys_base, phys_end, min_image_align))
@@ -634,6 +633,7 @@ class RamDump():
         self.gdb_ndk_path = gdb_ndk_path
         self.objdump_path = objdump_path
         self.outdir = options.outdir
+        self.ftrace_args = options.ftrace_args
         self.imem_fname = None
         self.gdbmi = None
         self.gdbmi_hyp = None
@@ -1371,11 +1371,17 @@ class RamDump():
                     startup_script.write(
                         'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux.men\n')
 
-        if self.cpu_type == 'ARMV9-A':
+        if self.get_kernel_version() >= (5, 10) and not self.minidump:
             mod_dir = os.path.dirname(self.vmlinux)
             mod_dir = os.path.abspath(mod_dir)
             startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\autoload.cmm"' + '\n')
-            startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
+            if self.module_table.sym_path_list:
+                startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
+                if len(self.module_table.sym_path_list) > 1 :
+                    for path in self.module_table.sym_path_list[1:]:
+                        startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
+            else:
+                startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
             startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
             startup_script.write('TASK.sYmbol.Option AutoLoad noprocess\n')
             startup_script.write('sYmbol.AutoLOAD.List\n')
@@ -1384,8 +1390,17 @@ class RamDump():
             for mod_tbl_ent in self.module_table.module_table:
                 mod_sym_path = mod_tbl_ent.get_sym_path()
                 if mod_sym_path != '':
+                    ld_mod_sym = ''
                     where = os.path.abspath(mod_sym_path)
-                    if 'wlan' in mod_tbl_ent.name:
+                    if self.minidump:
+                        if mod_tbl_ent.section_offsets:
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            if ".data" in mod_tbl_ent.section_offsets.keys():
+                                ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
+                            if ".bss" in mod_tbl_ent.section_offsets.keys() :
+                                ld_mod_sym += " /RELOC .bss at " + str(hex(mod_tbl_ent.section_offsets['.bss']))
+                            ld_mod_sym += "\n"
+                    elif 'wlan' in mod_tbl_ent.name:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " " + str(hex(mod_tbl_ent.module_offset)) +  " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
                     else:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
@@ -1777,6 +1792,12 @@ class RamDump():
                 mod_tbl_ent = module_table.module_table_entry()
                 mod_tbl_ent.name = m.group(1)
                 mod_tbl_ent.module_offset = int(m.group(2), base=16)
+                n = re.search(r"\.bss: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.bss'] = int(n.group(1), base=16)
+                n = re.search(r"\.data: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.data'] = int(n.group(1), base=16)
                 self.module_table.add_entry(mod_tbl_ent)
 
     def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_list):
