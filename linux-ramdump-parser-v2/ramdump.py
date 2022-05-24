@@ -824,7 +824,11 @@ class RamDump():
                         print_out_str("Dynamically determined phys offset is"
                                       ": {:x}".format(phys_offset_dyn))
                         self.phys_offset = phys_offset_dyn
-                self.kimage_voffset = self.kimage_vaddr - self.phys_offset
+
+                if self.kimage_vaddr > self.phys_offset:
+                    self.kimage_voffset = self.kimage_vaddr - self.phys_offset
+                else:
+                    self.kimage_voffset = self.phys_offset
                 print_out_str("The kimage_voffset extracted is: {:x}".format(self.kimage_voffset))
         else:
             self.kimage_voffset = self.address_of("kimage_voffset")
@@ -1488,9 +1492,10 @@ class RamDump():
                         kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
                         kimage_va = struct.unpack('<Q', kimage_va_temp)
                         kimage_va = int(kimage_va[0])
-                        self.kaslr_offset = kimage_va - kimage_vaddr
-                        print_out_str("kaslr_offset = %x" % self.kaslr_offset)
-                        return self.kaslr_offset
+                        if kimage_va > kimage_vaddr:
+                            self.kaslr_offset = kimage_va - kimage_vaddr
+                            print_out_str("kaslr_offset = %x" % self.kaslr_offset)
+                            return self.kaslr_offset
                     except:
                         return self.kaslr_offset
                 else:
