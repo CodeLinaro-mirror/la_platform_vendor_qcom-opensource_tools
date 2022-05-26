@@ -56,7 +56,8 @@ def is_ramdump_file(val, minidump):
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
     else:
-        if val == 'MD_SMEMINFO.BIN' or val == 'MD_SHRDIMEM.BIN':
+        ddr = re.compile(r'(md_)[0-9_A-Z]+[.]BIN', re.IGNORECASE)
+        if ddr.match(val):
             return True
     return False
 
@@ -573,6 +574,41 @@ class RamDump():
 
         return 0
 
+    def get_kimage_vaddr(self):
+        kimage_vaddr = None
+        if self.get_kernel_version() > (4, 20, 0):
+            va_bits = 39
+            modules_vsize = 0x08000000
+            bpf_jit_vsize = 0x08000000
+            self.page_end = (0xffffffffffffffff << (
+                        va_bits - 1)) & 0xffffffffffffffff
+            if self.address_of("kasan_init") is None:
+                self.kasan_shadow_size = 0
+            else:
+                self.kasan_shadow_size = 1 << (va_bits - 3)
+            kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
+
+            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
+            # The KASAN shadow region is reconfigured so that it ends at the start of
+            # the vmalloc region, and grows downwards. That way, the arrangement of
+            # the vmalloc space (which contains kernel mappings, modules, BPF region,
+            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
+            # which aids debugging.
+
+            if self.get_kernel_version() < (5, 11, 0):
+                kimage_vaddr = kimage_vaddr + self.kasan_shadow_size
+        else:
+            va_bits = 39
+            modules_vsize = 0x08000000
+            self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
+            if self.address_of("kasan_init") is None:
+                self.kasan_shadow_size = 0
+            else:
+                self.kasan_shadow_size = 1 << (va_bits - 3)
+            kimage_vaddr = self.va_start + self.kasan_shadow_size + \
+                           modules_vsize
+        return kimage_vaddr
+
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
         self.ebi_files_minidump = []
@@ -602,6 +638,7 @@ class RamDump():
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
+        self.kimage_vaddr_va = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -767,41 +804,11 @@ class RamDump():
                 '[!!!] Page offset was set to {0:x}'.format(page_offset))
             self.page_offset = options.page_offset
         self.setup_symbol_tables()
-
-        if self.get_kernel_version() > (4, 20, 0):
-            va_bits = 39
-            modules_vsize = 0x08000000
-            bpf_jit_vsize = 0x08000000
-            self.page_end = (0xffffffffffffffff << (va_bits - 1)) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
-
-            self.kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
-            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
-            # The KASAN shadow region is reconfigured so that it ends at the start of
-            # the vmalloc region, and grows downwards. That way, the arrangement of
-            # the vmalloc space (which contains kernel mappings, modules, BPF region,
-            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
-            # which aids debugging.
-            if self.get_kernel_version() < (5, 11, 0):
-                self.kimage_vaddr += self.kasan_shadow_size
-        else:
-            va_bits = 39
-            modules_vsize = 0x08000000
-            self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
-
-            self.kimage_vaddr = self.va_start + self.kasan_shadow_size + \
-                                modules_vsize
-
+        kimage_vaddr = self.get_kimage_vaddr()
         print_out_str("Kernel version vmlinux: {0}".format(self.kernel_version))
         self.field_offset("struct trace_entry", "preempt_count")
-        self.kimage_vaddr = self.kimage_vaddr + self.get_kaslr_offset()
+        print_out_str("kimage_vaddr is" ": {:x}".format(kimage_vaddr))
+        self.kimage_vaddr = kimage_vaddr + self.get_kaslr_offset()
         self.modules_end = self.page_offset
         if self.arm64:
             self.kimage_voffset = self.address_of("kimage_voffset")
@@ -947,6 +954,10 @@ class RamDump():
             print_out_str('Do you have write/read permissions on the path?')
             sys.exit(1)
         return f
+
+    def chmod(self, file_name, mode):
+        file_path = os.path.join(self.outdir, file_name)
+        return os.chmod(file_path, mode)
 
     def remove_file(self, file_name):
         file_path = os.path.join(self.outdir, file_name)
@@ -1357,7 +1368,7 @@ class RamDump():
                     startup_script.write(
                         'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux.men\n')
 
-        if self.cpu_type == 'ARMV9-A':
+        if self.cpu_type == 'ARMV9-A' and not self.minidump:
             mod_dir = os.path.dirname(self.vmlinux)
             mod_dir = os.path.abspath(mod_dir)
             startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\autoload.cmm"' + '\n')
@@ -1370,8 +1381,17 @@ class RamDump():
             for mod_tbl_ent in self.module_table.module_table:
                 mod_sym_path = mod_tbl_ent.get_sym_path()
                 if mod_sym_path != '':
+                    ld_mod_sym = ''
                     where = os.path.abspath(mod_sym_path)
-                    if 'wlan' in mod_tbl_ent.name:
+                    if self.minidump:
+                        if mod_tbl_ent.section_offsets:
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            if ".data" in mod_tbl_ent.section_offsets.keys():
+                                ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
+                            if ".bss" in mod_tbl_ent.section_offsets.keys() :
+                                ld_mod_sym += " /RELOC .bss at " + str(hex(mod_tbl_ent.section_offsets['.bss']))
+                            ld_mod_sym += "\n"
+                    elif 'wlan' in mod_tbl_ent.name:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " " + str(hex(mod_tbl_ent.module_offset)) +  " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
                     else:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
@@ -1414,7 +1434,7 @@ class RamDump():
             t32_sh.write('#!/bin/sh\n\n')
             t32_sh.write('{0} -c {1}/t32_config.t32, {1}/t32_startup_script.cmm &\n'.format(t32_binary, out_path))
             t32_sh.close()
-            os.chmod(launch_file, stat.S_IRWXU)
+            self.chmod(launch_file, stat.S_IRWXU)
 
         print_out_str(
             '--- Created a T32 Simulator launcher (run {})'.format(launch_file))
@@ -1452,6 +1472,18 @@ class RamDump():
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
                 if kaslr_magic != 0xdead4ead:
                     print_out_str('!!!! Kaslr magic does not match.')
+                    self.kimage_vaddr_va = self.address_of('kimage_vaddr')
+                    try:
+                        kimage_vaddr = self.get_kimage_vaddr()
+                        kimage_vaddr_phy = self.phys_offset + self.kimage_vaddr_va - kimage_vaddr
+                        kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
+                        kimage_va = struct.unpack('<Q', kimage_va_temp)
+                        kimage_va = int(kimage_va[0])
+                        self.kaslr_offset = kimage_va - kimage_vaddr
+                        print_out_str("kaslr_offset = %x" % self.kaslr_offset)
+                        return self.kaslr_offset
+                    except:
+                        return self.kaslr_offset
                 else:
                     self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
                     print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
@@ -1678,7 +1710,7 @@ class RamDump():
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
 
-        if self.kernel_version > (4, 18, 0):
+        if self.field_offset('struct module_sect_attr', 'battr') is not None:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'battr') + self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
         else:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'name')
@@ -1751,6 +1783,12 @@ class RamDump():
                 mod_tbl_ent = module_table.module_table_entry()
                 mod_tbl_ent.name = m.group(1)
                 mod_tbl_ent.module_offset = int(m.group(2), base=16)
+                n = re.search(r"\.bss: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.bss'] = int(n.group(1), base=16)
+                n = re.search(r"\.data: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.data'] = int(n.group(1), base=16)
                 self.module_table.add_entry(mod_tbl_ent)
 
     def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_list):
