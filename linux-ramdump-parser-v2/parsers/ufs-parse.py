@@ -349,8 +349,9 @@ class UfsHba():
         print_out_ufs("\tsdev [%d] {" %(self.ramdump.read_u64(sdev + self.ramdump.field_offset(
                                         'struct scsi_device', 'lun'))))
         print_out_ufs("\t\taddr = 0x%x" %sdev)
-        print_out_ufs("\t\tdevice_busy = %d" %(self.ramdump.read_int(sdev + self.ramdump.field_offset(
-                                        'struct scsi_device', 'device_busy'))))
+        if self.ramdump.get_kernel_version() < (5, 14, 0):
+            print_out_ufs("\t\tdevice_busy = %d" %(self.ramdump.read_int(sdev + self.ramdump.field_offset(
+                                            'struct scsi_device', 'device_busy'))))
         print_out_ufs("\t\tdevice_blocked = %d" %(self.ramdump.read_int(sdev + self.ramdump.field_offset(
                                         'struct scsi_device', 'device_blocked'))))
         print_out_ufs("\t\tsdev_state = %s" %self.ufs_sdev_state_l[(self.ramdump.read_int(
@@ -489,8 +490,9 @@ class UfsHba():
         self.dump_ufs_dev_info()
         print_out_ufs("\tauto_bkops_enabled = %d" % (self.ramdump.read_bool(
             self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'auto_bkops_enabled'))))
-        print_out_ufs("\twlun_dev_clr_ua = %d" % (self.ramdump.read_bool(
-            self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'wlun_dev_clr_ua'))))
+        if self.ramdump.get_kernel_version() < (5, 14, 0):
+            print_out_ufs("\twlun_dev_clr_ua = %d" % (self.ramdump.read_bool(
+                    self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'wlun_dev_clr_ua'))))
         print_out_ufs("\treq_abort_count = %d" % (self.ramdump.read_int(
             self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'req_abort_count'))))
         print_out_ufs("\tlanes_per_direction = %d" % (self.ramdump.read_int(
