@@ -1400,7 +1400,7 @@ class RamDump():
                     where = os.path.abspath(mod_sym_path)
                     if self.minidump:
                         if mod_tbl_ent.section_offsets:
-                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /CODESEC /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
                             if ".data" in mod_tbl_ent.section_offsets.keys():
                                 ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
                             if ".bss" in mod_tbl_ent.section_offsets.keys() :
