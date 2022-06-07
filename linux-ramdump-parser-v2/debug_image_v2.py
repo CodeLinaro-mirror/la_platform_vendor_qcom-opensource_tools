@@ -795,9 +795,15 @@ class DebugImage_v2():
                 imem_dump_table_offset = ram_dump.board.imem_offset_memdump_table
             else:
                 imem_dump_table_offset = IMEM_OFFSET_MEM_DUMP_TABLE
-            table_phys = ram_dump.read_word(
-                ram_dump.board.imem_start + imem_dump_table_offset,
-                virtual = False)
+            if ram_dump.minidump and ram_dump.kernel_version >= (5, 10):
+                for a in ram_dump.ebi_files:
+                    if "md_SHRDIMEM" in a[3]:
+                        table_phys = ram_dump.read_word(a[1] + 0x10, virtual=False)
+                        break
+            else:
+                table_phys = ram_dump.read_word(
+                    ram_dump.board.imem_start + imem_dump_table_offset,
+                    virtual = False)
             root_table = self.validateMsmDumpTable(ram_dump, "IMEM", table_phys)
 
             if root_table is None:
@@ -823,12 +829,10 @@ class DebugImage_v2():
                 entry_id = ram_dump.read_u32(this_entry + dump_entry_id_offset, virtual = False)
                 entry_type = ram_dump.read_u32(this_entry + dump_entry_type_offset, virtual = False)
                 entry_addr = ram_dump.read_word(this_entry + dump_entry_addr_offset, virtual = False)
-
                 if entry_type > len(self.dump_type_lookup_table):
                     print_out_str(
                         '!!! Invalid dump table entry type found {0:x}'.format(entry_type))
                     continue
-
                 table_version = ram_dump.read_u32(
                     entry_addr + dump_table_version_offset, False)
                 if table_version is None:
@@ -861,7 +865,6 @@ class DebugImage_v2():
                         print_out_str(
                             '!!! Invalid dump client type found {0:x}'.format(client_type))
                         continue
-
                     dump_data_magic = ram_dump.read_u32(
                                     client_addr + dump_data_magic_offset, False)
                     dump_data_version = ram_dump.read_u32(
@@ -890,7 +893,6 @@ class DebugImage_v2():
                     if dump_data_magic != MEMDUMPV2_MAGIC and dump_data_magic != MEMDUMPV_HYP_MAGIC:
                         print_out_str("!!! Magic {0:x} doesn't match! No context will be parsed".format(dump_data_magic))
                         continue
-
                     if "parse_cpu_ctx" in func:
                         getattr(DebugImage_v2, func)(
                             self, dump_data_version, dump_data_addr,
