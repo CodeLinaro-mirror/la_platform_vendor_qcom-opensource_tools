@@ -1,4 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -580,6 +581,9 @@ class GpuParser_510(RamParser):
         default_pwrlevel = dump.read_structure_field(pwrctrl_address,
                                                      'struct kgsl_pwrctrl',
                                                      'default_pwrlevel')
+        thermal_pwrlevel = dump.read_structure_field(pwrctrl_address,
+                                                     'struct kgsl_pwrctrl',
+                                                     'thermal_pwrlevel')
         power_flags = dump.read_structure_field(pwrctrl_address,
                                                 'struct kgsl_pwrctrl',
                                                 'power_flags')
@@ -601,6 +605,9 @@ class GpuParser_510(RamParser):
         bus_ab_mbytes = dump.read_structure_field(pwrctrl_address,
                                                   'struct kgsl_pwrctrl',
                                                   'bus_ab_mbytes')
+        cur_buslevel = dump.read_structure_field(pwrctrl_address,
+                                                 'struct kgsl_pwrctrl',
+                                                 'cur_buslevel')
         idle_timer = dump.read_structure_field(pwrctrl_address,
                                                'struct kgsl_pwrctrl',
                                                'interval_timeout')
@@ -631,6 +638,7 @@ class GpuParser_510(RamParser):
         self.writeln('active_pwrlevel:  ' + str(active_pwrlevel))
         self.writeln('previous_pwrlevel:  ' + str(prev_pwrlevel))
         self.writeln('default_pwrlevel:  ' + str(default_pwrlevel))
+        self.writeln('thermal_pwrlevel:  ' + str(thermal_pwrlevel))
         self.writeln('power_flags:  ' + strhex(power_flags))
         self.writeln('ctrl_flags:  ' + strhex(ctrl_flags))
         self.writeln('min_pwrlevel:  ' + str(min_pwrlevel))
@@ -638,6 +646,7 @@ class GpuParser_510(RamParser):
         self.writeln('bus_percent_ab:  ' + str(bus_percent_ab))
         self.writeln('bus_width:  ' + str(bus_width))
         self.writeln('bus_ab_mbytes:  ' + str(bus_ab_mbytes))
+        self.writeln('cur_buslevel:  ' + str(cur_buslevel))
         self.writeln('idle_timer:  ' + str(idle_timer))
         self.writeln()
 
