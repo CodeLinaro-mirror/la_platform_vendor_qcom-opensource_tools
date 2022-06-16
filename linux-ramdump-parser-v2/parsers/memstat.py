@@ -108,10 +108,16 @@ class MemStats(RamParser):
                             'vm_node_stat[NR_ANON_MAPPED]')
         vmstat_file_pages = self.ramdump.read_word(
                             'vm_node_stat[NR_FILE_PAGES]')
-        vmstat_pagetbl = self.ramdump.read_word(
-                            'vm_zone_stat[NR_PAGETABLE]')
-        vmstat_kernelstack = self.ramdump.read_word(
-                            'vm_zone_stat[NR_KERNEL_STACK_KB]')
+        if self.ramdump.kernel_version >= (5, 15):
+            vmstat_pagetbl = self.ramdump.read_word(
+                                'vm_node_stat[NR_PAGETABLE]')
+            vmstat_kernelstack = self.ramdump.read_word(
+                                'vm_node_stat[NR_KERNEL_STACK_KB]')
+        else:
+            vmstat_pagetbl = self.ramdump.read_word(
+                                'vm_zone_stat[NR_PAGETABLE]')
+            vmstat_kernelstack = self.ramdump.read_word(
+                                'vm_zone_stat[NR_KERNEL_STACK_KB]')
         other_mem = (vmstat_anon_pages + vmstat_file_pages + vmstat_pagetbl +
                      (vmstat_kernelstack // 4))
         other_mem = self.pages_to_mb(other_mem)
