@@ -56,7 +56,8 @@ def is_ramdump_file(val, minidump):
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
     else:
-        if val == 'MD_SMEMINFO.BIN' or val == 'MD_SHRDIMEM.BIN':
+        ddr = re.compile(r'(md_)[0-9_A-Z]+[.]BIN', re.IGNORECASE)
+        if ddr.match(val):
             return True
     return False
 
@@ -539,7 +540,7 @@ class RamDump():
         vmalloc_start = self.modules_end - self.kaslr_offset
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
 
-            phys_base = 0xffffffff
+            phys_base = 0x1ffffffff
             phys_end = 0
             for a in self.ebi_files:
                 _, start, end, path = a
@@ -549,8 +550,10 @@ class RamDump():
                     if end > phys_end:
                         phys_end = end
 
-            if phys_end > 0xffffffff:
-                phys_end = 0xffffffff
+            if phys_end > 0x1ffffffff:
+                phys_end = 0x1ffffffff
+            #mask phys_base lower address for alignment
+            phys_base = phys_base & 0xfffff0000
 
             print_out_str("phys_base: {0:x} phys_end: {1:x} step: {2:x}".format(
                             phys_base, phys_end, min_image_align))
@@ -572,6 +575,39 @@ class RamDump():
                 kimage_load_addr = kimage_load_addr + min_image_align
 
         return 0
+
+    def get_kimage_vaddr(self):
+        kimage_vaddr = None
+        if self.get_kernel_version() > (4, 20, 0):
+            modules_vsize = 0x08000000
+            bpf_jit_vsize = 0x08000000
+            self.page_end = (0xffffffffffffffff << (
+                        self.va_bits - 1)) & 0xffffffffffffffff
+            if self.address_of("kasan_init") is None:
+                self.kasan_shadow_size = 0
+            else:
+                self.kasan_shadow_size = 1 << (self.va_bits - 3)
+            kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
+
+            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
+            # The KASAN shadow region is reconfigured so that it ends at the start of
+            # the vmalloc region, and grows downwards. That way, the arrangement of
+            # the vmalloc space (which contains kernel mappings, modules, BPF region,
+            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
+            # which aids debugging.
+
+            if self.get_kernel_version() < (5, 11, 0):
+                kimage_vaddr = kimage_vaddr + self.kasan_shadow_size
+        else:
+            modules_vsize = 0x08000000
+            self.va_start = (0xffffffffffffffff << self.va_bits) & 0xffffffffffffffff
+            if self.address_of("kasan_init") is None:
+                self.kasan_shadow_size = 0
+            else:
+                self.kasan_shadow_size = 1 << (self.va_bits - 3)
+            kimage_vaddr = self.va_start + self.kasan_shadow_size + \
+                           modules_vsize
+        return kimage_vaddr
 
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
@@ -595,6 +631,7 @@ class RamDump():
         self.gdb_ndk_path = gdb_ndk_path
         self.objdump_path = objdump_path
         self.outdir = options.outdir
+        self.ftrace_args = options.ftrace_args
         self.imem_fname = None
         self.gdbmi = None
         self.gdbmi_hyp = None
@@ -602,6 +639,7 @@ class RamDump():
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
+        self.kimage_vaddr_va = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -748,17 +786,24 @@ class RamDump():
             self.ttbr_data = hyp_dump.ttbr1_data_info
             self.vttbr_data = hyp_dump.vttbr_el2_data
             self.s2_walk = True
+
+        self.config = []
+        self.config_dict = {}
+        if not self.get_config():
+            print_out_str('!!! Could not get saved configuration')
+            print_out_str(
+                '!!! This is really bad and probably indicates RAM corruption')
+            print_out_str('!!! Some features may be disabled!')
+
         if self.kaslr_offset is None:
             self.determine_kaslr_offset()
             self.gdbmi.kaslr_offset = self.get_kaslr_offset()
 
         self.wlan = options.wlan
-        self.config = []
-        self.config_dict = {}
+        self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
-                va_bits = 39
-                self.page_offset = -(1 << va_bits) % (1 << 64)
+                self.page_offset = -(1 << self.va_bits) % (1 << 64)
             else:
                 self.page_offset = 0xffffffc000000000
             self.thread_size = 16384
@@ -767,41 +812,11 @@ class RamDump():
                 '[!!!] Page offset was set to {0:x}'.format(page_offset))
             self.page_offset = options.page_offset
         self.setup_symbol_tables()
-
-        if self.get_kernel_version() > (4, 20, 0):
-            va_bits = 39
-            modules_vsize = 0x08000000
-            bpf_jit_vsize = 0x08000000
-            self.page_end = (0xffffffffffffffff << (va_bits - 1)) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
-
-            self.kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
-            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
-            # The KASAN shadow region is reconfigured so that it ends at the start of
-            # the vmalloc region, and grows downwards. That way, the arrangement of
-            # the vmalloc space (which contains kernel mappings, modules, BPF region,
-            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
-            # which aids debugging.
-            if self.get_kernel_version() < (5, 11, 0):
-                self.kimage_vaddr += self.kasan_shadow_size
-        else:
-            va_bits = 39
-            modules_vsize = 0x08000000
-            self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
-
-            self.kimage_vaddr = self.va_start + self.kasan_shadow_size + \
-                                modules_vsize
-
+        kimage_vaddr = self.get_kimage_vaddr()
         print_out_str("Kernel version vmlinux: {0}".format(self.kernel_version))
         self.field_offset("struct trace_entry", "preempt_count")
-        self.kimage_vaddr = self.kimage_vaddr + self.get_kaslr_offset()
+        print_out_str("kimage_vaddr is" ": {:x}".format(kimage_vaddr))
+        self.kimage_vaddr = kimage_vaddr + self.get_kaslr_offset()
         self.modules_end = self.page_offset
         if self.arm64:
             self.kimage_voffset = self.address_of("kimage_voffset")
@@ -814,7 +829,11 @@ class RamDump():
                         print_out_str("Dynamically determined phys offset is"
                                       ": {:x}".format(phys_offset_dyn))
                         self.phys_offset = phys_offset_dyn
-                self.kimage_voffset = self.kimage_vaddr - self.phys_offset
+
+                if self.kimage_vaddr > self.phys_offset:
+                    self.kimage_voffset = self.kimage_vaddr - self.phys_offset
+                else:
+                    self.kimage_voffset = self.phys_offset
                 print_out_str("The kimage_voffset extracted is: {:x}".format(self.kimage_voffset))
         else:
             self.kimage_voffset = self.address_of("kimage_voffset")
@@ -906,11 +925,6 @@ class RamDump():
                 '!!! Your vmlinux is probably wrong for these dumps')
             print_out_str('!!! Exiting now')
             sys.exit(1)
-        if not self.get_config():
-            print_out_str('!!! Could not get saved configuration')
-            print_out_str(
-                '!!! This is really bad and probably indicates RAM corruption')
-            print_out_str('!!! Some features may be disabled!')
 
         self.unwind = self.Unwinder(self)
         if self.module_table.sym_paths_exist():
@@ -970,7 +984,7 @@ class RamDump():
         kconfig_addr = self.address_of('kernel_config_data')
         if kconfig_addr is None:
             return
-        if self.kernel_version > (5, 0, 0):
+        if self.get_kernel_version() > (5, 0, 0):
             kconfig_addr_end = self.address_of('kernel_config_data_end')
             if kconfig_addr_end is None:
                 return
@@ -983,24 +997,27 @@ class RamDump():
             # size includes magic, offset from it
             kconfig_size = kconfig_size - 16 - 1
 
-        zconfig = NamedTemporaryFile(mode='wb', delete=False)
         # kconfig data starts with magic 8 byte string, go past that
-        s = self.read_cstring(kconfig_addr, 8, allow_elf=True)
+        zconfig = os.path.join(self.outdir, "elf_temp.txt")
+        temp_file = open(zconfig, 'wb+')
+        size = kconfig_addr + 8
+        s = self.read_elf_memory(kconfig_addr, size, temp_file)
+        temp_file.close()
         if s != 'IKCFG_ST':
             return
+        temp_file = open(zconfig, 'wb+')
         kconfig_addr = kconfig_addr + 8
-        for i in range(0, kconfig_size):
-            val = self.read_byte(kconfig_addr + i, allow_elf=True)
-            zconfig.write(struct.pack('<B', val))
+        val = self.read_elf_memory(kconfig_addr, kconfig_size + kconfig_addr,
+                                      temp_file)
 
-        zconfig.close()
-        zconfig_in = gzip.open(zconfig.name, 'rt')
+        temp_file.close()
+        zconfig_in = gzip.open(temp_file.name, 'rt')
         try:
             t = zconfig_in.readlines()
         except:
             return False
         zconfig_in.close()
-        os.remove(zconfig.name)
+        os.remove(zconfig)
         for l in t:
             self.config.append(l.rstrip())
             if not l.startswith('#') and l.strip() != '':
@@ -1049,17 +1066,16 @@ class RamDump():
         if self.minidump:
             return minidump_util.minidump_virt_to_phys(self.ebi_files_minidump,addr)
         else:
-            va_bits = 39
             if self.kimage_voffset is None:
                 return addr - self.page_offset + self.phys_offset
             else:
                 if self.kernel_version > (4, 20, 0):
-                    if not (addr & (1 << (va_bits - 1))):
+                    if not (addr & (1 << (self.va_bits - 1))):
                         return addr - self.page_offset + self.phys_offset
                     else:
                         return addr - (self.kimage_voffset)
                 else:
-                    if addr & (1 << (va_bits - 1)):
+                    if addr & (1 << (self.va_bits - 1)):
                         return addr - self.page_offset + self.phys_offset
                     else:
                         return addr - (self.kimage_voffset)
@@ -1361,11 +1377,17 @@ class RamDump():
                     startup_script.write(
                         'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux.men\n')
 
-        if self.cpu_type == 'ARMV9-A':
+        if self.get_kernel_version() >= (5, 10) and not self.minidump:
             mod_dir = os.path.dirname(self.vmlinux)
             mod_dir = os.path.abspath(mod_dir)
             startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\autoload.cmm"' + '\n')
-            startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
+            if self.module_table.sym_path_list:
+                startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
+                if len(self.module_table.sym_path_list) > 1 :
+                    for path in self.module_table.sym_path_list[1:]:
+                        startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
+            else:
+                startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
             startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
             startup_script.write('TASK.sYmbol.Option AutoLoad noprocess\n')
             startup_script.write('sYmbol.AutoLOAD.List\n')
@@ -1374,8 +1396,17 @@ class RamDump():
             for mod_tbl_ent in self.module_table.module_table:
                 mod_sym_path = mod_tbl_ent.get_sym_path()
                 if mod_sym_path != '':
+                    ld_mod_sym = ''
                     where = os.path.abspath(mod_sym_path)
-                    if 'wlan' in mod_tbl_ent.name:
+                    if self.minidump:
+                        if mod_tbl_ent.section_offsets:
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            if ".data" in mod_tbl_ent.section_offsets.keys():
+                                ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
+                            if ".bss" in mod_tbl_ent.section_offsets.keys() :
+                                ld_mod_sym += " /RELOC .bss at " + str(hex(mod_tbl_ent.section_offsets['.bss']))
+                            ld_mod_sym += "\n"
+                    elif 'wlan' in mod_tbl_ent.name:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " " + str(hex(mod_tbl_ent.module_offset)) +  " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
                     else:
                         ld_mod_sym = "Data.LOAD.Elf " + where + " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
@@ -1456,6 +1487,19 @@ class RamDump():
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
                 if kaslr_magic != 0xdead4ead:
                     print_out_str('!!!! Kaslr magic does not match.')
+                    self.kimage_vaddr_va = self.address_of('kimage_vaddr')
+                    try:
+                        kimage_vaddr = self.get_kimage_vaddr()
+                        kimage_vaddr_phy = self.phys_offset + self.kimage_vaddr_va - kimage_vaddr
+                        kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
+                        kimage_va = struct.unpack('<Q', kimage_va_temp)
+                        kimage_va = int(kimage_va[0])
+                        if kimage_va > kimage_vaddr:
+                            self.kaslr_offset = kimage_va - kimage_vaddr
+                            print_out_str("kaslr_offset = %x" % self.kaslr_offset)
+                            return self.kaslr_offset
+                    except:
+                        return self.kaslr_offset
                 else:
                     self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
                     print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
@@ -1755,6 +1799,12 @@ class RamDump():
                 mod_tbl_ent = module_table.module_table_entry()
                 mod_tbl_ent.name = m.group(1)
                 mod_tbl_ent.module_offset = int(m.group(2), base=16)
+                n = re.search(r"\.bss: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.bss'] = int(n.group(1), base=16)
+                n = re.search(r"\.data: (?:0x)?([0-9a-fA-F]+).*", line)
+                if n is not None:
+                    mod_tbl_ent.section_offsets['.data'] = int(n.group(1), base=16)
                 self.module_table.add_entry(mod_tbl_ent)
 
     def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_list):
@@ -2122,6 +2172,14 @@ class RamDump():
             return (table[low][1] + desc, offset)
         else:
             return (table[low][1] + desc, size)
+
+    def read_elf_memory(self, addr, length, temp_file):
+        s = self.gdbmi.read_elf_memory(addr, length, temp_file)
+        if s is not None:
+            a = s.decode('ascii', 'ignore')
+            return a.split('\0')[0]
+        else:
+            return s
 
     def read_physical(self, addr, length):
         if not isinstance(addr, int) or not isinstance(length, int):
