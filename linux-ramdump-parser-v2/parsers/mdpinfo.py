@@ -2435,7 +2435,7 @@ class MDPinfo(RamParser):
                                                  'time': get_u64})
 
                         if (log_log.time == 0x0):
-                                break
+                                continue
                         func_name = self.ramdump.read_cstring(log_log.name)
                         func_name = func_name + ':' + str(log_log.line)
                         self.outfile.write('%-60.50s' % (func_name))
