@@ -1,4 +1,5 @@
 # Copyright (c) 2017, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -25,8 +26,6 @@ class FCM_Dump():
             return False
         rsz = self.end_addr - self.start_addr
         fcmfile = ram_dump.open_file('fcm.bin', mode='wb')
-        for i in range(0, rsz):
-            val = ram_dump.read_byte(self.start_addr + i, False)
-            fcmfile.write(struct.pack('<B', val))
-
+        fcm_data= ram_dump.read_physical(self.start_addr, rsz)
+        fcmfile.write(fcm_data)
         fcmfile.close()
