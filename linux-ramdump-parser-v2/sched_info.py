@@ -131,7 +131,10 @@ def verify_active_cpus(ramdump):
 
 def dump_rq_lock_information(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
-    lock_owner_cpu_offset = ramdump.field_offset('struct rq', 'lock.owner_cpu')
+    if (ramdump.kernel_version >= (5, 15, 0)):
+        lock_owner_cpu_offset = ramdump.field_offset('struct rq', '__lock.owner_cpu')
+    else:
+        lock_owner_cpu_offset = ramdump.field_offset('struct rq', 'lock.owner_cpu')
     if lock_owner_cpu_offset:
         for i in ramdump.iter_cpus():
             rq_addr = runqueues_addr + ramdump.per_cpu_offset(i)
