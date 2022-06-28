@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -63,6 +64,10 @@ def parse_ram_file(option, opt_str, value, parser):
 
     a.append((temp[0], int(temp[1], 16), int(temp[2], 16)))
     setattr(parser.values, option.dest, a)
+
+
+def get_ftrace_args(option, opt, value, parser):
+    setattr(parser.values, option.dest, value.split(','))
 
 
 if __name__ == '__main__':
@@ -161,6 +166,17 @@ if __name__ == '__main__':
                       Stop ignoring exceptions from running a parser. Intended to be used with:
                       python -m pdb ramparse.py <args for ramparse.py>
                       """))
+    parser.add_option('', '--ftrace-args', type='string', action='callback',
+                          callback=get_ftrace_args, dest = 'ftrace_args',
+                          help="""
+                          Comma separated trace subsystems to capture. Works with --dump-ftrace parser option
+                          trace_names = [
+                                         "binder", "bootreceiver", "clock_reg",
+                                         "kgsl-fence", "memory", "mmc", "rproc_qcom",
+                                         "suspend", "ufs", "usb", "wifi"
+                                         ]
+                          """,
+                          default=[])
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
