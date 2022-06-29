@@ -137,7 +137,7 @@ class FtraceParser_Event(object):
         #local_t_commita = self.ramdump.read_u64(buffer_data_page_commit + local_t_commita_offset)
         #commit = self.ramdump.read_u64(local_t_commita + atomic64_t_counter_offset)
         commit = buffer_data_page_commit
-        
+
         if commit and commit > 0:
             buffer_data_page_end = buffer_data_page + commit
             timestamp = self.ramdump.read_u64(buffer_data_page + self.buffer_data_page_time_stamp_offset)
@@ -264,13 +264,13 @@ class FtraceParser_Event(object):
         DEBUG_ENABLE = 0
         curr_com = "<TBD>"
         if event_name == "scm_call_start":
-                
+
                 #print "ftrace_raw_entry  of scm_call_start = {0}".format(hex(ftrace_raw_entry))
                 trace_event_raw_offset = self.ramdump.field_offset('struct ' + struct_type, "x0")
                 trace_event_raw_next_comm = self.ramdump.field_offset('struct ' + struct_type, "arginfo")
                 trace_event_raw_next_pid = self.ramdump.field_offset('struct ' + struct_type, "args")
                 trace_event_raw_next_prio = self.ramdump.field_offset('struct ' + struct_type, "x5")
-                
+
 
                 """prev_state = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_offset)
                 if ( prev_state == 0) or ( prev_state == 0x400):
@@ -291,11 +291,11 @@ class FtraceParser_Event(object):
                     x5 = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_next_prio)
                 else:
                     x5 = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_next_prio)
-                
+
                 #print "x0 = {0}".format(hex(x0))
                 #print "x5 = {0}".format(hex(x5))
                # print "arginfo = {0}".format(hex(arginfo))
-                
+
                 arr = []
                 ptr_size = self.ramdump.sizeof('void *')
                 #print "ptr_size = {0}".format(ptr_size)
@@ -318,11 +318,11 @@ class FtraceParser_Event(object):
                 #print "temp_data = {0}".format(temp_data)
                 self.ftrace_time_data[t].append(temp_data)
         elif event_name == "scm_call_end":
-                
+
                 #print "ftrace_raw_entry  of scm_call_start = {0}".format(hex(ftrace_raw_entry))
                 trace_event_raw_offset = self.ramdump.field_offset('struct ' + struct_type, "ret")
-                
-                
+
+
 
                 """prev_state = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_offset)
                 if ( prev_state == 0) or ( prev_state == 0x400):
@@ -337,12 +337,12 @@ class FtraceParser_Event(object):
                     rets = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_offset)
                 else:
                     rets = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_offset)
-                
-                
+
+
                 #print "x0 = {0}".format(hex(x0))
                 #print "x5 = {0}".format(hex(x5))
                 #print "arginfo = {0}".format(hex(arginfo))
-                
+
                 arr = []
                 ptr_size = self.ramdump.sizeof('void *')
                 #print "ptr_size = {0}".format(ptr_size)
@@ -353,7 +353,7 @@ class FtraceParser_Event(object):
                         ptr = self.ramdump.read_u32(rets + (i*ptr_size))
                       arr.append(ptr)
 
-                
+
 
                 space_data = self.remaing_space(space_count,len("scm_call_end:"))
                 if DEBUG_ENABLE == 1:
@@ -492,7 +492,7 @@ class FtraceParser_Event(object):
                     v = self.ramdump.read_s64(ftrace_raw_entry + offset)
                     #fmt_name_value_map[item] = v
                 temp_a.append(v)
-            
+
             #print temp_a
             #t = "name={0} ({1}-{2})".format(temp_a[0],temp_a[1],temp_a[2])
             temp_data = "               {3}    {0}  {1:.6f}: regulator_set_voltage: {2}\n".format(self.cpu,local_timestamp/1000000000.0,t,curr_com)
@@ -503,7 +503,7 @@ class FtraceParser_Event(object):
                 print_entry_buf_offset = self.ramdump.field_offset('struct bprint_entry', "buf")
                 print_entry_fmt_offset = self.ramdump.field_offset('struct bprint_entry', "fmt")
                 print_ip = self.ramdump.read_word(ftrace_raw_entry + print_entry_ip_offset)
-                print_buffer = self.ramdump.read_u32(ftrace_raw_entry + print_entry_buf_offset)
+                #print_buffer = self.ramdump.read_u32(ftrace_raw_entry + print_entry_buf_offset)
                 if self.ramdump.arm64:
                     print_entry_fmt = self.ramdump.read_u64(ftrace_raw_entry + print_entry_fmt_offset)
                 else:
@@ -512,53 +512,50 @@ class FtraceParser_Event(object):
                 #print_ip_func = self.ramdump.read_cstring(print_ip)
 
                 function = self.ramdump.get_symbol_info1(print_ip)
-                #self.ftrace_out.write(
-                 #   "[ {0}  - {1} (    BPRINT) ] pid : {2} ip->{3}: {4} ftrace_raw_entry {5} \n".format(self.cpu, local_timestamp / 1000000000.0,pid,hex(print_ip),print_entry_fmt_data,hex(ftrace_raw_entry)))
-                '''self.ftrace_out.write(
-                    "                <system>-{0}     {1}  {2}:   bprint:        {3} {4}    {5} {6}\n".format(pid,self.cpu,
-                                                                                                        local_timestamp / 1000000000.0,
-                                                                                                        function,
-                                                                                                 print_entry_fmt_data,hex(print_buffer),len(print_entry_fmt_data.split(","))
-                                                                                        ))
-                '''
-                if len(print_entry_fmt_data.split(",")) == 4:
-                    '''self.ftrace_out.write("                <TBD>     {0}  {1}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                        local_timestamp / 1000000000.0,
-                                                                                                        function,print_entry_fmt_data% (print_buffer,print_buffer,print_buffer,print_buffer)))
-    
-                    '''
-                    temp_data = "                {4}    {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                        local_timestamp / 1000000000.0,
-                                                                                                        function,print_entry_fmt_data% (print_buffer,print_buffer,print_buffer,print_buffer),curr_com)
-                elif len(print_entry_fmt_data.split(",")) == 2:
-                    '''self.ftrace_out.write(
-                        "                <TBD>     {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                              local_timestamp / 1000000000.0,
-                                                                                                              function,
-                                                                                                              print_entry_fmt_data % (
-                                                                                                              print_buffer,
-                                                                                                              print_buffer )))
-                    '''
-                    temp_data = "                {4}    {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                              local_timestamp / 1000000000.0,
-                                                                                                              function,
-                                                                                                              print_entry_fmt_data % (
-                                                                                                              print_buffer,
-                                                                                                              print_buffer ),curr_com)
-                else:
-                    '''self.ftrace_out.write(
-                        "                <TBD>     {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                              local_timestamp / 1000000000.0,
-                                                                                                              function,
-                                                                                                              print_entry_fmt_data % (
-                                                                                                              print_buffer,print_buffer
-                                                                                                               )))
-                    '''
-                    temp_data = "                {4}     {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                              local_timestamp / 1000000000.0,
-                                                                                                              function,
-                                                                                                              print_entry_fmt_data
-                                                                                                               ,curr_com)
+                """
+                ['%px', '%llx', '%ps', '%ps', '%ps', '%ps', '%ps', '%ps', '%ps']
+                Supported :
+                    d for integers
+                    f for floating-point numbers
+                    b for binary numbers
+                    o for octal numbers
+                    x for octal hexadecimal numbers
+                    s for string
+                    e for floating-point in an exponent format
+                """
+
+                regex = re.compile("(%[a-z]+)")
+                length = 0
+                print_buffer = []
+                print_buffer_offset = ftrace_raw_entry + print_entry_buf_offset
+                for match in regex.finditer(print_entry_fmt_data):
+                    replacement = match.group()
+                    if 'x' in match.group():
+                        replacement = "%x"
+                    elif 's' in match.group():
+                        if 'p' in match.group():
+                            replacement = "%x"
+                        else:
+                            replacement = "%s"
+                    elif 'd' in match.group() or 'u' in match.group() or 'h' in match.group():
+                        replacement = "%d"
+                    elif 'f' in match.group():
+                        replacement = "%f"
+                    if replacement != match.group():
+                        print_entry_fmt_data = print_entry_fmt_data.replace(match.group(), replacement)
+                    length += 1
+                    if self.ramdump.arm64:
+                        print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
+                        print_buffer_offset += 8
+                    else:
+                        print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                        print_buffer_offset += 4
+                temp_data = "                {4}    {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
+                                                                                                    local_timestamp / 1000000000.0,
+                                                                                                    function,print_entry_fmt_data% (
+                                                                                                    tuple(print_buffer)),
+                                                                                                    curr_com)
+
                 #t = local_timestamp / 1000000000.0
                 self.ftrace_time_data[t].append(temp_data)
         elif event_name == "print":
@@ -573,7 +570,7 @@ class FtraceParser_Event(object):
                 #print_ip_func = self.ramdump.read_cstring(print_ip)
 
                 function = self.ramdump.get_symbol_info1(print_ip)
-                
+
                 temp_data = "                {4}     {0}  {1:.6f}:   print:        {2} {3}\n".format(self.cpu,
                                                                                                           local_timestamp / 1000000000.0,
                                                                                                           function,
