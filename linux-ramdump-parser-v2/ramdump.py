@@ -1296,7 +1296,7 @@ class RamDump():
                             startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
                             self.hlos_sctlr_el1))
                         else:
-                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
+                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000084C5D93D\n')
                         corevcpu_path = os.path.join(self.outdir,'corevcpu0_regs.cmm')
                         if os.path.exists(corevcpu_path):
                             startup_script.write('do ' + corevcpu_path + '\n')
