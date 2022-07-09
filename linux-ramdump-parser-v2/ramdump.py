@@ -800,7 +800,10 @@ class RamDump():
             self.gdbmi.kaslr_offset = self.get_kaslr_offset()
 
         self.wlan = options.wlan
-        self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
+        try:
+            self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
+        except:
+            self.va_bits = 39
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
