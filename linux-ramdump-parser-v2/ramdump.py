@@ -579,15 +579,14 @@ class RamDump():
     def get_kimage_vaddr(self):
         kimage_vaddr = None
         if self.get_kernel_version() > (4, 20, 0):
-            va_bits = 39
             modules_vsize = 0x08000000
             bpf_jit_vsize = 0x08000000
             self.page_end = (0xffffffffffffffff << (
-                        va_bits - 1)) & 0xffffffffffffffff
+                        self.va_bits - 1)) & 0xffffffffffffffff
             if self.address_of("kasan_init") is None:
                 self.kasan_shadow_size = 0
             else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
+                self.kasan_shadow_size = 1 << (self.va_bits - 3)
             kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
@@ -600,13 +599,12 @@ class RamDump():
             if self.get_kernel_version() < (5, 11, 0):
                 kimage_vaddr = kimage_vaddr + self.kasan_shadow_size
         else:
-            va_bits = 39
             modules_vsize = 0x08000000
-            self.va_start = (0xffffffffffffffff << va_bits) & 0xffffffffffffffff
+            self.va_start = (0xffffffffffffffff << self.va_bits) & 0xffffffffffffffff
             if self.address_of("kasan_init") is None:
                 self.kasan_shadow_size = 0
             else:
-                self.kasan_shadow_size = 1 << (va_bits - 3)
+                self.kasan_shadow_size = 1 << (self.va_bits - 3)
             kimage_vaddr = self.va_start + self.kasan_shadow_size + \
                            modules_vsize
         return kimage_vaddr
@@ -788,17 +786,27 @@ class RamDump():
             self.ttbr_data = hyp_dump.ttbr1_data_info
             self.vttbr_data = hyp_dump.vttbr_el2_data
             self.s2_walk = True
+
+        self.config = []
+        self.config_dict = {}
+        if not self.get_config():
+            print_out_str('!!! Could not get saved configuration')
+            print_out_str(
+                '!!! This is really bad and probably indicates RAM corruption')
+            print_out_str('!!! Some features may be disabled!')
+
         if self.kaslr_offset is None:
             self.determine_kaslr_offset()
             self.gdbmi.kaslr_offset = self.get_kaslr_offset()
 
         self.wlan = options.wlan
-        self.config = []
-        self.config_dict = {}
+        try:
+            self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
+        except:
+            self.va_bits = 39
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
-                va_bits = 39
-                self.page_offset = -(1 << va_bits) % (1 << 64)
+                self.page_offset = -(1 << self.va_bits) % (1 << 64)
             else:
                 self.page_offset = 0xffffffc000000000
             self.thread_size = 16384
@@ -920,11 +928,6 @@ class RamDump():
                 '!!! Your vmlinux is probably wrong for these dumps')
             print_out_str('!!! Exiting now')
             sys.exit(1)
-        if not self.get_config():
-            print_out_str('!!! Could not get saved configuration')
-            print_out_str(
-                '!!! This is really bad and probably indicates RAM corruption')
-            print_out_str('!!! Some features may be disabled!')
 
         self.unwind = self.Unwinder(self)
         if self.module_table.sym_paths_exist():
@@ -984,7 +987,7 @@ class RamDump():
         kconfig_addr = self.address_of('kernel_config_data')
         if kconfig_addr is None:
             return
-        if self.kernel_version > (5, 0, 0):
+        if self.get_kernel_version() > (5, 0, 0):
             kconfig_addr_end = self.address_of('kernel_config_data_end')
             if kconfig_addr_end is None:
                 return
@@ -997,24 +1000,27 @@ class RamDump():
             # size includes magic, offset from it
             kconfig_size = kconfig_size - 16 - 1
 
-        zconfig = NamedTemporaryFile(mode='wb', delete=False)
         # kconfig data starts with magic 8 byte string, go past that
-        s = self.read_cstring(kconfig_addr, 8, allow_elf=True)
+        zconfig = os.path.join(self.outdir, "elf_temp.txt")
+        temp_file = open(zconfig, 'wb+')
+        size = kconfig_addr + 8
+        s = self.read_elf_memory(kconfig_addr, size, temp_file)
+        temp_file.close()
         if s != 'IKCFG_ST':
             return
+        temp_file = open(zconfig, 'wb+')
         kconfig_addr = kconfig_addr + 8
-        for i in range(0, kconfig_size):
-            val = self.read_byte(kconfig_addr + i, allow_elf=True)
-            zconfig.write(struct.pack('<B', val))
+        val = self.read_elf_memory(kconfig_addr, kconfig_size + kconfig_addr,
+                                      temp_file)
 
-        zconfig.close()
-        zconfig_in = gzip.open(zconfig.name, 'rt')
+        temp_file.close()
+        zconfig_in = gzip.open(temp_file.name, 'rt')
         try:
             t = zconfig_in.readlines()
         except:
             return False
         zconfig_in.close()
-        os.remove(zconfig.name)
+        os.remove(zconfig)
         for l in t:
             self.config.append(l.rstrip())
             if not l.startswith('#') and l.strip() != '':
@@ -1063,17 +1069,16 @@ class RamDump():
         if self.minidump:
             return minidump_util.minidump_virt_to_phys(self.ebi_files_minidump,addr)
         else:
-            va_bits = 39
             if self.kimage_voffset is None:
                 return addr - self.page_offset + self.phys_offset
             else:
                 if self.kernel_version > (4, 20, 0):
-                    if not (addr & (1 << (va_bits - 1))):
+                    if not (addr & (1 << (self.va_bits - 1))):
                         return addr - self.page_offset + self.phys_offset
                     else:
                         return addr - (self.kimage_voffset)
                 else:
-                    if addr & (1 << (va_bits - 1)):
+                    if addr & (1 << (self.va_bits - 1)):
                         return addr - self.page_offset + self.phys_offset
                     else:
                         return addr - (self.kimage_voffset)
@@ -1291,7 +1296,7 @@ class RamDump():
                             startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
                             self.hlos_sctlr_el1))
                         else:
-                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
+                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000084C5D93D\n')
                         corevcpu_path = os.path.join(self.outdir,'corevcpu0_regs.cmm')
                         if os.path.exists(corevcpu_path):
                             startup_script.write('do ' + corevcpu_path + '\n')
@@ -1398,7 +1403,7 @@ class RamDump():
                     where = os.path.abspath(mod_sym_path)
                     if self.minidump:
                         if mod_tbl_ent.section_offsets:
-                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /CODESEC /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
                             if ".data" in mod_tbl_ent.section_offsets.keys():
                                 ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
                             if ".bss" in mod_tbl_ent.section_offsets.keys() :
@@ -2170,6 +2175,14 @@ class RamDump():
             return (table[low][1] + desc, offset)
         else:
             return (table[low][1] + desc, size)
+
+    def read_elf_memory(self, addr, length, temp_file):
+        s = self.gdbmi.read_elf_memory(addr, length, temp_file)
+        if s is not None:
+            a = s.decode('ascii', 'ignore')
+            return a.split('\0')[0]
+        else:
+            return s
 
     def read_physical(self, addr, length):
         if not isinstance(addr, int) or not isinstance(length, int):
