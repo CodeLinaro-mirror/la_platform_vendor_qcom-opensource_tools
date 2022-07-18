@@ -795,12 +795,16 @@ class RamDump():
                 '!!! This is really bad and probably indicates RAM corruption')
             print_out_str('!!! Some features may be disabled!')
 
+        try:
+            self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
+        except:
+            self.va_bits = 39
+
         if self.kaslr_offset is None:
             self.determine_kaslr_offset()
             self.gdbmi.kaslr_offset = self.get_kaslr_offset()
 
         self.wlan = options.wlan
-        self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
@@ -1293,7 +1297,7 @@ class RamDump():
                             startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
                             self.hlos_sctlr_el1))
                         else:
-                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
+                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000084C5D93D\n')
                         corevcpu_path = os.path.join(self.outdir,'corevcpu0_regs.cmm')
                         if os.path.exists(corevcpu_path):
                             startup_script.write('do ' + corevcpu_path + '\n')
@@ -1400,7 +1404,7 @@ class RamDump():
                     where = os.path.abspath(mod_sym_path)
                     if self.minidump:
                         if mod_tbl_ent.section_offsets:
-                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /CODESEC /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
                             if ".data" in mod_tbl_ent.section_offsets.keys():
                                 ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
                             if ".bss" in mod_tbl_ent.section_offsets.keys() :
