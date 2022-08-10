@@ -613,6 +613,7 @@ class RamDump():
         self.ebi_files = []
         self.ebi_files_minidump = []
         self.ebi_pa_name_map = {}
+        self.md_dict = {}
         self.phys_offset = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
@@ -753,7 +754,27 @@ class RamDump():
                     if (not section.is_null() and
                             s.section_in_segment(section)):
                         self.ebi_pa_name_map[pa] = section.name
+                        if section.name == "KVA_DUMP":
+                            kva_dump_addr = pa
                 self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
+
+            if os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
+                file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
+                fd = open(file_path, 'rb')
+                kva_elf = ELFFile(fd)
+                for s in kva_elf.iter_sections():
+                    start = int(s.header['sh_addr'])
+                    size = int(s.header['sh_size'])
+                    offset = int(s.header['sh_offset'])
+                    pa = kva_dump_addr + offset
+                    end_addr = pa + size - 1
+                    if start == 0x0:
+                        continue
+                    self.ebi_files_minidump.append((idx, pa, end_addr, start, size))
+                    if s.name not in self.md_dict.keys():
+                        self.md_dict[s.name] = [[start,size]]
+                    else:
+                        self.md_dict[s.name].append([start,size])
 
         if options.minidump:
             if self.ebi_start == 0:
@@ -773,6 +794,7 @@ class RamDump():
         if self.svm:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
+            hyp_dump.vmtype = self.svm
             hyp_dump.determine_kaslr()
             self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
             hyp_dump.get_trace_phy()
@@ -939,6 +961,20 @@ class RamDump():
 
         mm_init(self)
 
+    def get_section_address(self,section):
+        """
+        Function to return address and size corresponding to the section name in elf files.
+
+        :param section: name of the section.
+        :type addr: str
+
+        :return: A list of list of addresses and sizes corresponding to the section name.
+        """
+        res_dict = self.md_dict
+        if (section in res_dict.keys()):
+            return res_dict[section]
+        else:
+            raise InvalidInput
 
     def __del__(self):
         self.gdbmi.close()
