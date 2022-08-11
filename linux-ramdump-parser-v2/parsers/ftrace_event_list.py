@@ -1,4 +1,5 @@
 # Copyright (c) 2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -31,8 +32,6 @@ class FtraceParser_Event_List(object):
         self.max_ftrace_event_type = 0
         self.event_type = None
         self.event_name = ""
-        self.ftrace_event_call_list = self.ramdump.field_offset("struct trace_event_call" , "list")
-        #self.ftrace_event_call_list_offset = self.ramdump.address_of(self.ftrace_event_call_list)
         self.ftrace_event_call_list_offset = self.ramdump.field_offset("struct trace_event_call" , "list")
 
         #print ("self.ftrace_event_call_list_offset = {0}".format(hex(self.ftrace_event_call_list_offset)))
@@ -54,10 +53,7 @@ class FtraceParser_Event_List(object):
 
         self.ftrace_event_type = {}
         self.ftrace_raw_struct_type = {}
-        if self.ramdump.arm64:
-            self.ftrace_events_entry = self.ramdump.read_u64(self.ftrace_events_head + self.ftrace_events_entry_offset)
-        else:
-            self.ftrace_events_entry = self.ramdump.read_u32(self.ftrace_events_head + self.ftrace_events_entry_offset)
+
         while self.ftrace_events_entry != self.ftrace_events_head:
             ftrace_event = self.ftrace_events_entry - self.ftrace_event_call_list_offset
             #ftrace_event_data = self.ramdump.read_u64(ftrace_event + ftrace_event_call_offset)
@@ -84,7 +80,7 @@ class FtraceParser_Event_List(object):
                     print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data), hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
                     self.ftrace_event_type[str(event_type)] = "bprint"
                     self.ftrace_raw_struct_type[str(event_type)] = "bprint"
-                if "5" == str(event_type):
+                elif "5" == str(event_type):
                     print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data), hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
                     self.ftrace_event_type[str(event_type)] = "print"
                     self.ftrace_raw_struct_type[str(event_type)] = "print"
