@@ -40,6 +40,9 @@ KGSL_CONTEXT_SECURE = 0x00020000
 
 KGSL_MEMDESC_GLOBAL = (1 << 1)
 KGSL_MEMDESC_SECURE = (1 << 4)
+KGSL_MEMDESC_PRIVILEGED = (1 << 6)
+KGSL_MEMDESC_UCODE = (1 << 7)
+KGSL_MEMDESC_RANDOM = (1 << 8)
 
 KGSL_MEMFLAGS_GPUREADONLY = (1 << 24)
 KGSL_MEMFLAGS_USE_CPU_MAP = (1 << 28)
@@ -93,6 +96,7 @@ class GpuParser_510(RamParser):
             (self.parse_kgsl_mem, "KGSL Memory Stats", 'gpuinfo.txt'),
             (self.parse_rb_inflight_data, "Ringbuffer and Inflight Queues",
              'gpuinfo.txt'),
+            (self.parse_globals, "Globals", 'gpuinfo.txt'),
             (self.parse_preempt_data, "Preemption", 'gpuinfo.txt'),
             (self.parse_dispatcher_data, "Dispatcher", 'gpuinfo.txt'),
             (self.parse_mutex_data, "KGSL Mutexes", 'gpuinfo.txt'),
@@ -208,6 +212,66 @@ class GpuParser_510(RamParser):
         active_context_list_walker.walk(node_addr,
                                         self.print_context_data, format_str)
 
+    def parse_globals(self, dump):
+        format_str = '{0:30} {1:30} {2:20} {3:30} {4:12}'
+        self.writeln(format_str.format("NAME", "MEMDESC_ADDR", "MEMDESC_SIZE",
+                                       "GPUADDR", "FLAGS"))
+        node_addr = dump.struct_field_addr(self.devp, 'struct kgsl_device',
+                                           'globals')
+        list_elem_offset = dump.field_offset('struct kgsl_global_memdesc',
+                                             'node')
+        globals_list_walker = linux_list.ListWalker(dump, node_addr,
+                                                    list_elem_offset)
+        globals_list_walker.walk(node_addr, self.__print_global_memdesc,
+                                 format_str)
+
+    def __print_global_memdesc(self, kgsl_global_memdesc_base, format_str):
+        dump = self.ramdump
+        name = dump.read_structure_field(kgsl_global_memdesc_base,
+                                         'struct kgsl_global_memdesc', 'name')
+        name = dump.read_cstring(name)
+        gpuaddr = dump.read_structure_field(kgsl_global_memdesc_base,
+                                            'struct kgsl_memdesc', 'gpuaddr')
+        if name is None or gpuaddr == 0:
+            return
+
+        size = dump.read_structure_field(kgsl_global_memdesc_base,
+                                         'struct kgsl_memdesc', 'size')
+        flags = self.prepare_global_memdesc_flags(kgsl_global_memdesc_base)
+
+        self.writeln(format_str.format(name, hex(kgsl_global_memdesc_base),
+                                       str(size), hex(gpuaddr), str(flags)))
+
+    def prepare_global_memdesc_flags(self, memdesc_addr):
+        '''
+            Returns flag string with following legend:
+            is_priveleged | is_readonly | is_secure | is_random | is_ucode
+                  p/-     |    -/w      |    s/-    |    r/-    |   u/-
+        '''
+        dump = self.ramdump
+        priv = dump.read_structure_field(memdesc_addr,
+                                         'struct kgsl_memdesc', 'priv')
+        mflags = dump.read_structure_field(memdesc_addr,
+                                           'struct kgsl_memdesc', 'flags')
+        flags = ['-'] * 5
+
+        if bool(priv & KGSL_MEMDESC_PRIVILEGED):
+            flags[0] = 'p'
+
+        if not bool(mflags & KGSL_MEMFLAGS_GPUREADONLY):
+            flags[1] = 'w'
+
+        if bool(priv & KGSL_MEMDESC_SECURE):
+            flags[2] = 's'
+
+        if bool(priv & KGSL_MEMDESC_RANDOM):
+            flags[3] = 'r'
+
+        if bool(priv & KGSL_MEMDESC_UCODE):
+            flags[4] = 'u'
+
+        return ''.join(flags)
+
     def parse_open_process_mementry(self, dump):
         self.writeln('WARNING: Some nodes can be corrupted one, Ignore them.')
         format_str = '{0:20} {1:20} {2:12} {3:30} ' \
@@ -260,8 +324,7 @@ class GpuParser_510(RamParser):
         size = dump.read_structure_field(kgsl_memdesc_address,
                                          'struct kgsl_memdesc', 'size')
         gpuaddr = dump.read_structure_field(kgsl_memdesc_address,
-                                            'struct kgsl_memdesc',
-                                            'gpuaddr')
+                                            'struct kgsl_memdesc', 'gpuaddr')
         idr_id = dump.read_structure_field(mementry_addr,
                                            'struct kgsl_mem_entry', 'id')
         mflags = dump.read_structure_field(kgsl_memdesc_address,
@@ -269,7 +332,8 @@ class GpuParser_510(RamParser):
         map_count = dump.read_structure_field(mementry_addr,
                                               'struct kgsl_mem_entry',
                                               'map_count')
-        flags = self.prepare_memdesc_flags(kgsl_memdesc_address, map_count)
+        flags = self.prepare_process_memdesc_flags(kgsl_memdesc_address,
+                                                   map_count)
         mtype = ((mflags & KGSL_MEMTYPE_MASK) >> KGSL_MEMTYPE_SHIFT)
         usage = kgsl_memtype[mtype]
         pending_free = dump.read_structure_field(mementry_addr,
@@ -293,7 +357,7 @@ class GpuParser_510(RamParser):
     is_global|is_readonly|align|cachemode|is_cpu_mapped|mapped|is_secure|is_vbo
       g/-    |    -/w    |L/l/-| u/t/b/- |    p/-      |  Y/N |    s/-  |  v/-
     '''
-    def prepare_memdesc_flags(self, memdesc_addr, map_count):
+    def prepare_process_memdesc_flags(self, memdesc_addr, map_count):
         dump = self.ramdump
         priv = dump.read_structure_field(memdesc_addr,
                                          'struct kgsl_memdesc', 'priv')
