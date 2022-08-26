@@ -1,4 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -376,6 +377,10 @@ class GdbMI(object):
         tmpfile = NamedTemporaryFile(mode='rb')
         self._run("dump binary memory {} {}-{} {}-{}".format(tmpfile.name, start, self.kaslr_offset, end, self.kaslr_offset))
         return tmpfile.read()
+
+    def read_elf_memory(self, start, end, temp_file):
+        self._run("dump binary memory {} {} {}".format(temp_file.name, start, end))
+        return temp_file.read()
 
 
 if __name__ == '__main__':

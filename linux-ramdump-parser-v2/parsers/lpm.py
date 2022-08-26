@@ -543,6 +543,8 @@ class lpm(RamParser):
                                 usage_details[cpu][state] = self.get_cpuidle_usage_details(state_usage_addr)
                             else:
                                 usage_details[cpu][state] = 0
+                        else:
+                            break
 
                 else:
                     cpuidle_state_usage_offset = self.ramdump.field_offset(
