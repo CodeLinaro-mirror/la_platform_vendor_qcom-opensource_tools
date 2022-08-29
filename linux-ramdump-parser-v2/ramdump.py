@@ -586,7 +586,10 @@ class RamDump():
             if self.address_of("kasan_init") is None:
                 self.kasan_shadow_size = 0
             else:
-                self.kasan_shadow_size = 1 << (self.va_bits - 3)
+                if self.is_config_defined("CONFIG_KASAN_SW_TAGS"):
+                    self.kasan_shadow_size = 1 << (self.va_bits - 4)
+                else:
+                    self.kasan_shadow_size = 1 << (self.va_bits - 3)
             kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
