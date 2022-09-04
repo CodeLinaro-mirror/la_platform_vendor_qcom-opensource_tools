@@ -367,7 +367,7 @@ def do_dump_task_timestamps(ramdump):
     no_of_cpus = ramdump.get_num_cpus()
 
     for i in range(0, no_of_cpus):
-        task_file = ramdump.open_file('tasks_sched_stats{0}.txt'.format(i))
+        task_file = ramdump.open_file('tasks_sched_stats/' + 'tasks_sched_stats{0}.txt'.format(i))
         task_out.append(task_file)
     if len(task_per_cpu_list) == 0:
         task_per_cpu_list = [[] for j in range(no_of_cpus)]
