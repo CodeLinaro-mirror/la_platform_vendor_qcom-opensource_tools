@@ -335,7 +335,10 @@ class GpuParser_510(RamParser):
         flags = self.prepare_process_memdesc_flags(kgsl_memdesc_address,
                                                    map_count)
         mtype = ((mflags & KGSL_MEMTYPE_MASK) >> KGSL_MEMTYPE_SHIFT)
-        usage = kgsl_memtype[mtype]
+        try:
+            usage = kgsl_memtype[mtype]
+        except IndexError:
+            usage = "unknown: " + str(mtype)
         pending_free = dump.read_structure_field(mementry_addr,
                                                  'struct kgsl_mem_entry',
                                                  'pending_free')
