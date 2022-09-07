@@ -586,7 +586,10 @@ class RamDump():
             if self.address_of("kasan_init") is None:
                 self.kasan_shadow_size = 0
             else:
-                self.kasan_shadow_size = 1 << (self.va_bits - 3)
+                if self.is_config_defined("CONFIG_KASAN_SW_TAGS"):
+                    self.kasan_shadow_size = 1 << (self.va_bits - 4)
+                else:
+                    self.kasan_shadow_size = 1 << (self.va_bits - 3)
             kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
@@ -1860,10 +1863,6 @@ class RamDump():
         if not mod_tbl_ent.set_sym_path(ko_file_list[mod_tbl_ent.name]):
             return
 
-        args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
-        p = subprocess.run(args, stdout=subprocess.PIPE)
-        symbols = p.stdout.decode().splitlines()
-
         if self.is_config_defined("CONFIG_KALLSYMS"):
             symtab_offset = self.field_offset('struct mod_kallsyms', 'symtab')
             num_symtab_offset = self.field_offset('struct mod_kallsyms', 'num_symtab')
@@ -1871,8 +1870,10 @@ class RamDump():
 
             if self.arm64:
                 sym_struct_name = 'struct elf64_sym'
+                sym_struct_size = self.sizeof(sym_struct_name)
             else:
                 sym_struct_name = 'struct elf32_sym'
+                sym_struct_size = self.sizeof(sym_struct_name)
 
             st_info_offset = self.field_offset(sym_struct_name, 'st_info')
             symtab = self.read_pointer(mod_tbl_ent.kallsyms_addr + symtab_offset)
@@ -1884,7 +1885,7 @@ class RamDump():
 
             KSYM_NAME_LEN = 128
             for i in range(0, num_symtab):
-                elf_sym = symtab + self.sizeof(sym_struct_name) * i
+                elf_sym = symtab + sym_struct_size * i
                 st_value = self.read_structure_field(elf_sym, sym_struct_name, 'st_value')
                 st_info = self.read_byte(elf_sym + st_info_offset)
                 sym_type = chr(st_info)
@@ -1911,6 +1912,9 @@ class RamDump():
             if self.dump_module_kallsyms:
                 self.dump_mod_kallsyms_sym_table(mod_tbl_ent.name, mod_tbl_ent.kallsyms_table)
         else:
+            args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
+            p = subprocess.run(args, stdout=subprocess.PIPE)
+            symbols = p.stdout.decode().splitlines()
             for line in symbols:
                 s = line.split(' ')
                 if len(s) == 3:

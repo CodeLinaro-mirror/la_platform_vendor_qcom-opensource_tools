@@ -455,6 +455,10 @@ class GpuParser_510(RamParser):
         prev_rb_id = dump.read_structure_field(prev_rb,
                                                'struct adreno_ringbuffer',
                                                'id')
+        firmware_offset = dump.field_offset('struct adreno_device', 'fw')
+        cp_ucode_ver = dump.read_structure_field(self.devp + firmware_offset,
+                                                 'struct adreno_firmware',
+                                                 'version')
 
         self.writeln('open_count: ' + str(open_count))
         self.writeln('active_cnt: ' + str(active_cnt))
@@ -476,6 +480,7 @@ class GpuParser_510(RamParser):
         self.writeln('next_rb_id: ' + str(next_rb_id))
         self.writeln('prev_rb: ' + strhex(prev_rb))
         self.writeln('prev_rb_id: ' + str(prev_rb_id))
+        self.writeln('CP ucode version: ' + strhex(cp_ucode_ver))
 
     def parse_kgsl_mem(self, dump):
         page_alloc = dump.read('kgsl_driver.stats.page_alloc')
