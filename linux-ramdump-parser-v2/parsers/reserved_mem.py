@@ -1,5 +1,6 @@
 # Copyright (c) 2018-2020,2021 The Linux Foundation. All rights reserved.
-#
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -9,13 +10,13 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-
+import os, re
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from mm import get_vmemmap, page_buddy
 from mm import pfn_to_page, page_buddy, page_count, for_each_pfn
 from mm import page_to_pfn, pfn_to_section
-
+from utils.anomalies import Anomaly
 
 def print_reserved_mem(ramdump):
     reserved_mem_addr = ramdump.address_of('reserved_mem')
@@ -93,6 +94,24 @@ def parse_softirq_stat(ramdump):
             print_tasklet_info(ramdump, index, 'tasklet_hi_vec')
         index = index + 1
 
+def check_qseecom_invalid_cmds(ramdump):
+    invalid_qsecom_cmds_id = ["3", "5", "7", "9", "14", "15", "16", "17", "19", "23" , "29"]
+    invalid_qsecom_cmds = []
+    return_string = ""
+    if os.path.exists(os.path.join(ramdump.outdir, "qsee_log.txt")):
+        if os.stat(os.path.join(ramdump.outdir, "qsee_log.txt")).st_size:
+            with open(os.path.join(ramdump.outdir, "qsee_log.txt"), "r+") as fd:
+                for line in fd:
+                    if re.search("TZ App cmd handler, cmd_id", line):
+                        cmd_id = line.split()[-1]
+                        if cmd_id in invalid_qsecom_cmds_id:
+                            invalid_qsecom_cmds.append(cmd_id)
+            if len(invalid_qsecom_cmds):
+                return_string += "qsecomm sample app running invalid cmds : "
+                for i in range(len(invalid_qsecom_cmds)):
+                    return_string += invalid_qsecom_cmds[i] + " "
+                return (return_string + "\n")
+    return return_string
 
 def do_parse_qsee_log(ramdump):
     qsee_out = ramdump.open_file('qsee_log.txt')
@@ -175,9 +194,10 @@ class CmaAreas(RamParser):
             self.page_ext_size = self.ramdump.sizeof("struct page_ext")
             if self.ramdump.kernel_version >= (4, 9, 0):
                 self.page_owner_size = self.ramdump.sizeof("struct page_owner")
-                self.page_ext_size = self.page_ext_size + self.page_owner_size
-                self.page_owner_ops_offset = self.ramdump.read_structure_field(
-                    'page_owner_ops', 'struct page_ext_operations', 'offset')
+                if self.page_owner_size is not None:
+                    self.page_ext_size = self.page_ext_size + self.page_owner_size
+                    self.page_owner_ops_offset = self.ramdump.read_structure_field(
+                        'page_owner_ops', 'struct page_ext_operations', 'offset')
 
         '''
         Following based upon definition in include/linux/mmzone.h
@@ -529,3 +549,8 @@ class SoftirqStat(RamParser):
 class ParseQseeLog(RamParser):
     def parse(self):
         do_parse_qsee_log(self.ramdump)
+        anomaly = Anomaly()
+        anomaly.setOutputDir(self.ramdump.outdir)
+        return_string = check_qseecom_invalid_cmds(self.ramdump)
+        if len(return_string):
+            anomaly.addWarning("HLOS", "qsee_log.txt", "{0}".format(return_string))

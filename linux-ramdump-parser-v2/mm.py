@@ -1,4 +1,5 @@
 # Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -149,6 +150,8 @@ def get_vmemmap(ramdump):
 
     if ramdump.is_config_defined("CONFIG_ARM64_64K_PAGES"):
         page_shift = 16
+    elif ramdump.is_config_defined("CONFIG_ARM64_16K_PAGES"):
+        page_shift = 14
     else:
         page_shift = 12
     pgdir_shift = ((page_shift - 3) * nlevels) + 3
@@ -172,6 +175,13 @@ def get_vmemmap(ramdump):
         # vmemmap is shifted to base addr (0x80000000) pfn.
         vmemmap = (ramdump.page_offset - pud_size - vmemmap_size -
                    memstart_offset)
+
+    elif ramdump.kernel_version >= (5, 15):
+        struct_page_max_shift = 6
+        vmemmap_shift = page_shift - struct_page_max_shift
+        vmemstart = -(1 << (va_bits - vmemmap_shift)) % (1 << 64)
+        vmemmap = vmemstart - (memstart_addr >> page_shift)*spsize
+
     elif ramdump.kernel_version >= (5, 10):
         struct_page_max_shift = 6
         SZ_2M = 0x00200000
