@@ -801,6 +801,10 @@ class RamDump():
             hyp_dump.determine_kaslr()
             self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
             hyp_dump.get_trace_phy()
+            if hyp_dump.ttbr1 is None:
+                print_out_str('!!! Could not find {}'.format(self.svm))
+                print_out_str('!!! Exiting now')
+                sys.exit(1)
             self.ttbr = hyp_dump.ttbr1
             self.vttbr = hyp_dump.vttbr
             self.TTBR0_EL1 = hyp_dump.TTBR0_EL1
