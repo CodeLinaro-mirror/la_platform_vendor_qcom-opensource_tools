@@ -1169,13 +1169,28 @@ class GpuParser_510(RamParser):
             return
 
         snapshot_offset = dump.field_offset('struct kgsl_device', 'snapshot')
-        snapshot_memory_offset = dump.field_offset(
-            'struct kgsl_device', 'snapshot_memory')
+        snapshot_memory_offset = dump.field_offset('struct kgsl_device',
+                                                   'snapshot_memory')
         snapshot_memory_size = dump.read_u32(self.devp +
-                                             snapshot_memory_offset + 8)
+                                             snapshot_memory_offset +
+                                             dump.sizeof('void *') +
+                                             dump.sizeof('dma_addr_t'))
         snapshot_base_addr = dump.read_pointer(self.devp + snapshot_offset)
+
         if snapshot_base_addr == 0:
-            self.writeln('Snapshot not found.')
+            snapshot_memory_ptr = dump.read_pointer(self.devp +
+                                                    snapshot_memory_offset)
+            if snapshot_memory_ptr is None or snapshot_memory_ptr == 0:
+                self.writeln('Snapshot not found.')
+                return
+            file_name = 'gpu_snapshot_memory.bpmd'
+            file = self.ramdump.open_file('gpu_parser/' + file_name, 'wb')
+            self.write('Snapshot start not found, ')
+            self.writeln('dumping entire region to ' + file_name)
+            data = self.ramdump.read_binarystring(snapshot_memory_ptr,
+                                                  snapshot_memory_size)
+            file.write(data)
+            file.close()
             return
 
         snapshot_start = dump.read_structure_field(
