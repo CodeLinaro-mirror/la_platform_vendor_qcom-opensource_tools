@@ -522,7 +522,10 @@ class RamDump():
 
        return r;
     def pac_ignore(self,data):
-        pac_check = 0xffffff0000000000
+        if self.va_bits == 48:
+            pac_check = 0xffff000000000000
+        else:
+            pac_check = 0xffffff0000000000
         top_bit_ignore = 0xff00000000000000
         if data is None or not self.arm64:
             return data
@@ -532,7 +535,10 @@ class RamDump():
         # The PAC field is Xn[54:bottom_PAC_bit].
         # In the PAC field definitions, bottom_PAC_bit == 64-TCR_ELx.TnSZ,
         # TCR_ELx.TnSZ is set to 25. so 64-25=39
-        pac_mack = self.createMask(39,54)
+        if self.va_bits == 48:
+            pac_mack = self.createMask(48,54)
+        else:
+            pac_mack = self.createMask(39,54)
         result = pac_mack | data
         result = result | top_bit_ignore
         return result
@@ -590,7 +596,9 @@ class RamDump():
                     self.kasan_shadow_size = 1 << (self.va_bits - 4)
                 else:
                     self.kasan_shadow_size = 1 << (self.va_bits - 3)
-            kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
+            kimage_vaddr = self.page_end + modules_vsize
+            if self.get_kernel_version() < (5, 15, 0):
+                kimage_vaddr += bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
             # The KASAN shadow region is reconfigured so that it ends at the start of
@@ -647,7 +655,7 @@ class RamDump():
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
-                                     self.kaslr_offset or 0)
+                                     0)
             self.gdbmi.open()
             sanity_data = self.address_of("kimage_voffset")
             self.kernel_version = (0, 0, 0)
@@ -664,7 +672,7 @@ class RamDump():
 
         if not self.ndk_compatible:
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
-                        self.kaslr_offset or 0)
+                        0)
             self.gdbmi.open()
 
         self.page_offset = 0xc0000000
@@ -832,6 +840,8 @@ class RamDump():
         if self.kaslr_offset is None:
             self.determine_kaslr_offset()
             self.gdbmi.kaslr_offset = self.get_kaslr_offset()
+        else:
+            self.gdbmi.kaslr_offset = self.kaslr_offset
 
         self.wlan = options.wlan
         if self.arm64:
