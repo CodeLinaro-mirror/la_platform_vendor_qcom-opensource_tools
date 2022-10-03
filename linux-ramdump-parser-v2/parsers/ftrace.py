@@ -212,7 +212,10 @@ class FtraceParser(RamParser):
             global_trace_data = global_trace_data_next
 
             trace_buffer_name = self.ramdump.read_word(global_trace_data + trace_buffer_name_offset)
-            trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
+            if not (trace_buffer_name):
+                trace_name = None
+            else:
+                trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
 
             if self.ramdump.arm64:
                 trace_buffer_ptr_data = self.ramdump.read_u64(
