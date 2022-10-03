@@ -522,7 +522,10 @@ class RamDump():
 
        return r;
     def pac_ignore(self,data):
-        pac_check = 0xffffff0000000000
+        if self.va_bits == 48:
+            pac_check = 0xffff000000000000
+        else:
+            pac_check = 0xffffff0000000000
         top_bit_ignore = 0xff00000000000000
         if data is None or not self.arm64:
             return data
@@ -532,7 +535,10 @@ class RamDump():
         # The PAC field is Xn[54:bottom_PAC_bit].
         # In the PAC field definitions, bottom_PAC_bit == 64-TCR_ELx.TnSZ,
         # TCR_ELx.TnSZ is set to 25. so 64-25=39
-        pac_mack = self.createMask(39,54)
+        if self.va_bits == 48:
+            pac_mack = self.createMask(48,54)
+        else:
+            pac_mack = self.createMask(39,54)
         result = pac_mack | data
         result = result | top_bit_ignore
         return result
@@ -586,8 +592,13 @@ class RamDump():
             if self.address_of("kasan_init") is None:
                 self.kasan_shadow_size = 0
             else:
-                self.kasan_shadow_size = 1 << (self.va_bits - 3)
-            kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
+                if self.is_config_defined("CONFIG_KASAN_SW_TAGS"):
+                    self.kasan_shadow_size = 1 << (self.va_bits - 4)
+                else:
+                    self.kasan_shadow_size = 1 << (self.va_bits - 3)
+            kimage_vaddr = self.page_end + modules_vsize
+            if self.get_kernel_version() < (5, 15, 0):
+                kimage_vaddr += bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
             # The KASAN shadow region is reconfigured so that it ends at the start of
@@ -644,7 +655,7 @@ class RamDump():
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
-                                     self.kaslr_offset or 0)
+                                     0)
             self.gdbmi.open()
             sanity_data = self.address_of("kimage_voffset")
             self.kernel_version = (0, 0, 0)
@@ -661,7 +672,7 @@ class RamDump():
 
         if not self.ndk_compatible:
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
-                        self.kaslr_offset or 0)
+                        0)
             self.gdbmi.open()
 
         self.page_offset = 0xc0000000
@@ -798,6 +809,10 @@ class RamDump():
             hyp_dump.determine_kaslr()
             self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
             hyp_dump.get_trace_phy()
+            if hyp_dump.ttbr1 is None:
+                print_out_str('!!! Could not find {}'.format(self.svm))
+                print_out_str('!!! Exiting now')
+                sys.exit(1)
             self.ttbr = hyp_dump.ttbr1
             self.vttbr = hyp_dump.vttbr
             self.TTBR0_EL1 = hyp_dump.TTBR0_EL1
@@ -825,6 +840,8 @@ class RamDump():
         if self.kaslr_offset is None:
             self.determine_kaslr_offset()
             self.gdbmi.kaslr_offset = self.get_kaslr_offset()
+        else:
+            self.gdbmi.kaslr_offset = self.kaslr_offset
 
         self.wlan = options.wlan
         if self.arm64:
@@ -1860,10 +1877,6 @@ class RamDump():
         if not mod_tbl_ent.set_sym_path(ko_file_list[mod_tbl_ent.name]):
             return
 
-        args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
-        p = subprocess.run(args, stdout=subprocess.PIPE)
-        symbols = p.stdout.decode().splitlines()
-
         if self.is_config_defined("CONFIG_KALLSYMS"):
             symtab_offset = self.field_offset('struct mod_kallsyms', 'symtab')
             num_symtab_offset = self.field_offset('struct mod_kallsyms', 'num_symtab')
@@ -1871,8 +1884,10 @@ class RamDump():
 
             if self.arm64:
                 sym_struct_name = 'struct elf64_sym'
+                sym_struct_size = self.sizeof(sym_struct_name)
             else:
                 sym_struct_name = 'struct elf32_sym'
+                sym_struct_size = self.sizeof(sym_struct_name)
 
             st_info_offset = self.field_offset(sym_struct_name, 'st_info')
             symtab = self.read_pointer(mod_tbl_ent.kallsyms_addr + symtab_offset)
@@ -1884,7 +1899,7 @@ class RamDump():
 
             KSYM_NAME_LEN = 128
             for i in range(0, num_symtab):
-                elf_sym = symtab + self.sizeof(sym_struct_name) * i
+                elf_sym = symtab + sym_struct_size * i
                 st_value = self.read_structure_field(elf_sym, sym_struct_name, 'st_value')
                 st_info = self.read_byte(elf_sym + st_info_offset)
                 sym_type = chr(st_info)
@@ -1911,6 +1926,9 @@ class RamDump():
             if self.dump_module_kallsyms:
                 self.dump_mod_kallsyms_sym_table(mod_tbl_ent.name, mod_tbl_ent.kallsyms_table)
         else:
+            args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
+            p = subprocess.run(args, stdout=subprocess.PIPE)
+            symbols = p.stdout.decode().splitlines()
             for line in symbols:
                 s = line.split(' ')
                 if len(s) == 3:

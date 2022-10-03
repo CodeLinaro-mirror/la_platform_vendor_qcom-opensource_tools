@@ -335,7 +335,10 @@ class GpuParser_510(RamParser):
         flags = self.prepare_process_memdesc_flags(kgsl_memdesc_address,
                                                    map_count)
         mtype = ((mflags & KGSL_MEMTYPE_MASK) >> KGSL_MEMTYPE_SHIFT)
-        usage = kgsl_memtype[mtype]
+        try:
+            usage = kgsl_memtype[mtype]
+        except IndexError:
+            usage = "unknown: " + str(mtype)
         pending_free = dump.read_structure_field(mementry_addr,
                                                  'struct kgsl_mem_entry',
                                                  'pending_free')
@@ -455,6 +458,10 @@ class GpuParser_510(RamParser):
         prev_rb_id = dump.read_structure_field(prev_rb,
                                                'struct adreno_ringbuffer',
                                                'id')
+        firmware_offset = dump.field_offset('struct adreno_device', 'fw')
+        cp_ucode_ver = dump.read_structure_field(self.devp + firmware_offset,
+                                                 'struct adreno_firmware',
+                                                 'version')
 
         self.writeln('open_count: ' + str(open_count))
         self.writeln('active_cnt: ' + str(active_cnt))
@@ -476,6 +483,7 @@ class GpuParser_510(RamParser):
         self.writeln('next_rb_id: ' + str(next_rb_id))
         self.writeln('prev_rb: ' + strhex(prev_rb))
         self.writeln('prev_rb_id: ' + str(prev_rb_id))
+        self.writeln('CP ucode version: ' + strhex(cp_ucode_ver))
 
     def parse_kgsl_mem(self, dump):
         page_alloc = dump.read('kgsl_driver.stats.page_alloc')
@@ -789,11 +797,16 @@ class GpuParser_510(RamParser):
                 pwrlevels_array_idx_addr, 'struct kgsl_pwrlevel', 'bus_min')
             bus_max = dump.read_structure_field(
                 pwrlevels_array_idx_addr, 'struct kgsl_pwrlevel', 'bus_max')
+            acd_level = dump.read_structure_field(
+                pwrlevels_array_idx_addr, 'struct kgsl_pwrlevel', 'acd_level')
+            if acd_level is None:
+                acd_level = 0
             pwr_levels_temp.append(pwrlevels_array_idx_addr)
             pwr_levels_temp.append(gpu_freq)
             pwr_levels_temp.append(bus_freq)
             pwr_levels_temp.append(bus_min)
             pwr_levels_temp.append(bus_max)
+            pwr_levels_temp.append(acd_level)
             pwr_levels_result.append(pwr_levels_temp)
 
         self.writeln('pwrctrl_address:  ' + strhex(pwrctrl_address))
@@ -814,14 +827,15 @@ class GpuParser_510(RamParser):
 
         self.writeln('pwrlevels_base_address:  '
                      + strhex(pwrlevels_base_address))
-        format_str = '{0:<20} {1:<20} {2:<20} {3:<20} {4:<20}'
-        self.writeln(format_str.format("INDEX", "GPU_FREQ",
-                                       "BUS_FREQ", "BUS_MIN", "BUS_MAX"))
+        format_str = '{0:<20} {1:<20} {2:<20} {3:<20} {4:<20} {5:<20}'
+        self.writeln(format_str.format("INDEX", "GPU_FREQ", "BUS_FREQ",
+                                       "BUS_MIN", "BUS_MAX", "ACD_LEVEL"))
 
         index = 0
         for powerlevel in pwr_levels_result:
             print_str = format_str.format(index, powerlevel[1], powerlevel[2],
-                                          powerlevel[3], powerlevel[4])
+                                          powerlevel[3], powerlevel[4],
+                                          strhex(powerlevel[5]))
             self.writeln(print_str)
             index = index + 1
 
