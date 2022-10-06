@@ -1,4 +1,5 @@
 # Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -71,7 +72,7 @@ def get_strings(buf, length):
             continue
         (ch,) = struct.unpack_from("<B", buf, offset)
         offset += 1
-        if ch >= 0x30 and ch < 0x80:
+        if (ch >= 0x30 and ch < 0x80) or ch==0x2e:
             string += chr(ch)
         elif (string != "" and len(string) >= 3 and
               string != 'linux_banner' and string != 'minidump_table'):
