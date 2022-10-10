@@ -87,6 +87,7 @@ class client(object):
     MSM_DUMP_DATA_TMC_REG = 0x100
     MSM_DUMP_DATA_TMC_ETR_REG = 0x100
     MSM_DUMP_DATA_TMC_ETF_REG = 0x101
+    MSM_DUMP_DATA_TMC_ETR1_REG = 0x105
     MSM_DUMP_DATA_TMC_ETF_SWAO_REG = 0x102
     MSM_DUMP_DATA_LOG_BUF = 0x110
     MSM_DUMP_DATA_LOG_BUF_FIRST_IDX = 0x111
@@ -122,6 +123,7 @@ client_types = [
     ('MSM_DUMP_DATA_TMC_ETF', 'parse_qdss_common'),
     ('MSM_DUMP_DATA_TMC_ETF_SWAO', 'parse_qdss_common'),
     ('MSM_DUMP_DATA_TMC_ETR_REG', 'parse_qdss_common'),
+    ('MSM_DUMP_DATA_TMC_ETR1_REG', 'parse_qdss_common'),
     ('MSM_DUMP_DATA_TMC_ETF_SWAO_REG', 'parse_qdss_common'),
     ('MSM_DUMP_DATA_TMC_REG', 'parse_qdss_common'),
     ('MSM_DUMP_DATA_L2_TLB', 'parse_tlb_common'),
@@ -132,6 +134,7 @@ client_types = [
 
 qdss_tag_to_field_name = {
     'MSM_DUMP_DATA_TMC_ETR_REG': 'tmc_etr_start',
+    'MSM_DUMP_DATA_TMC_ETR1_REG': 'tmc_etr1_start',
     'MSM_DUMP_DATA_TMC_REG': 'tmc_etr_start',
     'MSM_DUMP_DATA_TMC_ETF': 'etf_start',
     'MSM_DUMP_DATA_TMC_ETF_SWAO': 'tmc_etf_swao_start',
@@ -745,6 +748,8 @@ class DebugImage_v2():
         # 0x100 - tmc-etr registers and 0x101 - for tmc-etf registers
         self.dump_data_id_lookup_table[
             client.MSM_DUMP_DATA_TMC_ETR_REG + 1] = 'MSM_DUMP_DATA_TMC_ETR_REG'
+        self.dump_data_id_lookup_table[
+            client.MSM_DUMP_DATA_TMC_ETR1_REG] = 'MSM_DUMP_DATA_TMC_ETR1_REG'
         self.dump_data_id_lookup_table[
             client.MSM_DUMP_DATA_LOG_BUF] = 'MSM_DUMP_DATA_LOG_BUF'
         self.dump_data_id_lookup_table[
