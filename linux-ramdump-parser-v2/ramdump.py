@@ -22,6 +22,8 @@ import random
 import platform
 import stat
 import subprocess
+import enum
+import copy
 
 from boards import get_supported_boards, get_supported_ids
 from tempfile import NamedTemporaryFile
@@ -48,6 +50,38 @@ SMEM_HW_SW_BUILD_ID = 0x89
 SMEM_PRIVATE_CANARY = 0xa5a5
 PARTITION_MAGIC = 0x54525024
 BUILD_ID_LENGTH = 32
+
+primary_types = ["int", "unsigned", "unsigned int", "signed", "signed int",
+                 "char", "signed char", "unsigned char", "long unsigned int", "long signed int",
+                 "short", "short int", "unsigned short", "unsigned short int", "signed short", "signed short int",
+                 "long", "long int", "unsigned long", "signed long", "unsigned long int", "signed long int",
+                 "long long", "long long int", "signed long long", "signed long long int", "unsigned long long",
+                 "long long unsigned int", "unsigned long long int", "float", "double", "long double",
+                 "u8", "u16", "u32", "u64", "bool", "uint32_t",
+                 "s8", "s16", "s32", "s64", "uint8_t", "uint16_t", "uint64_t", "__u32", "size_t", "_Bool", "boolean"
+                 ]
+storage_classes = ["static", "volatile", "extern", "register", "auto", "const"]
+
+class InvalidDatatype(Exception):
+    """
+    This exception will be raised when a vaiable of invalid
+    datatype is passed as an argument to a function.
+    """
+    pass
+
+class InvalidInput(Exception):
+    """
+    This exception will be raised when a vaiable of invalid
+    value is passed as an argument to a function.
+    """
+    pass
+
+class SymbolNotFound(Exception):
+    """
+    This exception will be raised when an invalid symbol
+    is passed as an argument to a function.
+    """
+    pass
 
 def is_ramdump_file(val, minidump):
     if not minidump:
@@ -522,7 +556,10 @@ class RamDump():
 
        return r;
     def pac_ignore(self,data):
-        pac_check = 0xffffff0000000000
+        if self.va_bits == 48:
+            pac_check = 0xffff000000000000
+        else:
+            pac_check = 0xffffff0000000000
         top_bit_ignore = 0xff00000000000000
         if data is None or not self.arm64:
             return data
@@ -532,7 +569,10 @@ class RamDump():
         # The PAC field is Xn[54:bottom_PAC_bit].
         # In the PAC field definitions, bottom_PAC_bit == 64-TCR_ELx.TnSZ,
         # TCR_ELx.TnSZ is set to 25. so 64-25=39
-        pac_mack = self.createMask(39,54)
+        if self.va_bits == 48:
+            pac_mack = self.createMask(48,54)
+        else:
+            pac_mack = self.createMask(39,54)
         result = pac_mack | data
         result = result | top_bit_ignore
         return result
@@ -586,8 +626,13 @@ class RamDump():
             if self.address_of("kasan_init") is None:
                 self.kasan_shadow_size = 0
             else:
-                self.kasan_shadow_size = 1 << (self.va_bits - 3)
-            kimage_vaddr = self.page_end + modules_vsize + bpf_jit_vsize
+                if self.is_config_defined("CONFIG_KASAN_SW_TAGS"):
+                    self.kasan_shadow_size = 1 << (self.va_bits - 4)
+                else:
+                    self.kasan_shadow_size = 1 << (self.va_bits - 3)
+            kimage_vaddr = self.page_end + modules_vsize
+            if self.get_kernel_version() < (5, 15, 0):
+                kimage_vaddr += bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
             # The KASAN shadow region is reconfigured so that it ends at the start of
@@ -613,6 +658,7 @@ class RamDump():
         self.ebi_files = []
         self.ebi_files_minidump = []
         self.ebi_pa_name_map = {}
+        self.md_dict = {}
         self.phys_offset = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
@@ -640,10 +686,11 @@ class RamDump():
         self.lookup_table = []
         self.ko_file_names = []
         self.kimage_vaddr_va = None
+        self.datatype_dict = {}
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
-                                     self.kaslr_offset or 0)
+                                     0)
             self.gdbmi.open()
             sanity_data = self.address_of("kimage_voffset")
             self.kernel_version = (0, 0, 0)
@@ -660,7 +707,7 @@ class RamDump():
 
         if not self.ndk_compatible:
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
-                        self.kaslr_offset or 0)
+                        0)
             self.gdbmi.open()
 
         self.page_offset = 0xc0000000
@@ -753,7 +800,27 @@ class RamDump():
                     if (not section.is_null() and
                             s.section_in_segment(section)):
                         self.ebi_pa_name_map[pa] = section.name
+                        if section.name == "KVA_DUMP":
+                            kva_dump_addr = pa
                 self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
+
+            if os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
+                file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
+                fd = open(file_path, 'rb')
+                kva_elf = ELFFile(fd)
+                for s in kva_elf.iter_sections():
+                    start = int(s.header['sh_addr'])
+                    size = int(s.header['sh_size'])
+                    offset = int(s.header['sh_offset'])
+                    pa = kva_dump_addr + offset
+                    end_addr = pa + size - 1
+                    if start == 0x0:
+                        continue
+                    self.ebi_files_minidump.append((idx, pa, end_addr, start, size))
+                    if s.name not in self.md_dict.keys():
+                        self.md_dict[s.name] = [[start,size]]
+                    else:
+                        self.md_dict[s.name].append([start,size])
 
         if options.minidump:
             if self.ebi_start == 0:
@@ -773,9 +840,14 @@ class RamDump():
         if self.svm:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
+            hyp_dump.vmtype = self.svm
             hyp_dump.determine_kaslr()
             self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
             hyp_dump.get_trace_phy()
+            if hyp_dump.ttbr1 is None:
+                print_out_str('!!! Could not find {}'.format(self.svm))
+                print_out_str('!!! Exiting now')
+                sys.exit(1)
             self.ttbr = hyp_dump.ttbr1
             self.vttbr = hyp_dump.vttbr
             self.TTBR0_EL1 = hyp_dump.TTBR0_EL1
@@ -795,15 +867,18 @@ class RamDump():
                 '!!! This is really bad and probably indicates RAM corruption')
             print_out_str('!!! Some features may be disabled!')
 
-        if self.kaslr_offset is None:
-            self.determine_kaslr_offset()
-            self.gdbmi.kaslr_offset = self.get_kaslr_offset()
-
-        self.wlan = options.wlan
         try:
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
             self.va_bits = 39
+
+        if self.kaslr_offset is None:
+            self.determine_kaslr_offset()
+            self.gdbmi.kaslr_offset = self.get_kaslr_offset()
+        else:
+            self.gdbmi.kaslr_offset = self.kaslr_offset
+
+        self.wlan = options.wlan
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
@@ -938,6 +1013,20 @@ class RamDump():
 
         mm_init(self)
 
+    def get_section_address(self,section):
+        """
+        Function to return address and size corresponding to the section name in elf files.
+
+        :param section: name of the section.
+        :type addr: str
+
+        :return: A list of list of addresses and sizes corresponding to the section name.
+        """
+        res_dict = self.md_dict
+        if (section in res_dict.keys()):
+            return res_dict[section]
+        else:
+            raise InvalidInput
 
     def __del__(self):
         self.gdbmi.close()
@@ -1296,7 +1385,7 @@ class RamDump():
                             startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
                             self.hlos_sctlr_el1))
                         else:
-                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
+                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000084C5D93D\n')
                         corevcpu_path = os.path.join(self.outdir,'corevcpu0_regs.cmm')
                         if os.path.exists(corevcpu_path):
                             startup_script.write('do ' + corevcpu_path + '\n')
@@ -1403,7 +1492,7 @@ class RamDump():
                     where = os.path.abspath(mod_sym_path)
                     if self.minidump:
                         if mod_tbl_ent.section_offsets:
-                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /CODESEC /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
                             if ".data" in mod_tbl_ent.section_offsets.keys():
                                 ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
                             if ".bss" in mod_tbl_ent.section_offsets.keys() :
@@ -1823,10 +1912,6 @@ class RamDump():
         if not mod_tbl_ent.set_sym_path(ko_file_list[mod_tbl_ent.name]):
             return
 
-        args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
-        p = subprocess.run(args, stdout=subprocess.PIPE)
-        symbols = p.stdout.decode().splitlines()
-
         if self.is_config_defined("CONFIG_KALLSYMS"):
             symtab_offset = self.field_offset('struct mod_kallsyms', 'symtab')
             num_symtab_offset = self.field_offset('struct mod_kallsyms', 'num_symtab')
@@ -1834,8 +1919,10 @@ class RamDump():
 
             if self.arm64:
                 sym_struct_name = 'struct elf64_sym'
+                sym_struct_size = self.sizeof(sym_struct_name)
             else:
                 sym_struct_name = 'struct elf32_sym'
+                sym_struct_size = self.sizeof(sym_struct_name)
 
             st_info_offset = self.field_offset(sym_struct_name, 'st_info')
             symtab = self.read_pointer(mod_tbl_ent.kallsyms_addr + symtab_offset)
@@ -1847,7 +1934,7 @@ class RamDump():
 
             KSYM_NAME_LEN = 128
             for i in range(0, num_symtab):
-                elf_sym = symtab + self.sizeof(sym_struct_name) * i
+                elf_sym = symtab + sym_struct_size * i
                 st_value = self.read_structure_field(elf_sym, sym_struct_name, 'st_value')
                 st_info = self.read_byte(elf_sym + st_info_offset)
                 sym_type = chr(st_info)
@@ -1874,6 +1961,9 @@ class RamDump():
             if self.dump_module_kallsyms:
                 self.dump_mod_kallsyms_sym_table(mod_tbl_ent.name, mod_tbl_ent.kallsyms_table)
         else:
+            args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
+            p = subprocess.run(args, stdout=subprocess.PIPE)
+            symbols = p.stdout.decode().splitlines()
             for line in symbols:
                 s = line.split(' ')
                 if len(s) == 3:
@@ -1972,6 +2062,11 @@ class RamDump():
     def address_of(self, symbol):
         """Returns the address of a symbol.
 
+        :param symbol: name of the symbol.
+        :type symbol: str
+
+        :return: address value
+
         Example:
 
         >>> hex(dump.address_of('linux_banner'))
@@ -1987,6 +2082,14 @@ class RamDump():
                     pass
 
     def symbol_at(self, addr):
+        """
+        Function to return symbol using gdbmi.
+
+        :param addr: address value.
+        :type addr: int
+
+        :return: symbol value
+        """
         try:
             return self.gdbmi.symbol_at(addr)
         except gdbmi.GdbMIException:
@@ -2648,6 +2751,711 @@ class RamDump():
         if not ((sched_class == sc_top) or (sched_class == sc_rt) or (
                 sched_class == sc_idle) or (sched_class == sc_fair)):
             return -1
+
+    def __ignore_storage_class(self, line):
+        line_split = line.split()
+        result_words = [word for word in line_split if word.lower() not in storage_classes]
+        return ' '.join(result_words)
+
+    def __ignore_expanded_pointer(self, text, d_type):
+        if '} *' in text[-1].lstrip():
+            name_re = re.search(r"type = ([a-zA-Z0-9_ ]+){", text[0])
+            if name_re:
+                name = name_re.group(1) + "*"
+                return name
+        return d_type
+
+    def __is_primary_type(self, d_type):
+        d_type = d_type.rstrip()
+        if d_type[-1] == "]":
+            re_obj = re.search("(.*)\[\d+\]",d_type)
+            d_type = re_obj.group(1)
+        if "*" in d_type or "enum " in d_type or d_type == "enum":
+            return True
+        if d_type.lstrip().rstrip() in primary_types:
+            return True
+        else:
+            return False
+
+    def __create_object(self, text, base_offset, curr_index):
+        """
+        Function to create a python object from the gdb text output with meta data
+        like size and offset of all the members, needed to populate the values from
+        the binary dump files.
+
+        :param text: text gdb output for a particular symbol/type.
+        :type the_type: str
+
+        :param base_offset: base offset value.
+        :type field: int
+
+        :param curr_index: current line index in 'text'.
+        :type field: int
+
+        :return: py object created based on 'text', array check flag, current index
+        """
+        if curr_index == 0:
+            d_type = text[0].split("{")[0]
+        else:
+            d_type = text[curr_index-1].split("{")[0]
+        d_type = d_type.split("[")[0]
+        d_type = d_type.strip()
+        d_type = d_type.split()[-1]
+        newclass = type(d_type,(), {})
+        curr_obj = newclass()
+        curr_offset = base_offset
+        total_size = len(text)
+        size = 0
+        while total_size > curr_index:
+            line = text[curr_index]
+            curr_index = curr_index + 1
+            if line is None:
+                break
+            if "/* offset | size */" in line or line.lstrip().rstrip() == "":
+                continue
+            re1 = re2 = 0
+            for i in range(1):           # using a one iteration loop to implement break
+                # sample match : "/*    0      |    40 */    struct thread_info {"
+                re1 = re.search('\s+(\d+)\s+[|]\s+(\d+) \*\/\s+(struct|union) .*{', line)   #sample match:"/*    0      |    40 */    struct thread_info {"
+                if re1:
+                    curr_offset = int(re1.group(1))
+                    size = int(re1.group(2))
+                    break
+                # sample match : "/*                 8 */            struct {"
+                re2 = re.search('\/\*\s+(\d+) \*\/\s+(struct|union) .*{', line)
+                if re2:
+                    size = int(re2.group(1))
+            if re1 or re2:
+                obj, attr_name, curr_index = self.__create_object(text, curr_offset, curr_index)
+                if attr_name is not None:
+                    setattr(curr_obj, attr_name, [obj, curr_offset - base_offset, size])
+                else:
+                    # adding anonimous union members to parent
+                    for attr, value in vars(obj).items():
+                        temp_offset = curr_offset - base_offset
+                        if isinstance(value[0], int) or isinstance(value[0], float):
+                            value[0] += temp_offset
+                        else:
+                            value[1] += temp_offset
+                        setattr(curr_obj, attr, value)
+                continue
+            else:
+                re1 = re2 = re3 = re4 = 0
+                for i in range(1):              # using a one iteration loop to implement break
+                    # sample match : "/*   20      |     4 */                u32 need_resched;"
+                    re1 = re.search('/\*\s+(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
+                    if re1 is not None:
+                        curr_offset = int(re1.group(1))
+                        size = int(re1.group(2))
+                        datatype = re1.group(3)
+                        attr_name = (re1.group(4))
+                        break
+                    # sample match : "/*                 4 */    uint32_t v;"
+                    re2 = re.search('/\*\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
+                    if re2 is not None:
+                        size = int(re2.group(1))
+                        datatype = re2.group(2)
+                        attr_name = (re2.group(3))
+                        break
+                    # sample match : "/*  868: 3   |     4 */        unsigned int dl_overrun : 1;"
+                    re3 = re.search('/\*\s+(\d+)[:]\s*(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
+                    if re3 is not None:
+                        curr_offset = int(re3.group(1)) + (int(re3.group(2))/100)
+                        size = int(re3.group(3)) + (int(re3.group(6))/100)
+                        datatype = re3.group(4)
+                        attr_name = (re3.group(5))
+                        break
+                    # sample match : "/*                  4 */        unsigned int x : 1;"
+                    re4 = re.search('/\*\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
+                    if re4 is not None:
+                        size = int(re4.group(1)) + (int(re4.group(4))/100)
+                        datatype = re4.group(2)
+                        attr_name = (re4.group(3))
+                if re1 or re2 or re3 or re4:
+                    if ")(" in datatype:
+                        attr_name = datatype.split(")(")[0].split("(")[1]
+                    if attr_name.lstrip()[0] == '*':
+                        datatype = datatype + " *"
+                        attr_name = attr_name.lstrip('*')
+                    if not self.__is_primary_type(datatype):
+                        temp_obj = self.__get_type_info(datatype)
+                        if isinstance(temp_obj[0], str):
+                            setattr(curr_obj, attr_name, [curr_offset - base_offset, size, temp_obj[0]])
+                        else:
+                            setattr(curr_obj, attr_name, [temp_obj[0], curr_offset - base_offset, size])
+                    else:
+                        setattr(curr_obj, attr_name, [curr_offset - base_offset, size, datatype])
+                    continue
+                re_obj = re.search('\s*} (\S+);', line)
+                if re_obj is not None:
+                    return curr_obj, re_obj.group(1), curr_index
+                re_obj = re.search('\s*};', line)
+                if re_obj:
+                    return curr_obj, None, curr_index
+                re_obj = re.search('\s*}\s*(\[\d+\])', line)
+                if re_obj:
+                    return curr_obj, re_obj.group(1), curr_index
+        # None means unnamed union or struct
+        return curr_obj, None, curr_index
+
+    def __get_datatype_from_ptr(self, ptr_addr_or_name):
+        if isinstance(ptr_addr_or_name, str):
+            var_type, vsize, temp_name = self.__get_type_info(ptr_addr_or_name)
+            if var_type[-1] != "*":
+                raise InvalidDatatype
+            else:
+                return var_type[:-1]
+        else:
+            raise InvalidDatatype
+
+    def __unpack_format(self, size, ty):
+        if ty == "char":
+            return "<B"
+        elif ty == "bool" or ty == "_Bool":
+            return "<?"
+        elif "float" in ty:
+            return "<f"
+        elif "double" in ty:
+            return "<d"
+        elif size == 8:
+            if ("unsigned" in ty or '*' in ty) or (ty[0] == 'u'):
+                return "<Q"
+            else:
+                return "<q"
+        elif size == 4:
+            if ("unsigned" in ty or '*' in ty) or (ty[0] == 'u'):
+                return "<I"
+            else:
+                return "<i"
+        elif size == 2:
+            if ("unsigned" in ty or '*' in ty) or (ty[0] == 'u'):
+                return "<H"
+            else:
+                return "<h"
+        elif size == 1:
+            if ("unsigned" in ty or '*' in ty) or (ty[0] == 'u'):
+                return "<B"
+            else:
+                return "<b"
+        else:
+            return None
+
+    def __get_type_info(self, the_type):
+        """
+        Function to return type info for the type.
+
+        :param the_type: type of the structure field.
+        :type the_type: str
+
+        :return: d_type, size
+        """
+        if the_type in self.datatype_dict.keys():
+            return self.datatype_dict[the_type]
+        else:
+            text = []
+            try:
+                text = self.gdbmi.getStructureData(the_type)
+                size = self.sizeof(the_type)
+            except gdbmi.GdbMIException:
+                print("GDB Exception")
+                pass
+
+            if text:
+                d_type = text[0].split("type = ")[1]
+                d_type = self.__ignore_storage_class(d_type)
+                d_type = self.__ignore_expanded_pointer(text, d_type)
+                if not self.__is_primary_type(d_type):
+                    master_obj = self.__create_object(text, 0, 0)
+                    self.datatype_dict[the_type] = master_obj[0], size, master_obj[1]
+                    return master_obj[0], size, master_obj[1]
+                self.datatype_dict[the_type] = d_type, size, None
+                return d_type, size, None
+
+    def __item_to_dict(self, item, temp_dict):
+        if "." not in item:
+            temp_dict[item] = None
+        else:
+            key = item.split(".", 1)[0]
+            if key in temp_dict.keys():
+                temp_dict[key] = self.__item_to_dict(item.split(".", 1)[1], temp_dict[key])
+            else:
+                temp_dict[key] = self.__item_to_dict(item.split(".", 1)[1], {})
+        return temp_dict
+
+    def __attr_list_to_dict(self,attr_list):
+        attr_dict = {}
+        for item in attr_list:
+            attr_dict = self.__item_to_dict(item, attr_dict)
+        return attr_dict
+
+    def __get_populated_object(self, addr, the_type, size, attr_list=None):
+        """
+        Function to populate value for the given data type and address.
+
+        :param addr: address of the structure field type.
+        :type addr: int
+
+        :param the_type: structure type field
+        :type the_type: str
+
+        :param size: size of the structure field.
+        :type size: int
+
+        :param attr_list: list of attributes to be read(optional)
+        :type attr_list: list
+
+        :return: The data read from the dumps.
+        """
+        var_type, vsize, temp_name = self.__get_type_info(the_type)
+        if vsize is None:
+            vsize = size
+        data = self.__get_bin_data(addr, vsize)
+        if attr_list != None:
+            attr_dict = self.__attr_list_to_dict(attr_list)
+            return self.__object_value(var_type, data, 0, temp_name, attr_dict)
+        else:
+            return self.__object_value(var_type, data, 0, temp_name)
+
+    def __get_bin_data(self, addr, size):
+        """
+        Function to return binary data of 'size' bytes read
+        from the given address.
+
+        :param addr: address of the structure field type.
+        :type addr: str
+
+        :param size: size of the structure field.
+        :type size: int
+
+        :return: The data read from the dumps.
+        """
+        bin_data = b""
+        PAGE_SIZE = 1 << 12
+        length  = PAGE_SIZE - (addr & (PAGE_SIZE-1))
+        while(size > length):
+            bin_data += self.read_physical(self.virt_to_phys(addr), length)
+            addr +=length
+            size -= length
+            length  = PAGE_SIZE
+        if(size > 0):
+            addr = self.virt_to_phys(addr)
+            bin_data += self.read_physical(addr, size)
+        return bin_data
+
+    def enum_lookup(self, enum, val):
+        """
+        Function to return string corresponding to the value for an enum.
+
+        :param enum: enum type / gdb output string for a typedef enum.
+        :type enum: str
+
+        :param val: enum value.
+        :type val: int
+
+        :return: string corresponding to the enum value.
+        """
+        if "{" in enum and "}" in enum:
+            temp = enum.split("{")[1].split("}")[0]
+            temp = temp.split(",")
+            res_dict = {}
+            count = 0
+            for i in temp:
+                if "=" in i:
+                    v = i.split("=")[0].strip()
+                    k = int(i.split("=")[1].strip())
+                    res_dict[k] = v
+                    count = k+1
+                else:
+                    v = i.strip()
+                    res_dict[count] = v
+                    count += 1
+            if val in res_dict.keys():
+                return res_dict[val]
+            else:
+                return None
+        else:
+            if "enum " in enum:
+                enum = enum.split()[1]
+            if val >= 0:
+                return self.gdbmi.get_enum_lookup_table(enum, val+1)[val]
+            else:
+                return None
+
+    def __populate_primary(self, struct_bin_data, t):
+        length = len(struct_bin_data)
+        st_format = self.__unpack_format(length, t)
+        if st_format is None:
+            return None
+        else:
+            return struct.unpack_from(st_format, struct_bin_data)[0]
+
+    def __populate_bitfield(self, struct_bin_data, t, bit_offset, bit_length):
+        length = len(struct_bin_data)
+        st_format = self.__unpack_format(length, t)
+        if st_format is None:
+            return None
+        else:
+            temp_data = struct_bin_data
+            temp_bin_data = bin(int.from_bytes(temp_data, byteorder="little"))
+            temp_bin_data = temp_bin_data[2:]    #remove 0b
+            temp_bin_data = temp_bin_data.rjust(length*8, '0')
+            temp_bin_data = temp_bin_data[::-1]  #reverse string
+            temp_bin_data = temp_bin_data[bit_offset:bit_offset+bit_length]
+            temp_bin_data = temp_bin_data[::-1]  #reverse string
+            temp_bin_data = int(temp_bin_data, 2)
+            temp_bin_data = temp_bin_data.to_bytes(length, byteorder="little")
+            return struct.unpack_from(st_format, temp_bin_data)[0]
+
+    def __populate_enum(self, struct_bin_data, var_type):
+        val = self.__populate_primary(struct_bin_data, 'unsigned int')
+        enum_var,enum_ty = self.__get_enum(var_type)
+        enum_vals = [member.value for member in enum_var]
+        if val not in enum_vals:
+            val = self.__populate_primary(struct_bin_data, 'int')
+        if val not in enum_vals:
+            temp_key = "UNKNOWN_" + str(val)
+            enum_dict = {i.name:i.value for i in enum_var}
+            enum_dict.update({temp_key:val})
+            enum_var = enum.Enum(enum_ty,enum_dict)
+        res = enum_var(val)
+        return res
+
+    def __populate_array(self, struct_bin_data, var_type):
+        t = var_type.split("[")[0].strip()
+        temp_s = var_type.split("[")[1].split("]")[0]
+        if temp_s == '' or temp_s == '0':
+            return None
+        else:
+            s = int(temp_s)
+        length = len(struct_bin_data)
+        arr_len = s
+        l = length // arr_len
+        arr = []
+        st_format = self.__unpack_format(l, t)
+        if st_format is None:
+            return None
+        for i in range(arr_len):
+            start = (i * l)
+            end = ((i + 1) * l)
+            if "enum" in var_type:
+                res = self.__populate_enum(struct_bin_data[start:end], var_type)
+                arr.append(res)
+            else:
+                arr.append(struct.unpack_from(st_format, struct_bin_data[start:end])[0])
+        if t == 'char' or t == 'unsigned char' or t == 'signed char':
+            temp = ''.join(chr(x) for x in arr)
+            temp = temp.split('\0')[0]
+            return temp
+        return arr
+
+    def __get_enum(self, var_type):
+        if var_type not in self.enum_data.keys():
+            temp_enum = self.elf_obj_inuse.get_enum_data(var_type)
+            enum_ty = var_type.split()[1]
+            if "{" in enum_ty:
+                enum_ty = "enum"
+            enum_var = enum.Enum(enum_ty,temp_enum)
+            self.enum_data[var_type] = (enum_var,enum_ty)
+        return self.enum_data[var_type]
+
+
+    def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, attr_dict=None):
+        """
+        Function to return structure value for the given type and type offset.
+
+        :param var_type: name of the structure field type.
+        :type var_type: str
+
+        :param struct_bin_data: bin data structure.
+        :type struct_bin_data: str
+
+        :param bin_offset: offset value.
+        :type bin_offset: int
+
+        :param temp_name: temporary name of the structure field type.
+        :type temp_name: str
+
+        :param attr_dict: dictionary of attributes to be read(optional)
+        :type attr_list: dictionary
+
+        :return: The data read from the dumps.
+        """
+        if temp_name is None:
+            temp_name = ""
+        if isinstance(var_type, str):
+            t = var_type
+            if (t not in primary_types) and ('*' not in t) and ('enum' not in t) and ("[" not in t):
+                return None
+            elif "enum" in var_type and "*" not in var_type and "[" not in var_type:
+                return self.__populate_enum(struct_bin_data, var_type)
+            elif "[" not in var_type:
+                return self.__populate_primary(struct_bin_data, t)
+            else:
+                return self.__populate_array(struct_bin_data, var_type)
+        else:
+            if "[" in temp_name:
+                temp_s = temp_name.split("[")[1].split("]")[0]
+                if temp_s == '' or temp_s == '0':
+                    return None
+                else:
+                    ar_len = int(temp_s)
+                length = len(struct_bin_data)
+                length = length // ar_len
+                ar = []
+                for i in range(ar_len):
+                    ar.append(self.__object_value(var_type, struct_bin_data, i * length, None, attr_dict))
+                return ar
+            else:
+                newclass = type(var_type)
+                temp_structure = newclass()
+                for key, value in var_type.__dict__.items():
+                    if (attr_dict == None) or (key.split("[")[0] in list(attr_dict.keys())):
+                        if isinstance(value[0], int) or isinstance(value[0], float):
+                            offset = int(value[0])
+                            length = int(value[1])
+                            bit_offset = int(round((value[0] - offset),2)*100)
+                            bit_length = int(round((value[1] - length),2)*100)
+                            ty = value[2]
+                            if (ty not in primary_types) and ('*' not in ty) and ('enum' not in ty):
+                                setattr(temp_structure, key, None)
+                                continue
+                            if ("enum" in ty) and ('*' not in ty) and ("[" not in key):
+                                res = self.__populate_enum(struct_bin_data[bin_offset + offset:bin_offset + offset + length], ty)
+                                setattr(temp_structure, key, res)
+                                continue
+                            if "[" not in key:  # member in neither an array nor another struct/union
+                                if (bit_length == 0) and (bit_offset == 0):
+                                    res = self.__populate_primary(struct_bin_data[bin_offset + offset:bin_offset + offset + length], ty)
+                                    setattr(temp_structure, key, res)
+                                else:
+                                    res = self.__populate_bitfield(struct_bin_data[bin_offset + offset:bin_offset + offset + length], ty, bit_offset, bit_length)
+                                    setattr(temp_structure, key, res)
+                            else:  # member is an array but not of struct/union
+                                temp_ty = key.split("[")[1]
+                                temp_ty = ty + "[" + temp_ty
+                                res = self.__populate_array(struct_bin_data[bin_offset + offset:bin_offset + offset + length], temp_ty)
+                                setattr(temp_structure, key.split("[")[0], res)
+                        else:
+                            if "[" not in key:  # member is another struct/union/obj but not an array
+                                if attr_dict != None:
+                                    setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
+                                                                                   value[1] + bin_offset, None, attr_dict[key]))
+                                else:
+                                    setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
+                                                                                   value[1] + bin_offset, None))
+                            else:  # member is another struct/union/obj and an array
+                                temp_s = key.split("[")[1].split("]")[0]
+                                if temp_s == '' or temp_s == '0':
+                                    setattr(temp_structure, key.split("[")[0], None)
+                                    continue
+                                else:
+                                    arr_len = int(temp_s)
+                                l = value[2] // arr_len
+                                arr = [None] * arr_len
+                                for i in range(arr_len):
+                                    if attr_dict != None:
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, attr_dict[key.split("[")[0]])
+                                    else:
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None)
+                                setattr(temp_structure, key.split("[")[0], arr)
+                return temp_structure
+
+    def rgetattr(self, obj, attr, *args):
+        """
+        Function to get attributes.
+
+        :param obj: name of the object.
+        :type obj: object
+
+        :param attr: attribute type.
+        :type attr: str
+
+        :param args: arguments.
+        :type args: str
+
+        :return: The data read from the dumps.
+        """
+        def _getattr(obj, attr):
+            return getattr(obj, attr, *args)
+        return functools.reduce(_getattr, [obj] + attr.split('.'))
+
+    def read_linkedlist(self, the_type, member, address, callback=None, callback_data=None, attr_list=None, ignore_head=True):
+        """
+        Function to read linked list structure for the given structure type / member.
+
+        :param the_type: structure type field.
+        :type the_type: str
+
+        :param member: member of the structure field.
+        :type member: str
+
+        :param address: address of the structure field.
+        :type address: int
+
+        :param callback: address of the structure field.
+        :type callback: int
+
+        :param callback_data: call back data of the structure field.
+        :type callback_data: str
+
+        :param attr_list: list of attributes to be read(optional)
+        :type attr_list: list
+
+        :return: The data read from the dumps.
+        """
+        linked_list = []
+        if isinstance(address,str):
+            address = self.read_word(address)
+            if address == None:
+                raise SymbolNotFound(address + "Symbol not found")
+        if address == 0x0:
+            return linked_list
+        if address is None:
+            raise InvalidInput("None address passed to read_linkedlist")
+        offset = self.field_offset(the_type, member)
+        first_node = address + offset
+        size = self.sizeof(the_type)
+        if (self.read_word(first_node) == first_node) and ignore_head:
+            return linked_list
+        while True:
+            entry = self.__get_populated_object(address, the_type, size, attr_list)
+            if callback is not None:
+                callback(self, entry, callback_data)
+            linked_list.append(entry)
+            next_member_addr = self.rgetattr(entry, member)
+            next_next_addr = self.read_word(next_member_addr)
+            if ignore_head:
+                if next_member_addr != 0x0 and next_next_addr != first_node:
+                    address = next_member_addr - offset
+                else:
+                    break
+            else:
+                if next_member_addr != 0x0 and next_member_addr != first_node:
+                    address = next_member_addr - offset
+                else:
+                    break
+        return linked_list
+
+
+    def read_parray(self, ptr_addr_or_name, count, data_type=None, attr_list=None):
+        """
+        Function to read array for the given pointer address / pointer name.
+
+        :param ptr_addr_or_name: address or name of the pointer.
+        :type ptr_addr_or_name: str
+
+        :param count: count of the array.
+        :type count: int
+
+        :param data_type: the structure field type
+        :type data_type: str
+
+        :param attr_list: list of attributes to be read(optional)
+        :type attr_list: list
+
+        :return: The data read from the dumps.
+        """
+        ptr_address = self.resolve_virt(ptr_addr_or_name)
+        if ptr_address is None:
+            if isinstance(ptr_addr_or_name, str):
+                raise SymbolNotFound(ptr_addr_or_name + " symbol not found")
+            else:
+                raise InvalidInput("None passed to read_parray")
+        address = self.read_pointer(ptr_address)
+        if address is None:
+            raise InvalidInput("Pointer passed to read_parray points to None")
+        if data_type is None:
+            data_type = self.__get_datatype_from_ptr(ptr_addr_or_name)
+        size = self.sizeof(data_type)
+        array = []
+        while count >= 1:
+            count = count - 1
+            array.append(self.__get_populated_object(address, data_type, size, attr_list))
+            address = address + size
+        return array
+
+    def read_pdatatype(self, ptr_addr_or_name, data_type=None, attr_list=None):
+        """
+        Function to read data type for the given pointer address / pointer name .
+
+        :param ptr_addr_or_name: address or name of the pointer.
+        :type ptr_addr_or_name: str
+
+        :param data_type: the structure field type
+        :type data_type: str
+
+        :param attr_list: list of attributes to be read(optional)
+        :type attr_list: list
+
+        :return: The data read from the dumps.
+        """
+        ptr_address = self.__resolve_virt(ptr_addr_or_name)
+        if ptr_address is None:
+            if isinstance(ptr_addr_or_name, str):
+                raise SymbolNotFound(ptr_addr_or_name + " symbol not found")
+            else:
+                raise InvalidInput("None passed to read_pdatatype")
+        address = self.read_pointer(ptr_address)
+        if address is None:
+            raise InvalidInput("Pointer passed to read_pdatatype points to None")
+        if data_type is None:
+            data_type = self.__get_datatype_from_ptr(ptr_addr_or_name)
+        size = self.sizeof(data_type)
+        return self.__get_populated_object(address, data_type, size, attr_list)
+
+    def read_datatype(self, addr_or_name, data_type=None, attr_list=None):
+        """
+        Function to read data type for the given address /  name.
+
+        :param addr_or_name: address or name of the pointer.
+        :type addr_or_name: str
+
+        :param data_type: the structure field type
+        :type data_type: str
+
+        :param attr_list: list of attributes to be read(optional)
+        :type attr_list: list
+
+        :return: The data read from the dumps.
+        """
+        address = self.resolve_virt(addr_or_name)
+        if address is None:
+            if isinstance(addr_or_name,str):
+                raise SymbolNotFound(addr_or_name + " symbol not found")
+            else:
+                raise InvalidInput("None passed to read_datatype")
+        if data_type is None:
+            if isinstance(addr_or_name, str):
+                data_type = addr_or_name
+            else:
+                raise InvalidDatatype
+        size = self.sizeof(data_type)
+        return self.__get_populated_object(address, data_type, size, attr_list)
+
+    def read_multi(self, items):
+        """
+        Function to read multiple structures at a time.
+
+        :param items: structure type fields from the list
+        :type items: list
+
+        :return: dictionary of data type.
+        """
+        out_dict = {}
+        for var in items:
+            if not (isinstance(var[0], str) or isinstance(var[0], int)):
+                raise InvalidDatatype
+            if not (isinstance(var[1], str) or var[1] is None):
+                raise InvalidDatatype
+            if (var[1] is None) or (var[1].rstrip() is ""):
+                out_dict[var[0]] = self.read_datatype(var[0])
+            elif var[1].rstrip() is "*":
+                out_dict[var[0]] = self.read_pdatatype(var[0])
+            elif var[1].rstrip()[-1] is "*":
+                out_dict[var[0]] = self.read_pdatatype(var[0], var[1].rstrip()[:-1].rstrip())
+            else:
+                out_dict[var[0]] = self.read_datatype(var[0], var[1].rstrip())
+        return out_dict
 
 
 class Struct(object):
