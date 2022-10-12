@@ -802,7 +802,8 @@ class DebugImage_v2():
                 imem_dump_table_offset = IMEM_OFFSET_MEM_DUMP_TABLE
             if ram_dump.minidump and ram_dump.kernel_version >= (5, 10):
                 for a in ram_dump.ebi_files:
-                    if "md_SHRDIMEM" in a[3]:
+                    md_pattern = re.compile(r'md_shrdimem', re.IGNORECASE)
+                    if re.search(md_pattern, a[3]):
                         table_phys = ram_dump.read_word(a[1] + 0x10, virtual=False)
                         break
             else:
