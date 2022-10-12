@@ -165,6 +165,34 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
                 yield fname, start
 
 
+class AutoDumpInfodram_cs(AutoDumpInfo):
+    # Parses dump_info.txt
+    priority = 2
+
+    def _parse(self):
+        if not os.path.exists(self.autodumpdir):
+            print_out_str('!!! AutoParse could not find path {}!'.format(self.autodumpdir))
+            return
+
+        filename_lst = os.listdir(self.autodumpdir)
+        regex = re.compile(r'^dram_cs|ocimem\S*(0x[A-Fa-f0-9]+)\S+(0x[A-Fa-f0-9]+)')
+
+        for filename in filename_lst:
+            m = re.search(regex, filename)
+            if m:
+                start = int(m.group(1), 16)
+                end = int(m.group(2), 16)
+
+                filesize = os.path.getsize(
+                    os.path.join(self.autodumpdir, filename))
+                if end - start + 1 != filesize:
+                    print_out_str(
+                        ("!!! Size of %s on disk (%d) doesn't match size " +
+                         "from dump_info.txt (%d). Skipping...")
+                        % (filename, filesize, end - start + 1))
+                    continue
+                yield filename, start
+
 class RamDump():
     """The main interface to the RAM dump"""
 
@@ -584,11 +612,10 @@ class RamDump():
             phys_end = 0
             for a in self.ebi_files:
                 _, start, end, path = a
-                if "DDR" in os.path.basename(path):
-                    if start < phys_base:
-                        phys_base = start
-                    if end > phys_end:
-                        phys_end = end
+                if start < phys_base:
+                    phys_base = start
+                if end > phys_end:
+                    phys_end = end
 
             if phys_end > 0x1ffffffff:
                 phys_end = 0x1ffffffff
