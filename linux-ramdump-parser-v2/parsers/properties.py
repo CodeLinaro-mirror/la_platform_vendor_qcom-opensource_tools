@@ -1,4 +1,4 @@
-# Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -108,7 +108,7 @@ class Properties(RamParser):
 
     def parse_property(self, mmu, mmap):
         index = 0
-        with self.ramdump.open_file("sys_prop.txt") as out_file:
+        with self.ramdump.open_file("Properties.txt") as out_file:
             initmap = mmap
             while initmap != 0:
                 tmpstartVm = self.ramdump.read_structure_field(
