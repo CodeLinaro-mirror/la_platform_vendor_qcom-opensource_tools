@@ -1392,6 +1392,9 @@ def get_wdog_timing(ramdump):
     timer_expires_off = ramdump.field_offset('struct timer_list', 'expires')
     pet_timer_expires = ramdump.read_word(
         wdog_data_addr + pet_timer_off + timer_expires_off)
+    timer_flags_off = ramdump.field_offset('struct timer_list', 'flags')
+    pet_timer_flags = ramdump.read_word(
+        wdog_data_addr + pet_timer_off + timer_flags_off)
     wdog_last_pet = ramdump.read_structure_field(
         wdog_data_addr, 'struct msm_watchdog_data', 'last_pet')
     #For kernel version less than 4.4, as the member variable timer_expired
@@ -1506,6 +1509,7 @@ def get_wdog_timing(ramdump):
     print_out_str('CPU online bits: {0:08b}'.format(cpu_online_bits))
     print_out_str('CPU runqueue online bits: {0:08b}'.format(runq_online_bits))
     print_out_str('CPU isolated bits: {0:08b}'.format(cpu_isolated_bits))
+    print_out_str('pet_timer_flags: 0x{0:x}'.format(pet_timer_flags))
     print_out_str('pet_timer_expires: {0}'.format(pet_timer_expires))
     print_out_str('Current jiffies  : {0}'.format(jiffies))
     print_out_str(
