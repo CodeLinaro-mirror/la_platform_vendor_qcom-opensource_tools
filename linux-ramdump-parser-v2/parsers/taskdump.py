@@ -84,7 +84,7 @@ def dump_thread_group(ramdump, thread_group, task_out, taskhighlight_out, check_
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
-    if ramdump.kernel_version >= (5, 15, 0):
+    if ramdump.kernel_version >= (5, 14, 0):
         offset_state = ramdump.field_offset('struct task_struct', '__state')
     else:
         offset_state = ramdump.field_offset('struct task_struct', 'state')
