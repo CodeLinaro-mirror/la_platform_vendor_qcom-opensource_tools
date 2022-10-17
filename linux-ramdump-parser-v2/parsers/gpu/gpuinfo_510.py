@@ -994,10 +994,11 @@ class GpuParser_510(RamParser):
                      + str(kgsl_sync_timeline_kref_counter))
 
     def parse_open_process_data(self, dump):
-        format_str = '{0:10} {1:20} {2:20} {3:30} {4:20} {5:20}'
+        format_str = '{0:10} {1:20} {2:20} {3:30} {4:20} {5:20} {6:20}'
         self.writeln(format_str.format("PID", "PNAME", "PROCESS_PRIVATE_PTR",
                                        "KGSL_PAGETABLE_ADDRESS",
-                                       "KGSL_CUR_MEMORY", "CTX_CNT"))
+                                       "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
+                                       "CTX_CNT"))
 
         node_addr = dump.read('kgsl_driver.process_list.next')
         list_elem_offset = dump.field_offset(
@@ -1025,15 +1026,16 @@ class GpuParser_510(RamParser):
                                          'stats')
         stats_addr = kgsl_private_base_addr + stats_offset
 
-        val = dump.read_slong(stats_addr)
+        kgsl_mem = dump.read_slong(stats_addr)
+        dmabuf_mem = dump.read_slong(stats_addr + (16 * 4))
 
         ctxt_count = dump.read_structure_field(kgsl_private_base_addr,
                                                'struct kgsl_process_private',
                                                'ctxt_count')
         self.writeln(format_str.format(
             str(upid), str(pname), hex(kgsl_private_base_addr),
-            hex(kgsl_pagetable_address), str_convert_to_kb(val),
-            str(ctxt_count)))
+            hex(kgsl_pagetable_address), str_convert_to_kb(kgsl_mem),
+            str_convert_to_kb(dmabuf_mem), str(ctxt_count)))
 
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20}'
