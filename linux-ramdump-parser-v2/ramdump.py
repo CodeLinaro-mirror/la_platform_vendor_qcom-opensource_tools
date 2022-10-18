@@ -799,6 +799,7 @@ class RamDump():
         self.ko_file_names = []
         self.kimage_vaddr_va = None
         self.datatype_dict = {}
+        self.enum_data = {}
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -3333,16 +3334,36 @@ class RamDump():
             return temp
         return arr
 
+    def get_enum_data(self, enum):
+        if "{" not in enum:
+            enum_data = self.gdbmi.getStructureData(enum)
+            if enum_data:
+                enum = enum_data[0].split("type = ")[1]
+        res_dict = {}
+        if "{" in enum and "}" in enum:
+            temp = filter(None, enum.split("{")[1].split("}")[0].split(","))
+            count = 0
+            for i in temp:
+                if "=" in i:
+                    k = i.split("=")[0].strip()
+                    v = int(i.split("=")[1].strip())
+                    res_dict[k] = v
+                    count = v+1
+                else:
+                    k = i.strip()
+                    res_dict[k] = count
+                    count += 1
+        return res_dict
+
     def __get_enum(self, var_type):
         if var_type not in self.enum_data.keys():
-            temp_enum = self.elf_obj_inuse.get_enum_data(var_type)
-            enum_ty = var_type.split()[1]
+            temp_enum = self.get_enum_data(var_type)
+            enum_ty = var_type.split()[1].split("[")[0]
             if "{" in enum_ty:
                 enum_ty = "enum"
             enum_var = enum.Enum(enum_ty,temp_enum)
             self.enum_data[var_type] = (enum_var,enum_ty)
         return self.enum_data[var_type]
-
 
     def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, attr_dict=None):
         """
@@ -3642,6 +3663,77 @@ class RamDump():
                 out_dict[var[0]] = self.read_datatype(var[0], var[1].rstrip())
         return out_dict
 
+    def pretty_print(self, clas, fop, format, indent=0):
+        indent += 4
+        if isinstance(clas, list):
+            for i in range(len(clas)):
+                fop.write("\n" + ' ' * indent + "[{}] = (\n".format(i))
+                self.pretty_print(clas[i], fop, format, indent)
+            return
+        for k, v in clas.__dict__.items():
+            if '__dict__' in dir(v):
+                fop.write(' ' * indent + k + ":\n")
+                self.pretty_print(v, fop, format, indent)
+            elif isinstance(v, list):
+                fop.write(' ' * indent + k + '= (\n')
+                indent += 4
+                for i in range(0, len(v)):
+                    if '__dict__' in dir(v[i]):
+                        fop.write(' ' * indent + k + "[" + str(i) + "]: \n")
+                        self.pretty_print(v[i], fop, format, indent)
+                    else:
+                        if isinstance(v[i], int) and format == "hex":
+                            fop.write(' ' * indent + '[' + str(i) + '] : ' + "0x{0:X}".format(v[i]) + "\n")
+                        else:
+                            fop.write(' ' * indent + '[' + str(i) + '] : ' + str(v[i]) + "\n")
+                indent -= 4
+            else:
+                if isinstance(v, int) and format == "hex":
+                    fop.write(' ' * indent + k + ' = ' + "0x{0:X}".format(v) + "\n")
+                else:
+                    fop.write(' ' * indent + k + ' = ' + str(v) + "\n")
+
+    def print_struct(self, struct_obj, fop, members=None, fmt_str=None, format=None):
+        """
+        Function to print the complete structure or member of
+        structure with some given format.
+
+        :param struct_obj: struct object
+        :type struct_obj: object
+
+        :param fop: output file handle
+        :type fop: file handle
+
+        :param members: list of member of structure (optional argument)
+        :type members: list
+
+        :param fmt_str: format specifier for each member (optional argument)
+        :type fmt_str: list
+
+        `Example`:
+        1. Print Complete structure::
+            vpp_device = self.ramdump.read_datatype('vpp_device')
+            self.ramdump_util.print_struct(vpp_device, fop)
+
+        2. Print member of structure without format::
+            vpp_device = self.ramdump.read_datatype('vpp_device')
+            self.ramdump_util.print_struct(vpp_device, fop, ["chip_ver", "foundry_id"])
+
+        3. Print member of structure with format::
+            vpp_device = self.ramdump.read_datatype('vpp_device')
+            self.ramdump_util.print_struct(vpp_device, fop, ["chip_ver", "foundry_id"], ["0x{:08x}", "{}"])
+        """
+        if members is None:
+            self.pretty_print(struct_obj, fop, format, 0)
+        else:
+            for i in range(0, len(members)):
+                value = getattr(struct_obj, members[i])
+                if fmt_str is None:
+                    fop.write(members[i] + " : {}\n".format(value))
+                elif fmt_str[i].count("{") == 1:
+                    fop.write(fmt_str[i].format(value))
+                else:
+                    fop.write(fmt_str[i].format(members[i], value))
 
 class Struct(object):
     """
