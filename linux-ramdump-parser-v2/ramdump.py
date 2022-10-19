@@ -890,7 +890,7 @@ class RamDump():
                     continue
                 self.ebi_files.append((fd, start, end, file_path))
 
-        elif not options.minidump and not options.reduceddump:
+        elif not options.reduceddump:
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & DDR files manually.")
                 sys.exit(1)
