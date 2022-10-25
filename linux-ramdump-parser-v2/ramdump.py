@@ -2776,7 +2776,7 @@ class RamDump():
         return thread_info_address
 
     def get_task_cpu(self, task_struct_addr, thread_info_struct_addr):
-        if self.is_thread_info_in_task():
+        if self.is_thread_info_in_task() and self.get_kernel_version() < (5, 19, 0):
             offset_cpu = self.field_offset('struct task_struct', 'cpu')
             cpu = self.read_int(task_struct_addr + offset_cpu)
         else:
