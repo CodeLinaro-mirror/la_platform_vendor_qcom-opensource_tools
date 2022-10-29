@@ -3653,11 +3653,11 @@ class RamDump():
                 raise InvalidDatatype
             if not (isinstance(var[1], str) or var[1] is None):
                 raise InvalidDatatype
-            if (var[1] is None) or (var[1].rstrip() is ""):
+            if (var[1] is None) or (var[1].rstrip() == ""):
                 out_dict[var[0]] = self.read_datatype(var[0])
-            elif var[1].rstrip() is "*":
+            elif var[1].rstrip() == "*":
                 out_dict[var[0]] = self.read_pdatatype(var[0])
-            elif var[1].rstrip()[-1] is "*":
+            elif var[1].rstrip()[-1] == "*":
                 out_dict[var[0]] = self.read_pdatatype(var[0], var[1].rstrip()[:-1].rstrip())
             else:
                 out_dict[var[0]] = self.read_datatype(var[0], var[1].rstrip())
