@@ -12,6 +12,7 @@
 
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
+from utils.anomalies import Anomaly
 
 DEFAULT_MIGRATION_NR=32
 DEFAULT_MIGRATION_COST=500000
@@ -193,6 +194,16 @@ def dump_cpufreq_data(ramdump):
 
         print_out_str("CPU:{0}\tGovernor:{1}\t cur_freq:{2}, max_freq:{3}, min_freq{4}  cpuinfo: min_freq:{5}, max_freq:{6}"
                     .format(i, gov_name, cur_freq, max_freq, min_freq, cpuinfo_min_freq, cpuinfo_max_freq))
+        anomaly = Anomaly()
+        anomaly.setOutputDir(ramdump.outdir)
+        if max_freq != cpuinfo_max_freq:
+            anomaly_str = "cpu {0} max frequency got tempered curr max limit : {1} actual max limit : {2}\n"\
+                        .format(i, max_freq, cpuinfo_max_freq)
+            anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
+        if min_freq != cpuinfo_min_freq:
+            anomaly_str = "cpu {0} min frequency got tempered curr max limit : {1} actual min limit : {2}\n" \
+                .format(i, min_freq, cpuinfo_min_freq)
+            anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
         try:
             arch_scale = ramdump.read_int(ramdump.address_of('cpu_scale') + ramdump.per_cpu_offset(i))
             print_out_str("\tCapacity: capacity_orig:{0}, cur_cap:{1}, arch_scale:{2}\n".format(cap_orig, curr_cap, arch_scale))

@@ -34,7 +34,6 @@ class GdbSymbol(object):
         self.section = section
         self.addr = addr
 
-
 class GdbMIResult(object):
 
     def __init__(self, lines, oob_lines):
@@ -195,6 +194,10 @@ class GdbMI(object):
     def _run_for_first(self, cmd):
         return self._run(cmd).lines[0]
 
+    def _run_for_multi(self, cmd):
+        result = self._run(cmd)
+        return result.lines
+
     def version(self):
         """Return GDB version"""
         return self._run_for_first('show version')
@@ -204,6 +207,11 @@ class GdbMI(object):
         cmd = 'set architecture ' + type
         result = self._run_for_one(cmd)
         return
+
+    def getStructureData(self, the_type):
+        cmd = 'ptype /o {0}'.format(the_type)
+        result = self._run_for_multi(cmd)
+        return result
 
     def frame_field_offset(self, frame_name, the_type, field):
         """Returns the offset of a field in a struct or type of selected frame
@@ -369,8 +377,11 @@ class GdbMI(object):
         elif match_1:
             return match_1.group(1)
         elif match_2:
-             return match_2.group(1).replace('\\\\n\\"', "")
-        return None
+            return match_2.group(1).replace('\\\\n\\"', "")
+        elif result.lines[0] != None:
+            return result.lines[0]
+        else:
+            return None
 
     def read_memory(self, start, end):
         """Reads memory from within elf (e.g. const data). start and end should be kaslr-offset values"""

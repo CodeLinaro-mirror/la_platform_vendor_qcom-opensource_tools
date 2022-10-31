@@ -1142,10 +1142,11 @@ class GpuParser_54(RamParser):
                      + str(kgsl_sync_timeline_kref_counter))
 
     def parse_open_process_data(self, dump):
-        format_str = '{0:10} {1:20} {2:24} {3:26} {4:20} {5:20}'
+        format_str = '{0:10} {1:20} {2:24} {3:26} {4:20} {5:20} {6:20}'
         self.writeln(format_str.format("PID", "PNAME", "PROCESS_PRIVATE_PTR",
                                        "KGSL_PAGETABLE_ADDRESS",
-                                       "KGSL_CUR_MEMORY", "CTX_CNT"))
+                                       "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
+                                       "CTX_CNT"))
 
         node_addr = dump.read('kgsl_driver.process_list.next')
         list_elem_offset = dump.field_offset(
@@ -1173,15 +1174,16 @@ class GpuParser_54(RamParser):
                                          'stats')
         stats_addr = kgsl_private_base_addr + stats_offset
 
-        val = dump.read_slong(stats_addr)
+        kgsl_mem = dump.read_slong(stats_addr)
+        dmabuf_mem = dump.read_slong(stats_addr + (16 * 4))
 
         ctxt_count = dump.read_structure_field(kgsl_private_base_addr,
                                                'struct kgsl_process_private',
                                                'ctxt_count')
         self.writeln(format_str.format(
             str(upid), str(pname), hex(kgsl_private_base_addr),
-            hex(kgsl_pagetable_address), str_convert_to_kb(val),
-            str(ctxt_count)))
+            hex(kgsl_pagetable_address), str_convert_to_kb(kgsl_mem),
+            str_convert_to_kb(dmabuf_mem), str(ctxt_count)))
 
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20} {3:20} {4:20}'
@@ -1329,13 +1331,28 @@ class GpuParser_54(RamParser):
             return
 
         snapshot_offset = dump.field_offset('struct kgsl_device', 'snapshot')
-        snapshot_memory_offset = dump.field_offset(
-            'struct kgsl_device', 'snapshot_memory')
+        snapshot_memory_offset = dump.field_offset('struct kgsl_device',
+                                                   'snapshot_memory')
         snapshot_memory_size = dump.read_u32(self.devp +
-                                             snapshot_memory_offset + 8)
+                                             snapshot_memory_offset +
+                                             dump.sizeof('void *') +
+                                             dump.sizeof('dma_addr_t'))
         snapshot_base_addr = dump.read_pointer(self.devp + snapshot_offset)
+
         if snapshot_base_addr == 0:
-            self.writeln('Snapshot not found.')
+            snapshot_memory_ptr = dump.read_pointer(self.devp +
+                                                    snapshot_memory_offset)
+            if snapshot_memory_ptr is None or snapshot_memory_ptr == 0:
+                self.writeln('Snapshot not found.')
+                return
+            file_name = 'gpu_snapshot_memory.bpmd'
+            file = self.ramdump.open_file('gpu_parser/' + file_name, 'wb')
+            self.write('Snapshot start not found, ')
+            self.writeln('dumping entire region to ' + file_name)
+            data = self.ramdump.read_binarystring(snapshot_memory_ptr,
+                                                  snapshot_memory_size)
+            file.write(data)
+            file.close()
             return
 
         snapshot_start = dump.read_structure_field(
