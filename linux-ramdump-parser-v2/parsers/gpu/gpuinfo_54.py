@@ -676,6 +676,23 @@ class GpuParser_54(RamParser):
                      + strhex(pending_address))
         self.writeln('fault_counter: ' + str(fault_counter))
 
+    def parse_dispatcher_queues(self, arr_base, shift, queue_name):
+        self.write(queue_name + ': ')
+        active_jobs = False
+        for i in range(16):
+            first = self.ramdump.read_structure_field(
+                                arr_base, 'struct llist_head', 'first')
+            if first != 0:
+                if not active_jobs:
+                    self.writeln('')
+                self.writeln('\t' + queue_name + '[' + str(i) +
+                             '].first: ' + strhex(first))
+                active_jobs = True
+            arr_base += shift
+
+        if not active_jobs:
+            self.writeln('0x0')
+
     def parse_dispatcher_data_54(self, dump):
         dispatcher_addr = dump.struct_field_addr(self.devp,
                                                  'struct adreno_device',
@@ -686,26 +703,17 @@ class GpuParser_54(RamParser):
         jobs_base_addr = dump.struct_field_addr(dispatcher_addr,
                                                 'struct adreno_dispatcher',
                                                 'jobs')
+        requeue_base_addr = dump.struct_field_addr(dispatcher_addr,
+                                                   'struct adreno_dispatcher',
+                                                   'requeue')
         fault_counter = dump.read_structure_field(dispatcher_addr,
                                                   'struct adreno_dispatcher',
                                                   'fault')
 
         self.writeln('inflight: ' + str(inflight))
         shift = dump.sizeof('struct llist_head')
-        self.write('jobs: ')
-        active_jobs = False
-        for i in range(16):
-            first = dump.read_structure_field(jobs_base_addr,
-                                              'struct llist_head', 'first')
-            if first != 0:
-                if not active_jobs:
-                    self.writeln('')
-                self.writeln('\tjobs[' + str(i) + '].first: ' + strhex(first))
-                active_jobs = True
-
-            jobs_base_addr += shift
-        if not active_jobs:
-            self.writeln('0x0')
+        self.parse_dispatcher_queues(jobs_base_addr, shift, 'jobs')
+        self.parse_dispatcher_queues(requeue_base_addr, shift, 'requeue')
         self.writeln('fault_counter: ' + str(fault_counter))
 
     def parse_rb_inflight_data(self, dump):
