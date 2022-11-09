@@ -800,6 +800,7 @@ class RamDump():
         self.kimage_vaddr_va = None
         self.datatype_dict = {}
         self.enum_data = {}
+        self.available_cores = []
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -1144,6 +1145,8 @@ class RamDump():
                 self.dump_global_symbol_lookup_table()
 
         mm_init(self)
+        self.set_available_cores()
+
 
     def get_section_address(self,section):
         """
@@ -2742,17 +2745,30 @@ class RamDump():
             per_cpu_offset_addr, 'unsigned long', cpu)
         return self.read_slong(per_cpu_offset_addr_indexed)
 
-    def get_num_cpus(self):
-        """Gets the number of CPUs in the system."""
+
+    def set_available_cores(self):
+        """set available core numbers in the system."""
         major, minor, patch = self.kernel_version
         cpu_present_bits_addr = self.address_of('cpu_present_bits')
         cpu_present_bits = self.read_word(cpu_present_bits_addr)
-
+        ind = 0
         if (major, minor) >= (4, 5):
             cpu_present_bits_addr = self.address_of('__cpu_present_mask')
             bits_offset = self.field_offset('struct cpumask', 'bits')
             cpu_present_bits = self.read_word(cpu_present_bits_addr + bits_offset)
-        return bin(cpu_present_bits).count('1')
+        self.available_cores.clear()
+        while cpu_present_bits:
+            if cpu_present_bits & 1:
+                self.available_cores.append(ind)
+            cpu_present_bits = cpu_present_bits >> 1
+            ind += 1
+
+
+    def get_num_cpus(self):
+        """Gets the number of CPUs in the system."""
+        if not(len(self.available_cores)):
+            self.set_available_cores()
+        return len(self.available_cores)
 
     def iter_cpus(self):
         """Returns an iterator over all CPUs in the system.
