@@ -3595,7 +3595,7 @@ class RamDump():
 
         :return: The data read from the dumps.
         """
-        ptr_address = self.__resolve_virt(ptr_addr_or_name)
+        ptr_address = self.resolve_virt(ptr_addr_or_name)
         if ptr_address is None:
             if isinstance(ptr_addr_or_name, str):
                 raise SymbolNotFound(ptr_addr_or_name + " symbol not found")
