@@ -1033,7 +1033,7 @@ class RamDump():
             if self.kimage_voffset is not None:
                 self.kimage_voffset = self.kimage_vaddr - self.phys_offset
                 self.modules_end = self.kimage_vaddr
-                if not (options.phys_offset or self.minidump):
+                if not (options.phys_offset or self.minidump or self.svm):
                     phys_offset_dyn = self.determine_phys_offset()
                     if phys_offset_dyn:
                         print_out_str("Dynamically determined phys offset is"
