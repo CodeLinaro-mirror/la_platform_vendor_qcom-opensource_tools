@@ -273,9 +273,9 @@ class GpuParser_54(RamParser):
         self.writeln()
 
     def parse_globals(self, dump):
-        format_str = '{0:30} {1:30} {2:20} {3:30} {4:12}'
-        self.writeln(format_str.format("NAME", "MEMDESC_ADDR", "MEMDESC_SIZE",
-                                       "GPUADDR", "FLAGS"))
+        format_str = '{0:30} {1:30} {2:30} {3:20} {4:30} {5:12}'
+        self.writeln(format_str.format("NAME", "MEMDESC_ADDR", "HOSTPTR",
+                                       "MEMDESC_SIZE", "GPUADDR", "FLAGS"))
         node_addr = dump.struct_field_addr(self.devp, 'struct kgsl_device',
                                            'globals')
         list_elem_offset = dump.field_offset('struct kgsl_global_memdesc',
@@ -295,12 +295,15 @@ class GpuParser_54(RamParser):
         if name is None or gpuaddr == 0:
             return
 
+        hostptr = dump.read_structure_field(kgsl_global_memdesc_base,
+                                            'struct kgsl_memdesc', 'hostptr')
         size = dump.read_structure_field(kgsl_global_memdesc_base,
                                          'struct kgsl_memdesc', 'size')
         flags = self.prepare_global_memdesc_flags(kgsl_global_memdesc_base)
 
         self.writeln(format_str.format(name, hex(kgsl_global_memdesc_base),
-                                       str(size), hex(gpuaddr), str(flags)))
+                                       hex(hostptr), str(size), hex(gpuaddr),
+                                       str(flags)))
 
     def prepare_global_memdesc_flags(self, memdesc_addr):
         '''
