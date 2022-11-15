@@ -51,6 +51,20 @@ kgsl_cachemode = ['-', 'u', 't', 'b']
 
 kgsl_ctx_type = ['ANY', 'GL', 'CL', 'C2D', 'RS', 'VK']
 
+kgsl_ctx_priv = [
+    ((1 << 0), 's', 'submitted'),           # KGSL_CONTEXT_PRIV_SUBMITTED
+    ((1 << 1), 'd', 'detached'),            # KGSL_CONTEXT_PRIV_DETACHED
+    ((1 << 2), 'i', 'invalid'),             # KGSL_CONTEXT_PRIV_INVALID
+    ((1 << 3), 'p', 'pagefault'),           # KGSL_CONTEXT_PRIV_PAGEFAULT
+    ((1 << 16), 'F', 'Fault'),              # ADRENO_CONTEXT_FAULT
+    ((1 << 17), 'H', 'GPU Hang'),           # ADRENO_CONTEXT_GPU_HANG
+    ((1 << 18), 'T', 'GPU Hang FT'),        # ADRENO_CONTEXT_GPU_HANG_FT
+    ((1 << 19), 'E', 'Skip EOF'),           # ADRENO_CONTEXT_SKIP_EOF
+    ((1 << 20), 'P', 'Force Preamble'),     # ADRENO_CONTEXT_FORCE_PREAMBLE
+    ((1 << 21), 'C', 'Skip CMD'),           # ADRENO_CONTEXT_SKIP_CMD
+    ((1 << 22), 'L', 'Fence Log')           # ADRENO_CONTEXT_FENCE_LOG
+]
+
 kgsl_memtype = [
                 'any(0)',
                 'framebuffer',
@@ -189,7 +203,14 @@ class GpuParser_54(RamParser):
                                              'struct adreno_context', 'type')
         flags = dump.read_structure_field(ctx_addr,
                                           'struct kgsl_context', 'flags')
+        priv = dump.read_structure_field(ctx_addr,
+                                         'struct kgsl_context', 'priv')
         is_secure = bool(flags & KGSL_CONTEXT_SECURE)
+        priv_str = ['-'] * 11
+        for i, (bit, char, prop) in enumerate(kgsl_ctx_priv):
+            if bool(bit & priv):
+                priv_str[i] = char
+        priv_str = ''.join(priv_str)
 
         ktimeline_offset = dump.field_offset('struct kgsl_context',
                                              'ktimeline')
@@ -212,27 +233,31 @@ class GpuParser_54(RamParser):
 
         self.writeln(format_str.format(context_id, str(upid), comm,
                      strhex(ctx_addr), kgsl_ctx_type[ctx_type], strhex(flags),
-                     str(is_secure), str(ktimeline_last_ts),
+                     str(is_secure), priv_str, str(ktimeline_last_ts),
                      str(soptimestamp), str(eoptimestamp)))
 
     def parse_context_data(self, dump):
         format_str = '{0:10} {1:10} {2:20} {3:28} {4:12} ' + \
-                     '{5:12} {6:12} {7:16} {8:14} {9:14}'
+                     '{5:12} {6:12} {7:14} {8:16} {9:14} {10:14}'
         self.writeln(format_str.format("CTX_ID", "PID", "PROCESS_NAME",
                                        "ADRENO_DRAWCTX_PTR", "CTX_TYPE",
-                                       "FLAGS", "IS_SECURE",
+                                       "FLAGS", "IS_SECURE", "PRIV",
                                        "TIMELINE_LST_TS", "SOP_TS", "EOP_TS"))
         context_idr = dump.struct_field_addr(self.devp, 'struct kgsl_device',
                                              'context_idr')
         self.rtw.walk_radix_tree(context_idr,
                                  self.print_context_data, format_str)
+        self.writeln('\nPriv key:')
+        for (bit, char, prop) in kgsl_ctx_priv:
+            self.write('\'' + char + '\'' + ': ' + prop + ', ')
+        self.writeln()
 
     def parse_active_context_data(self, dump):
         format_str = '{0:10} {1:10} {2:20} {3:28} {4:12} ' + \
-                     '{5:12} {6:12} {7:16} {8:14} {9:14}'
+                     '{5:12} {6:12} {7:14} {8:16} {9:14} {10:14}'
         self.writeln(format_str.format("CTX_ID", "PID", "PROCESS_NAME",
                                        "ADRENO_DRAWCTX_PTR", "CTX_TYPE",
-                                       "FLAGS", "IS_SECURE",
+                                       "FLAGS", "IS_SECURE", "PRIV",
                                        "TIMELINE_LST_TS", "SOP_TS", "EOP_TS"))
         node_addr = dump.struct_field_addr(self.devp, 'struct adreno_device',
                                            'active_list')
@@ -242,6 +267,10 @@ class GpuParser_54(RamParser):
                                                            list_elem_offset)
         active_context_list_walker.walk(node_addr,
                                         self.print_context_data, format_str)
+        self.writeln('\nPriv key:')
+        for (bit, char, prop) in kgsl_ctx_priv:
+            self.write('\'' + char + '\'' + ': ' + prop + ', ')
+        self.writeln()
 
     def parse_globals(self, dump):
         format_str = '{0:30} {1:30} {2:20} {3:30} {4:12}'
@@ -1331,13 +1360,28 @@ class GpuParser_54(RamParser):
             return
 
         snapshot_offset = dump.field_offset('struct kgsl_device', 'snapshot')
-        snapshot_memory_offset = dump.field_offset(
-            'struct kgsl_device', 'snapshot_memory')
+        snapshot_memory_offset = dump.field_offset('struct kgsl_device',
+                                                   'snapshot_memory')
         snapshot_memory_size = dump.read_u32(self.devp +
-                                             snapshot_memory_offset + 8)
+                                             snapshot_memory_offset +
+                                             dump.sizeof('void *') +
+                                             dump.sizeof('dma_addr_t'))
         snapshot_base_addr = dump.read_pointer(self.devp + snapshot_offset)
+
         if snapshot_base_addr == 0:
-            self.writeln('Snapshot not found.')
+            snapshot_memory_ptr = dump.read_pointer(self.devp +
+                                                    snapshot_memory_offset)
+            if snapshot_memory_ptr is None or snapshot_memory_ptr == 0:
+                self.writeln('Snapshot not found.')
+                return
+            file_name = 'gpu_snapshot_memory.bpmd'
+            file = self.ramdump.open_file('gpu_parser/' + file_name, 'wb')
+            self.write('Snapshot start not found, ')
+            self.writeln('dumping entire region to ' + file_name)
+            data = self.ramdump.read_binarystring(snapshot_memory_ptr,
+                                                  snapshot_memory_size)
+            file.write(data)
+            file.close()
             return
 
         snapshot_start = dump.read_structure_field(

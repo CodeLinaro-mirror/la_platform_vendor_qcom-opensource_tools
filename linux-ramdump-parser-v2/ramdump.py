@@ -33,6 +33,7 @@ from print_out import print_out_str
 from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
 import parser_util
 import minidump_util
+import ramreduction_util as elfutil
 from importlib import import_module
 import module_table
 from mm import mm_init
@@ -95,24 +96,47 @@ def is_ramdump_file(val, minidump):
             return True
     return False
 
+def is_reduceddump_file(val, is_vm):
+    hlos = re.compile(r'MR_HLOS.*[.]ELF', re.IGNORECASE)
+    smem = re.compile(r'MR_smem.*[.]bin', re.IGNORECASE)
+    imem = re.compile(r'.*IMEM.BIN', re.IGNORECASE)
+    memdump = re.compile(r'MR_(mem_dump|linux,cma).*[.]bin', re.IGNORECASE)
+    hyp = re.compile(r'MR_(hyp|hyp_region).*[.]bin', re.IGNORECASE)
+
+    if hyp.match(val) or smem.match(val) or hlos.match(val) or imem.match(val) or memdump.match(val):
+        return True
+
+    if is_vm:
+        vm = re.compile(r'.*MR_.*(trustedvm).*[.]bin', re.IGNORECASE)
+        hyp_carve = hyp = re.compile(r'MR_hyp_(smmu|trace)_carveout.*[.]bin', re.IGNORECASE)
+        if vm.match(val) or hyp_carve.match(val):
+            return True
+    return False
+
+
 class AutoDumpInfo(object):
     priority = 0
-
-    def __init__(self, autodumpdir, minidump):
+    def __init__(self, autodumpdir, minidump, reduceddump, svm=None):
         self.autodumpdir = autodumpdir
         self.minidump = minidump
+        self.reduceddump = reduceddump
+        self.svm = svm
         self.ebi_files = []
+        self.elf_files = []
 
     def parse(self):
         for (filename, base_addr) in self._parse():
             fullpath = os.path.join(self.autodumpdir, filename)
             if not os.path.exists(fullpath):
                 continue
-            end = base_addr + os.path.getsize(fullpath) - 1
-            self.ebi_files.append((open(fullpath, 'rb'), base_addr, end, fullpath))
-            # sort by addr, DDR files first. The goal is for
-            # self.ebi_files[0] to be the DDR file with the lowest address.
-            self.ebi_files.sort(key=lambda x: (x[1]))
+            if self.reduceddump and filename.lower().endswith(".elf"):
+                self.elf_files.append(fullpath)
+            else:
+                end = base_addr + os.path.getsize(fullpath) - 1
+                self.ebi_files.append((open(fullpath, 'rb'), base_addr, end, fullpath))
+                # sort by addr, DDR files first. The goal is for
+                # self.ebi_files[0] to be the DDR file with the lowest address.
+                self.ebi_files.sort(key=lambda x: (x[1]))
 
     def _parse(self):
         # Implementations should return an interable of (filename, base_addr)
@@ -164,6 +188,51 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
                     continue
                 yield fname, start
 
+class AutoDumpInfoReducedDump(AutoDumpInfo):
+    # Parses binoffsets.txt, dump_info.txt
+    # Finds HLOS elf file
+    priority = 1
+    def _parse(self):
+        filename = 'binoffsets.txt'
+        added = []
+        if not os.path.exists(os.path.join(self.autodumpdir, filename)):
+            print_out_str('!!! AutoParse could not find {}!'.format(filename))
+            return
+
+        # Find smem, hyp, memdump file
+        with open(os.path.join(self.autodumpdir, filename)) as f:
+            for line in f.readlines():
+                words = line.split()
+                if not words or not is_reduceddump_file(words[0], self.svm):
+                    continue
+                fname = words[0].strip()
+                start = int(words[1], 16)
+                size = int(words[2], 16)
+                added.append(fname)
+                yield fname, start
+
+        # Find HLOS elf's
+        hlos = re.compile(r'.*MR_HLOS.*[.]ELF', re.IGNORECASE)
+        for file in os.listdir(self.autodumpdir):
+            if hlos.match(file):
+                yield file, None
+
+        # Find *IMEM bins
+        filename = 'load.cmm'
+        if not os.path.exists(os.path.join(self.autodumpdir, filename)):
+            print_out_str('!!! AutoParse could not find load.cmm!')
+            return
+
+        with open(os.path.join(self.autodumpdir, filename)) as f:
+            for line in f.readlines():
+                words = line.split()
+                if len(words) != 4 or not is_reduceddump_file(words[1], self.svm):
+                    continue
+                fname = words[1]
+                if fname in added:
+                    continue
+                start = int(words[2], 16)
+                yield fname, start
 
 class AutoDumpInfodram_cs(AutoDumpInfo):
     # Parses dump_info.txt
@@ -604,18 +673,34 @@ class RamDump():
         result = pac_mack | data
         result = result | top_bit_ignore
         return result
+
+    def load_phys_range(self, path):
+        phys_base, phys_end = 0xffffffff, 0
+        with open(path, 'r') as _fd:
+            phys_base, phys_end = _fd.read().strip().split("--")
+        return int(phys_base), int(phys_end)
+
     def determine_phys_offset(self):
         vmalloc_start = self.modules_end - self.kaslr_offset
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
 
             phys_base = 0x1ffffffff
             phys_end = 0
-            for a in self.ebi_files:
-                _, start, end, path = a
-                if start < phys_base:
-                    phys_base = start
-                if end > phys_end:
-                    phys_end = end
+
+            if self.reduceddump:
+                # Load the phys range from phys_range.txt
+                path = os.path.join(os.path.dirname(self.elf_addr[0]), 'phys_range.txt')
+                if os.path.exists(path):
+                    phys_base, phys_end = self.load_phys_range(path)
+                else:
+                    print_out_str("Unable to locate the phys_range.txt file !!! Linux banner will not be found !!!")
+            else:
+                for a in self.ebi_files:
+                    _, start, end, path = a
+                    if start < phys_base:
+                        phys_base = start
+                    if end > phys_end:
+                        phys_end = end
 
             if phys_end > 0x1ffffffff:
                 phys_end = 0x1ffffffff
@@ -714,6 +799,7 @@ class RamDump():
         self.ko_file_names = []
         self.kimage_vaddr_va = None
         self.datatype_dict = {}
+        self.enum_data = {}
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -754,11 +840,13 @@ class RamDump():
         self.kernel_version = (0, 0, 0)
         self.linux_banner = None
         self.minidump = options.minidump
+        self.reduceddump = options.reduceddump
         self.svm = options.svm
         self.elffile = None
         self.ram_elf_file = None
         self.ram_addr = options.ram_addr
         self.autodump = options.autodump
+        self.elf_addr = None
         self.module_table = module_table.module_table_class()
         self.hyp = options.hyp
         # Save all paths given from --mod_path option. These will be searched for .ko.unstripped files
@@ -781,7 +869,7 @@ class RamDump():
                                      0)
             self.gdbmi_hyp.open()
 
-        if self.minidump:
+        if self.minidump or self.reduceddump:
             try:
                 mod = import_module('elftools.elf.elffile')
                 ELFFile = mod.ELFFile
@@ -801,10 +889,23 @@ class RamDump():
                         'Could not open {0}. Will not be part of dump'.format(file_path))
                     continue
                 self.ebi_files.append((fd, start, end, file_path))
-        else:
-            if not self.auto_parse(options.autodump, options.minidump):
+
+        elif not options.reduceddump:
+            if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & DDR files manually.")
                 sys.exit(1)
+
+        elif options.reduceddump:
+            if not self.auto_parse(options.autodump, options.minidump, options.svm):
+                print("Oops, auto-parse option failed. Please specify vmlinux & HLOS elf files manually.")
+                sys.exit(1)
+
+        if self.elf_addr is not None:
+            # Setup the needed vector and hash table for binary search in read_physical
+            vector, htable, filemap = elfutil.setup_elfmappings(self.elf_addr)
+            self.elf_vector, self.elf_htable, self.elf_filemap = vector, htable, filemap
+
+
         if options.minidump:
             if not options.autodump:
                 file_path = options.ram_elf_addr
@@ -852,6 +953,10 @@ class RamDump():
         if options.minidump:
             if self.ebi_start == 0:
                 self.ebi_start = self.ebi_files_minidump[0][1]
+        elif options.reduceddump:
+            if self.ebi_start == 0:
+                # options.elf_addr needs to be sorted for filename
+                self.ebi_start = self.elf_filemap[options.elf_addr[0]][0]
         else:
             if self.ebi_start == 0:
                 self.ebi_start = self.ebi_files[0][1]
@@ -1296,21 +1401,47 @@ class RamDump():
             print_out_str("Chip Serial Number 0x{0:x}".format(serial_num))
             return True
 
-    def auto_parse(self, file_path, minidump):
-        for cls in sorted(AutoDumpInfo.__subclasses__(),
-                          key=lambda x: x.priority, reverse=True):
-            info = cls(file_path, minidump)
+    def auto_parse(self, file_path, minidump, svm):
+        if self.reduceddump:
+            elfflag, ebiflag = False, False
+            cls = None
+
+            info = AutoDumpInfoReducedDump(file_path, minidump, self.reduceddump, svm)
             info.parse()
-            if info is not None and len(info.ebi_files) > 0:
-                self.ebi_files = info.ebi_files
-                self.phys_offset = self.ebi_files[0][1]
-                if self.get_hw_id():
-                    for (f, start, end, filename) in self.ebi_files:
-                        print_out_str('Adding {0} {1:x}--{2:x}'.format(
-                            filename, start, end))
-                    return True
-        self.ebi_files = None
-        return False
+            if info is not None:
+                if len(info.ebi_files) > 0:
+                    self.ebi_files = info.ebi_files
+                    self.phys_offset = self.ebi_files[0][1]
+                    if self.get_hw_id():
+                        for (f, start, end, filename) in self.ebi_files:
+                            print_out_str('Adding {0} {1:x}--{2:x}'.format(
+                                filename, start, end))
+                        ebiflag = True
+                    else:
+                        return False
+
+                if len(info.elf_files) > 0:
+                    self.elf_addr = info.elf_files
+                    for filename in self.elf_addr:
+                        print_out_str('Adding {0}'.format(filename))
+                    elfflag = True
+            return elfflag and ebiflag
+
+        else:
+            for cls in sorted(AutoDumpInfo.__subclasses__(),
+                              key=lambda x: x.priority, reverse=True):
+                info = cls(file_path, minidump, self.reduceddump, svm)
+                info.parse()
+                if info is not None and len(info.ebi_files) > 0:
+                    self.ebi_files = info.ebi_files
+                    self.phys_offset = self.ebi_files[0][1]
+                    if self.get_hw_id():
+                        for (f, start, end, filename) in self.ebi_files:
+                            print_out_str('Adding {0} {1:x}--{2:x}'.format(
+                                filename, start, end))
+                        return True
+            self.ebi_files = None
+            return False
 
     def create_t32_launcher(self):
         out_path = os.path.abspath(self.outdir)
@@ -1372,6 +1503,10 @@ class RamDump():
         if self.minidump:
             dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
             startup_script.write(dload_ram_elf)
+        # Check to include Reduced dump elf's
+        if self.elf_addr:
+            for file in self.elf_addr:
+                startup_script.write('data.load.elf {0} /noclear\n'.format(file))
 
         if not self.minidump:
             if self.arm64:
@@ -2323,6 +2458,15 @@ class RamDump():
                         self.ebi_files_minidump, self.ebi_files,self.elffile,
                         addr, length)
             return addr_data
+
+        elif self.reduceddump:
+            data = elfutil.read_physical(self.elf_vector, self.elf_htable,
+                                            self.elf_filemap, self.ebi_files,
+                                            addr, length)
+            #if addr == 0x83cc09268:
+            #    print("addr read yielded none : {:x}".format(addr))
+            return data
+
         else:
             ebi = (-1, -1, -1)
             for a in self.ebi_files:
@@ -2569,6 +2713,21 @@ class RamDump():
         sio.close()
         return ret
 
+    def get_read_physical_offset(self, addr):
+        if not self.reduceddump:
+            offset = None
+            input = None
+            for file in self.ebi_files:
+                fd, start, end, path = file
+                if addr >= start and addr <= end:
+                    input = path
+                    offset = addr - start
+                    break
+            return offset, input
+        return elfutil.get_read_physical_offset_helper(self.elf_vector, self.elf_htable,
+                                            self.elf_filemap, self.ebi_files,
+                                            addr)
+
     def per_cpu_offset(self, cpu):
         """ __per_cpu_offset has been observed to be a negative number
         on kernel 5.4, even though it is stored in a unsigned long.
@@ -2617,7 +2776,7 @@ class RamDump():
         return thread_info_address
 
     def get_task_cpu(self, task_struct_addr, thread_info_struct_addr):
-        if self.is_thread_info_in_task():
+        if self.is_thread_info_in_task() and self.get_kernel_version() < (5, 19, 0):
             offset_cpu = self.field_offset('struct task_struct', 'cpu')
             cpu = self.read_int(task_struct_addr + offset_cpu)
         else:
@@ -3175,16 +3334,36 @@ class RamDump():
             return temp
         return arr
 
+    def get_enum_data(self, enum):
+        if "{" not in enum:
+            enum_data = self.gdbmi.getStructureData(enum)
+            if enum_data:
+                enum = enum_data[0].split("type = ")[1]
+        res_dict = {}
+        if "{" in enum and "}" in enum:
+            temp = filter(None, enum.split("{")[1].split("}")[0].split(","))
+            count = 0
+            for i in temp:
+                if "=" in i:
+                    k = i.split("=")[0].strip()
+                    v = int(i.split("=")[1].strip())
+                    res_dict[k] = v
+                    count = v+1
+                else:
+                    k = i.strip()
+                    res_dict[k] = count
+                    count += 1
+        return res_dict
+
     def __get_enum(self, var_type):
         if var_type not in self.enum_data.keys():
-            temp_enum = self.elf_obj_inuse.get_enum_data(var_type)
-            enum_ty = var_type.split()[1]
+            temp_enum = self.get_enum_data(var_type)
+            enum_ty = var_type.split()[1].split("[")[0]
             if "{" in enum_ty:
                 enum_ty = "enum"
             enum_var = enum.Enum(enum_ty,temp_enum)
             self.enum_data[var_type] = (enum_var,enum_ty)
         return self.enum_data[var_type]
-
 
     def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, attr_dict=None):
         """
@@ -3474,16 +3653,87 @@ class RamDump():
                 raise InvalidDatatype
             if not (isinstance(var[1], str) or var[1] is None):
                 raise InvalidDatatype
-            if (var[1] is None) or (var[1].rstrip() is ""):
+            if (var[1] is None) or (var[1].rstrip() == ""):
                 out_dict[var[0]] = self.read_datatype(var[0])
-            elif var[1].rstrip() is "*":
+            elif var[1].rstrip() == "*":
                 out_dict[var[0]] = self.read_pdatatype(var[0])
-            elif var[1].rstrip()[-1] is "*":
+            elif var[1].rstrip()[-1] == "*":
                 out_dict[var[0]] = self.read_pdatatype(var[0], var[1].rstrip()[:-1].rstrip())
             else:
                 out_dict[var[0]] = self.read_datatype(var[0], var[1].rstrip())
         return out_dict
 
+    def pretty_print(self, clas, fop, format, indent=0):
+        indent += 4
+        if isinstance(clas, list):
+            for i in range(len(clas)):
+                fop.write("\n" + ' ' * indent + "[{}] = (\n".format(i))
+                self.pretty_print(clas[i], fop, format, indent)
+            return
+        for k, v in clas.__dict__.items():
+            if '__dict__' in dir(v):
+                fop.write(' ' * indent + k + ":\n")
+                self.pretty_print(v, fop, format, indent)
+            elif isinstance(v, list):
+                fop.write(' ' * indent + k + '= (\n')
+                indent += 4
+                for i in range(0, len(v)):
+                    if '__dict__' in dir(v[i]):
+                        fop.write(' ' * indent + k + "[" + str(i) + "]: \n")
+                        self.pretty_print(v[i], fop, format, indent)
+                    else:
+                        if isinstance(v[i], int) and format == "hex":
+                            fop.write(' ' * indent + '[' + str(i) + '] : ' + "0x{0:X}".format(v[i]) + "\n")
+                        else:
+                            fop.write(' ' * indent + '[' + str(i) + '] : ' + str(v[i]) + "\n")
+                indent -= 4
+            else:
+                if isinstance(v, int) and format == "hex":
+                    fop.write(' ' * indent + k + ' = ' + "0x{0:X}".format(v) + "\n")
+                else:
+                    fop.write(' ' * indent + k + ' = ' + str(v) + "\n")
+
+    def print_struct(self, struct_obj, fop, members=None, fmt_str=None, format=None):
+        """
+        Function to print the complete structure or member of
+        structure with some given format.
+
+        :param struct_obj: struct object
+        :type struct_obj: object
+
+        :param fop: output file handle
+        :type fop: file handle
+
+        :param members: list of member of structure (optional argument)
+        :type members: list
+
+        :param fmt_str: format specifier for each member (optional argument)
+        :type fmt_str: list
+
+        `Example`:
+        1. Print Complete structure::
+            vpp_device = self.ramdump.read_datatype('vpp_device')
+            self.ramdump_util.print_struct(vpp_device, fop)
+
+        2. Print member of structure without format::
+            vpp_device = self.ramdump.read_datatype('vpp_device')
+            self.ramdump_util.print_struct(vpp_device, fop, ["chip_ver", "foundry_id"])
+
+        3. Print member of structure with format::
+            vpp_device = self.ramdump.read_datatype('vpp_device')
+            self.ramdump_util.print_struct(vpp_device, fop, ["chip_ver", "foundry_id"], ["0x{:08x}", "{}"])
+        """
+        if members is None:
+            self.pretty_print(struct_obj, fop, format, 0)
+        else:
+            for i in range(0, len(members)):
+                value = getattr(struct_obj, members[i])
+                if fmt_str is None:
+                    fop.write(members[i] + " : {}\n".format(value))
+                elif fmt_str[i].count("{") == 1:
+                    fop.write(fmt_str[i].format(value))
+                else:
+                    fop.write(fmt_str[i].format(members[i], value))
 
 class Struct(object):
     """

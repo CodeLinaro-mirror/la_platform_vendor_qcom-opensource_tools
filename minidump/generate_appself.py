@@ -92,9 +92,17 @@ def get_strings(buf, length):
 def generate_elf():
     delete = False
     elfhd = os.path.join(out_folder, "md_KELF_HEADER.BIN")
+    elfhd_new = os.path.join(out_folder, "md_KELF_HDR.BIN")
     fo = open_file(outputfile, "wb")
-    fi = open_file("md_KELF_HEADER.BIN", "rb")
-    hsize = os.path.getsize(elfhd)
+    if os.path.exists(elfhd):
+        fi = open_file("md_KELF_HEADER.BIN", "rb")
+        hsize = os.path.getsize(elfhd)
+    elif os.path.exists(elfhd_new):
+        fi = open_file("md_KELF_HDR.BIN", "rb")
+        hsize = os.path.getsize(elfhd_new)
+    else:
+        print("ELF header binary is missing")
+        sys.exit(2)
     print("ELF header size %d" % hsize)
     buf = fi.read(hsize)
     fo.write(buf)
