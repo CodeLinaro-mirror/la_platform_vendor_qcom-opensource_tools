@@ -713,8 +713,20 @@ class FtraceParser_Event(object):
                                 pr_f.append(str(ki).replace(" ",""))
                 for item,item_list in offset_data.items():
                     type_str,offset,size = item_list
-                    if 'long' in type_str or 'int' in type_str or 'u32' in type_str or 'bool' in type_str or 'pid_t' in type_str:
+                    if 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
+                        if self.ramdump.arm64:
+                            v = self.ramdump.read_u64(ftrace_raw_entry + offset)
+                        else:
+                            v = self.ramdump.read_u32(ftrace_raw_entry + offset)
+                        if "func" not in item:
+                            fmt_name_value_map[item] = hex(int(v))
+                        else:
+                            fmt_name_value_map[item] = v
+                    elif 'long' in type_str or 'int' in type_str or 'u32' in type_str or 'bool' in type_str or 'pid_t' in type_str:
                         v = self.ramdump.read_u32(ftrace_raw_entry + offset)
+                        fmt_name_value_map[item] = v
+                    elif 'u8' in type_str:
+                        v = self.ramdump.read_byte(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
                     elif 'const' in type_str and 'char *' in type_str:
                         v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
@@ -738,15 +750,6 @@ class FtraceParser_Event(object):
                     elif 'char' in type_str:
                         v = self.ramdump.read_byte(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
-                    elif 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
-                        if self.ramdump.arm64:
-                            v = self.ramdump.read_u64(ftrace_raw_entry + offset)
-                        else:
-                            v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                        if "func" not in item:
-                            fmt_name_value_map[item] = hex(int(v))
-                        else:
-                            fmt_name_value_map[item] = v
                     elif 'unsigned short' in type_str or 'u16' in type_str:
                         v = self.ramdump.read_u16(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
@@ -766,6 +769,10 @@ class FtraceParser_Event(object):
                         else:
                             action = softirq_action_list[v]
                         fmt_name_value_map['action'] = action
+                    if "rwmmio" in event_name and "caller" in item:
+                        symbol = self.ramdump.read_word(ftrace_raw_entry + offset)
+                        if symbol is not None:
+                            fmt_name_value_map[item] = self.ramdump.get_symbol_info1(symbol)
                     temp_a.append(v)
                     j = j + 1
                 temp = ""
