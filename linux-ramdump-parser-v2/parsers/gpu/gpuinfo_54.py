@@ -304,6 +304,13 @@ class GpuParser_54(RamParser):
         self.writeln(format_str.format(name, hex(kgsl_global_memdesc_base),
                                        hex(hostptr), str(size), hex(gpuaddr),
                                        str(flags)))
+        if (flags[2] != 's'):
+            filename = 'gpu_parser/globals/{0}.bin'.format(
+                name + '_' + hex(kgsl_global_memdesc_base))
+            file = dump.open_file(filename, 'wb')
+            data = dump.read_binarystring(hostptr, size)
+            file.write(data)
+            file.close()
 
     def prepare_global_memdesc_flags(self, memdesc_addr):
         '''
