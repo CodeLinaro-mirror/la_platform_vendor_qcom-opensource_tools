@@ -499,6 +499,7 @@ class FtraceParser_Event(object):
 
             self.ftrace_time_data[t].append(temp_data)
         elif event_name == "bprint":
+                MAX_LEN = 1000
                 print_entry_ip_offset = self.ramdump.field_offset('struct bprint_entry' , "ip")
                 print_entry_buf_offset = self.ramdump.field_offset('struct bprint_entry', "buf")
                 print_entry_fmt_offset = self.ramdump.field_offset('struct bprint_entry', "fmt")
@@ -508,12 +509,13 @@ class FtraceParser_Event(object):
                     print_entry_fmt = self.ramdump.read_u64(ftrace_raw_entry + print_entry_fmt_offset)
                 else:
                     print_entry_fmt = self.ramdump.read_u32(ftrace_raw_entry + print_entry_fmt_offset)
-                print_entry_fmt_data = self.ramdump.read_cstring(print_entry_fmt)
+                print_entry_fmt_data = self.ramdump.read_cstring(print_entry_fmt, MAX_LEN)
                 #print_ip_func = self.ramdump.read_cstring(print_ip)
 
                 function = self.ramdump.get_symbol_info1(print_ip)
+
                 """
-                ['%px', '%llx', '%ps', '%ps', '%ps', '%ps', '%ps', '%ps', '%ps']
+                ['%px', '%llx', '%ps', '%p']
                 Supported :
                     d for integers
                     f for floating-point numbers
@@ -524,40 +526,123 @@ class FtraceParser_Event(object):
                     e for floating-point in an exponent format
                 """
 
-                regex = re.compile("(%[a-z]+)")
+                regex = re.compile('%[\*]*[a-z]+')
                 length = 0
                 print_buffer = []
                 print_buffer_offset = ftrace_raw_entry + print_entry_buf_offset
-                for match in regex.finditer(print_entry_fmt_data):
-                    replacement = match.group()
-                    if 'x' in match.group():
-                        replacement = "%x"
-                    elif 's' in match.group():
-                        if 'p' in match.group():
-                            replacement = "%x"
-                        else:
-                            replacement = "%s"
-                    elif 'd' in match.group() or 'u' in match.group() or 'h' in match.group():
-                        replacement = "%d"
-                    elif 'f' in match.group():
-                        replacement = "%f"
-                    if replacement != match.group():
-                        print_entry_fmt_data = print_entry_fmt_data.replace(match.group(), replacement)
-                    length += 1
-                    if self.ramdump.arm64:
-                        print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
-                        print_buffer_offset += 8
-                    else:
-                        print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
-                        print_buffer_offset += 4
-                temp_data = "                {4}    {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                    local_timestamp / 1000000000.0,
-                                                                                                    function,print_entry_fmt_data% (
-                                                                                                    tuple(print_buffer)),
-                                                                                                    curr_com)
 
-                #t = local_timestamp / 1000000000.0
-                self.ftrace_time_data[t].append(temp_data)
+
+                if print_entry_fmt_data:
+                    for match in regex.finditer(print_entry_fmt_data):
+                        replacement = match.group()
+                        if 'c' in match.group():
+                            replacement = '%s'
+                            print_buffer.append(self.ramdump.read_byte(print_buffer_offset))
+                            print_buffer_offset += self.ramdump.sizeof('char')
+
+                        elif "%*pbl" in match.group():
+                            replacement = "%s"
+                            print_entry_fmt_data = print_entry_fmt_data.replace(match.group(), replacement)
+                            align = self.ramdump.sizeof("int") - 1
+
+                            #Read precision/width
+                            #print_buffer.append(self.ramdump.read_int(print_buffer_offset))
+                            print_buffer_offset += self.ramdump.sizeof('unsigned int')
+                            print_buffer_offset = (print_buffer_offset + (align)) & (~align)
+
+                            #Read bitmask
+                            nr_cpu_ids = self.ramdump.address_of("nr_cpu_ids")
+                            nr_cpu_ids = self.ramdump.read_u32(nr_cpu_ids)
+                            #NR_CPUS = self.ramdump.get_config_val("CONFIG_NR_CPUS")
+                            #bits_per_long = 8 * self.ramdump.sizeof('long')
+                            #array_size = int((NR_CPUS + bits_per_long - 1) / bits_per_long)
+                            #single element of long is enough to accomodate all cpus
+                            cpu_bits = self.ramdump.read_u64(print_buffer_offset)
+
+                            # Trim bits to valid mask only
+                            def getValidBits(num,k,p):
+                                 binary = bin(num)
+                                 binary = binary[2:]
+                                 end = len(binary) - p
+                                 start = end - k
+                                 return binary[start : end+1]
+                            cpu_bits = getValidBits(cpu_bits, nr_cpu_ids, 0)
+                            #print_buffer.append("{:b}".format(cpu_bits))
+                            print_buffer.append(cpu_bits)
+                            print_buffer_offset += self.ramdump.sizeof('unsigned long')
+                            print_buffer_offset = (print_buffer_offset + (align)) & (~align)
+                            continue
+
+                        elif 'ps' in match.group() or 'p' in match.group() or 'x' in match.group():
+                            replacement = "%x"
+                            if self.ramdump.arm64:
+                                print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
+                                print_buffer_offset += 8
+                            else:
+                                print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                                print_buffer_offset += 4
+
+                        elif 's' in match.group():
+                            replacement = "%s"
+                            sdata = self.ramdump.read_cstring(print_buffer_offset)
+                            print_buffer.append(sdata)
+                            print_buffer_offset = print_buffer_offset + len(sdata) + 1
+
+                        elif 'll' in match.group() or 'l' in match.group():
+                            replacement = "%d"
+                            if self.ramdump.arm64:
+                                print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
+                                print_buffer_offset += 8
+                            else:
+                                print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                                print_buffer_offset += 4
+
+                        elif 'h' in match.group():
+                            print_buffer.append(self.ramdump.read_u16(print_buffer_offset))
+                            print_buffer_offset += self.ramdump.sizeof('short')
+
+                        elif 'd' in match.group():
+                            replacement = "%d"
+                            if self.ramdump.arm64:
+                                print_buffer.append(self.ramdump.read_int(print_buffer_offset))
+                                print_buffer_offset += self.ramdump.sizeof('int')
+
+                        elif 'u' in match.group():
+                            replacement = "%d"
+                            if 'll' in match.group() or 'l' in match.group():
+                                if self.ramdump.arm64:
+                                    print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
+                                    print_buffer_offset += 8
+                                else:
+                                    print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                                    print_buffer_offset += 4
+                            else:
+                                print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                                print_buffer_offset += self.ramdump.sizeof('unsigned int')
+
+                        elif 'f' in match.group():
+                            replacement = "%f"
+                            print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                            print_buffer_offset += self.ramdump.sizeof('float')
+
+                        if replacement != match.group():
+                            print_entry_fmt_data = print_entry_fmt_data.replace(match.group(), replacement)
+
+                        length += 1
+                        align = self.ramdump.sizeof("int") - 1
+                        print_buffer_offset = (print_buffer_offset + (align)) & (~align)
+
+                try:
+                    temp_data = "                {4}    {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
+                                                                                                        local_timestamp / 1000000000.0,
+                                                                                                        function,print_entry_fmt_data% (
+                                                                                                        tuple(print_buffer)),
+                                                                                                        curr_com)
+                    self.ftrace_time_data[t].append(temp_data)
+                except Exception as err:
+                    temp_data = "Error parsing bprint event entry"
+                    return
+
         elif event_name == "print":
                 #print "ftrace_raw_entry = {0}".format(hex(ftrace_raw_entry))
                 print_entry_ip_offset = self.ramdump.field_offset('struct print_entry' , "ip")
@@ -628,8 +713,20 @@ class FtraceParser_Event(object):
                                 pr_f.append(str(ki).replace(" ",""))
                 for item,item_list in offset_data.items():
                     type_str,offset,size = item_list
-                    if 'long' in type_str or 'int' in type_str or 'u32' in type_str or 'bool' in type_str or 'pid_t' in type_str:
+                    if 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
+                        if self.ramdump.arm64:
+                            v = self.ramdump.read_u64(ftrace_raw_entry + offset)
+                        else:
+                            v = self.ramdump.read_u32(ftrace_raw_entry + offset)
+                        if "func" not in item:
+                            fmt_name_value_map[item] = hex(int(v))
+                        else:
+                            fmt_name_value_map[item] = v
+                    elif 'long' in type_str or 'int' in type_str or 'u32' in type_str or 'bool' in type_str or 'pid_t' in type_str:
                         v = self.ramdump.read_u32(ftrace_raw_entry + offset)
+                        fmt_name_value_map[item] = v
+                    elif 'u8' in type_str:
+                        v = self.ramdump.read_byte(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
                     elif 'const' in type_str and 'char *' in type_str:
                         v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
@@ -653,15 +750,6 @@ class FtraceParser_Event(object):
                     elif 'char' in type_str:
                         v = self.ramdump.read_byte(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
-                    elif 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
-                        if self.ramdump.arm64:
-                            v = self.ramdump.read_u64(ftrace_raw_entry + offset)
-                        else:
-                            v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                        if "func" not in item:
-                            fmt_name_value_map[item] = hex(int(v))
-                        else:
-                            fmt_name_value_map[item] = v
                     elif 'unsigned short' in type_str or 'u16' in type_str:
                         v = self.ramdump.read_u16(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
@@ -681,6 +769,10 @@ class FtraceParser_Event(object):
                         else:
                             action = softirq_action_list[v]
                         fmt_name_value_map['action'] = action
+                    if "rwmmio" in event_name and "caller" in item:
+                        symbol = self.ramdump.read_word(ftrace_raw_entry + offset)
+                        if symbol is not None:
+                            fmt_name_value_map[item] = self.ramdump.get_symbol_info1(symbol)
                     temp_a.append(v)
                     j = j + 1
                 temp = ""

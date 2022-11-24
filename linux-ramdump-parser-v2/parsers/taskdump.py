@@ -84,7 +84,7 @@ def dump_thread_group(ramdump, thread_group, task_out, taskhighlight_out, check_
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
-    if ramdump.kernel_version >= (5, 15, 0):
+    if ramdump.kernel_version >= (5, 14, 0):
         offset_state = ramdump.field_offset('struct task_struct', '__state')
     else:
         offset_state = ramdump.field_offset('struct task_struct', 'state')
@@ -367,7 +367,7 @@ def do_dump_task_timestamps(ramdump):
     no_of_cpus = ramdump.get_num_cpus()
 
     for i in range(0, no_of_cpus):
-        task_file = ramdump.open_file('tasks_sched_stats{0}.txt'.format(i))
+        task_file = ramdump.open_file('tasks_sched_stats/' + 'tasks_sched_stats{0}.txt'.format(i))
         task_out.append(task_file)
     if len(task_per_cpu_list) == 0:
         task_per_cpu_list = [[] for j in range(no_of_cpus)]
