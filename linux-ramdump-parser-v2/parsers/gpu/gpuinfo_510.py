@@ -17,6 +17,7 @@ import traceback
 from math import log2
 from parser_util import RamParser
 from parsers.gpu.gpu_snapshot import create_snapshot_from_ramdump
+from parsers.gpu.gpu_snapshot import extract_gmu_mem_from_snapshot
 from parsers.gpu.gpu_eventlog import parse_eventlog_buffer
 from print_out import print_out_str
 
@@ -1284,6 +1285,8 @@ class GpuParser_510(RamParser):
                                                   snapshot_size)
         file.write(data)
         file.close()
+
+        extract_gmu_mem_from_snapshot(dump, "gpu_parser/" + file_name)
 
     def dump_atomic_snapshot(self, dump):
         atomic_snapshot_addr = dump.struct_field_addr(self.devp,
