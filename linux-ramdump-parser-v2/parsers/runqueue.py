@@ -275,7 +275,7 @@ class RunQueues(RamParser):
             return
         no_of_cpus = self.ramdump.get_num_cpus()
         index = 0
-        while index < no_of_cpus:
+        for index in self.ramdump.iter_cpus():
             stack_addr = irq_stack_addr + self.ramdump.per_cpu_offset(index)
             if self.ramdump.arm64:
                 stack_addr = stack_addr & 0xffffffffffffffff
@@ -302,7 +302,6 @@ class RunQueues(RamParser):
                     if wname is not None:
                         print_out_str('0x{0:x}:{1}'.format(i, wname))
 
-            index = index + 1
 
     def parse(self):
         print_out_str(

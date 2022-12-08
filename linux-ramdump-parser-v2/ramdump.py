@@ -2778,7 +2778,7 @@ class RamDump():
         >>> list(dump.iter_cpus())
         [0, 1, 2, 3]
         """
-        return range(self.get_num_cpus())
+        return (self.available_cores)
 
     def is_thread_info_in_task(self):
         return self.is_config_defined('CONFIG_THREAD_INFO_IN_TASK')

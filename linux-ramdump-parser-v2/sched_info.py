@@ -77,8 +77,7 @@ def verify_active_cpus(ramdump):
     online_offset = ramdump.field_offset('struct rq', 'online')
 
     for i in ramdump.iter_cpus():
-        rq_addr = runqueues_addr + ramdump.per_cpu_offset(i)
-        online = ramdump.read_int(rq_addr + online_offset)
+        online = ramdump.read_int(runqueues_addr + online_offset, cpu=i)
         cpu_online_bits |= (online << i)
 
     if (cluster_id_off is None):
@@ -90,7 +89,7 @@ def verify_active_cpus(ramdump):
     #       find out cluster cpus dynamically.
 
     cluster_cpus = [0]
-    for j in range(0, nr_cpus):
+    for j in ramdump.iter_cpus():
         c_id = ramdump.read_int(cpu_topology_addr + (j * cpu_topology_size) + cluster_id_off)
         if len(cluster_cpus) <= c_id :
             cluster_cpus.extend([0])
@@ -138,9 +137,8 @@ def dump_rq_lock_information(ramdump):
         lock_owner_cpu_offset = ramdump.field_offset('struct rq', 'lock.owner_cpu')
     if lock_owner_cpu_offset:
         for i in ramdump.iter_cpus():
-            rq_addr = runqueues_addr + ramdump.per_cpu_offset(i)
-            lock_owner_cpu = ramdump.read_int(rq_addr + lock_owner_cpu_offset)
-            print_out_str("\n cpu {0} ->rq_lock owner cpu {1}".format(i,hex(lock_owner_cpu)))
+            lock_owner_cpu = ramdump.read_int(runqueues_addr + lock_owner_cpu_offset, cpu=i)
+            print_out_str("\n cpu {0} ->rq_lock owner cpu {1}".format(i, hex(lock_owner_cpu)))
         print_out_str("\n ")
 
 def dump_isolation_data(ramdump):
@@ -167,7 +165,7 @@ def dump_cpufreq_data(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
     print_out_str("\nCPU Frequency information:\n" + "-" * 10)
     for i in ramdump.iter_cpus():
-        cpu_data_addr = ramdump.read_u64(cpufreq_data_addr + ramdump.per_cpu_offset(i))
+        cpu_data_addr = ramdump.read_u64(cpufreq_data_addr, cpu=i)
         rq_addr = runqueues_addr + ramdump.per_cpu_offset(i)
 
         cur_freq = ramdump.read_structure_field(cpu_data_addr, 'struct cpufreq_policy', 'cur')
