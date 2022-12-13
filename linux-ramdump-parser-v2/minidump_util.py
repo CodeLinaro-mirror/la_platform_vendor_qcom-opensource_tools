@@ -123,11 +123,13 @@ def get_strings(buf, length):
         return nlist
 
 def generate_elf(outdir):
-        elfhd = os.path.join(outdir, "md_KELF_HEADER.BIN")
+        elfhd_old = os.path.join(outdir, "md_KELF_HEADER.BIN")
         elfhd_new = os.path.join(outdir, "md_KELF_HDR.BIN")
-        if os.path.exists(elfhd):
+        if os.path.exists(elfhd_old):
+            elfhd = elfhd_old
             fi = open(elfhd, "rb")
         elif os.path.exists(elfhd_new):
+            elfhd = elfhd_new
             fi = open(elfhd, "rb")
         else:
             print_out_str("ELF header binary is missing")

@@ -1438,11 +1438,10 @@ def get_wdog_timing(ramdump):
     if ramdump.is_config_defined('CONFIG_SMP'):
         runqueues_addr = ramdump.address_of('runqueues')
         online_offset = ramdump.field_offset('struct rq', 'online')
-
         for i in ramdump.iter_cpus():
-            rq_addr = runqueues_addr + ramdump.per_cpu_offset(i)
+            rq_addr = runqueues_addr + ramdump.per_cpu_offset(ramdump.available_cores[i])
             online = ramdump.read_int(rq_addr + online_offset)
-            runq_online_bits |= (online << i)
+            runq_online_bits |= (online << ramdump.available_cores[i])
 
     if (ramdump.kernel_version >= (4, 9, 0)):
         cpu_online_bits = ramdump.read_word('__cpu_online_mask')
@@ -1467,7 +1466,7 @@ def get_wdog_timing(ramdump):
             wdog_task, 'struct task_struct', 'sched_info.last_queued')
     logical_map_addr = ramdump.address_of('__cpu_logical_map')
     for i in range(0, ramdump.get_num_cpus()):
-        cpu_logical_map_addr = logical_map_addr + (i * 8)
+        cpu_logical_map_addr = logical_map_addr + (ramdump.available_cores[i] * 8)
         core_id = ramdump.read_u64(cpu_logical_map_addr)
         logical_map.append(core_id)
     print_out_str('Non-secure Watchdog data')
@@ -1490,7 +1489,7 @@ def get_wdog_timing(ramdump):
                 if (alive_cpus & 1):
                     alive_cpus = alive_cpus >> 1
                 else:
-                    print_out_str("CPU which didn't respond to pet: {0}".format(i))
+                    print_out_str("CPU which didn't respond to pet: {0}".format(ramdump.available_cores[i]))
                     break
 
         elif wdog_task_state == 0:
@@ -1529,7 +1528,7 @@ def get_wdog_timing(ramdump):
             'tick_broadcast_device next_event: {0:.6f}'.format(tick_bc_next_evt))
         for i in range(0, ramdump.get_num_cpus()):
             tick_cpu_device = ramdump.address_of(
-                'tick_cpu_device') + ramdump.per_cpu_offset(i)
+                'tick_cpu_device') + ramdump.per_cpu_offset(ramdump.available_cores[i])
             evt_dev = ramdump.read_structure_field(
                 tick_cpu_device, 'struct tick_device', 'evtdev')
             if evt_dev != 0:
@@ -1537,7 +1536,7 @@ def get_wdog_timing(ramdump):
                     evt_dev, 'struct clock_event_device', 'next_event')
                 next_event = ns_to_sec(next_event)
                 print_out_str(
-                    "CPU{0} tick_device next_event: {1:.6f}".format(i, next_event))
+                    "CPU{0} tick_device next_event: {1:.6f}".format(ramdump.available_cores[i], next_event))
     epoch_ns = ramdump.read_u64('cd.read_data[0].epoch_ns')
     epoch_cyc = ramdump.read_u64('cd.read_data[0].epoch_cyc')
     print_out_str('epoch_ns: {0}ns  epoch_cyc: {1}'.format(epoch_ns,epoch_cyc))
@@ -1548,11 +1547,11 @@ def get_wdog_timing(ramdump):
                         'struct msm_watchdog_data', 'ping_end')
         for i in range(0, ramdump.get_num_cpus()):
             ping_start_time = ramdump.read_u64(wdog_data_addr +
-                                                 ping_start_time_offset + i*8)
+                                                 ping_start_time_offset + ramdump.available_cores[i] * 8)
             ping_end_time = ramdump.read_u64(wdog_data_addr +
-                                                 ping_end_time_offset + i*8)
+                                                 ping_end_time_offset + ramdump.available_cores[i] * 8)
             print_out_str("CPU#{0} : ping_start: {1:.6f} : ping_end: {2:.6f}"
-                          .format(i, ns_to_sec(ping_start_time),
+                          .format(ramdump.available_cores[i], ns_to_sec(ping_start_time),
                                   ns_to_sec(ping_end_time)))
         timer_fired = ramdump.read_structure_field(
             wdog_data_addr, 'struct msm_watchdog_data', 'timer_fired')
