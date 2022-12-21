@@ -354,7 +354,7 @@ def extract_gmu_mem_from_snapshot(dump, snapshot_path):
 
             bin_filename = "gmu-section-" + str(gmu_mem_header.type) + "-" + \
                 str(hex(gmu_mem_header.gmuaddr_lower)) + ".snap.bin"
-            gmu_bin_file = dump.open_file("gpu_parser/gmu_parser/" +
+            gmu_bin_file = dump.open_file("gpu_parser/snapshot/gmu_t32/" +
                                           bin_filename, mode='wb')
 
             gmu_bin_file.write(data)
