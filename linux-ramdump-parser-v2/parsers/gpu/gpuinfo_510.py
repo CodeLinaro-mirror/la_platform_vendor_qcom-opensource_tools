@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -453,6 +453,10 @@ class GpuParser_510(RamParser):
         ft_policy = dump.read_structure_field(self.devp,
                                               'struct adreno_device',
                                               'ft_policy')
+        kgsl_mmu = dump.struct_field_addr(self.devp, 'struct kgsl_device',
+                                          'mmu')
+        pfpolicy = dump.read_structure_field(kgsl_mmu, 'struct kgsl_mmu',
+                                             'pfpolicy')
         long_ib_addr = dump.struct_field_addr(self.devp,
                                               'struct adreno_device',
                                               'long_ib_detect')
@@ -509,6 +513,7 @@ class GpuParser_510(RamParser):
         self.writeln('state: ' + str(state))
         self.writeln('requested_state: ' + str(requested_state))
         self.writeln('ft_policy: ' + str(ft_policy))
+        self.writeln('pfpolicy: ' + str(pfpolicy))
         self.writeln('long_ib_detect: ' + str(long_ib_detect))
         self.writeln('lm_enabled: ' + str(lm_enabled))
         self.writeln('acd_enabled: ' + str(acd_enabled))
