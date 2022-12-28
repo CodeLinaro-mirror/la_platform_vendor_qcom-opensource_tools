@@ -915,7 +915,7 @@ class RamDump():
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump):
+                if minidump_util.generate_elf(options.autodump, self.svm):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -970,7 +970,7 @@ class RamDump():
                     options.phys_offset))
             self.phys_offset = options.phys_offset
         self.s2_walk = False
-        if self.svm:
+        if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
             hyp_dump.vmtype = self.svm
