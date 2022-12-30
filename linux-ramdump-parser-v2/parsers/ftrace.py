@@ -40,7 +40,7 @@ class FtraceParser(RamParser):
         self.event_class = 'struct trace_event_class'
         self.trace_names = ["binder", "bootreceiver", "clock_reg", "kgsl-fence",
                             "memory", "mmc", "rproc_qcom", "suspend", "ufs",
-                            "usb", "wifi"]
+                            "usb", "wifi", "rwmmio"]
         self.whitelisted_trace_names =[]
         if len(self.ramdump.ftrace_args):
             self.whitelisted_trace_names = self.ramdump.ftrace_args
