@@ -1,4 +1,5 @@
 # Copyright (c) 2012-2017, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -122,11 +123,18 @@ def get_strings(buf, length):
         return nlist
 
 def generate_elf(outdir):
-        elfhd = os.path.join(outdir, "md_KELF_HEADER.BIN")
-        if not os.path.exists(elfhd):
+        elfhd_old = os.path.join(outdir, "md_KELF_HEADER.BIN")
+        elfhd_new = os.path.join(outdir, "md_KELF_HDR.BIN")
+        if os.path.exists(elfhd_old):
+            elfhd = elfhd_old
+            fi = open(elfhd, "rb")
+        elif os.path.exists(elfhd_new):
+            elfhd = elfhd_new
+            fi = open(elfhd, "rb")
+        else:
             print_out_str("ELF header binary is missing")
             return 1
-        fi = open(elfhd, "rb")
+
         outfile = os.path.join(outdir, "ap_minidump.elf")
         fo = open(outfile, "wb")
 

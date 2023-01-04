@@ -14,9 +14,13 @@ from print_out import print_out_str
 import struct
 import datetime
 import os
-from concurrent import futures
+import dmesglib
+import print_out
 
-class Logcat_base(RamParser):
+from concurrent import futures
+import traceback
+
+class Constants:
     LOG_NAME = [ "main", "radio", "events", "system", "crash", "stats", "security", "kernel"]
     #log id
     LOG_ID_MIN = 0
@@ -55,9 +59,188 @@ class Logcat_base(RamParser):
     EVENT_TYPE_LIST = 3
     EVENT_TYPE_FLOAT = 4
 
-    def __init__(self, ramdump, mmu):
+    NS_PER_SEC = 1000000000
+
+    def filter_pri_to_char(self, pri) :
+        if pri == self.ANDROID_LOG_VERBOSE:
+            return 'V'
+        elif pri == self.ANDROID_LOG_DEBUG:
+            return 'D'
+        elif pri == self.ANDROID_LOG_INFO:
+            return 'I'
+        elif pri == self.ANDROID_LOG_WARN:
+            return 'W'
+        elif pri == self.ANDROID_LOG_ERROR:
+            return 'E'
+        elif pri == self.ANDROID_LOG_FATAL:
+            return 'F'
+        elif pri == self.ANDROID_LOG_SILENT:
+            return 'S'
+        else:
+            return '?'
+
+class LogEntry(Constants):
+    def __init__(self):
+        self.tv_sec = 0
+        self.tv_nsec = 0
+        self.pid = 0
+        self.uid = 0
+        self.tid = 0
+        self.prior = self.ANDROID_LOG_INFO
+        self.tag = ""
+        self.msg = ""
+        self.is_binary = False
+        self.is_dmesg = False
+        self.tz_minuteswest = 0
+
+    def wallTime(self):
+        return self.tv_sec * self.NS_PER_SEC + self.tv_nsec
+
+    def format_time(self):
+        sec = self.tv_sec
+        nsec = self.tv_nsec
+        sec -= 60 * self.tz_minuteswest
+        nsec = str(nsec // 1000000)
+        nsec = str(nsec).zfill(3)
+        date = datetime.datetime.utcfromtimestamp(sec)
+        rtc_timestamp = date.strftime("%m-%d %H:%M:%S") + '.' + nsec
+        return rtc_timestamp
+
+    def set_msg(self, msg):
+        self.msg = msg
+
+    def content(self):
+        if self.is_dmesg and self.tag == "":
+            return  "%5d %5d %5d %c %-8.*s\n" % (
+                                self.uid, self.pid, self.tid, \
+                                self.filter_pri_to_char(self.prior), \
+                                len(self.msg), self.msg)
+        elif self.is_binary:
+            return  "%5d %5d %5d %c %s: %s\n" % (
+                                self.uid, self.pid, self.tid, \
+                                self.filter_pri_to_char(self.prior), \
+                                cleanupString(self.tag), \
+                                cleanupString(self.msg))
+        else:
+            preifx_line = "%5d %5d %5d %c %-8.*s: " % (
+                                self.uid, self.pid, self.tid, \
+                                self.filter_pri_to_char(self.prior), \
+                                len(self.tag), cleanupString(self.tag))
+            multilines = self.msg.split("\n")
+            if len(multilines) > 1:
+                ret = []
+                for line in multilines:
+                    if(len(cleanupString(line.strip())) > 0):
+                        ret.append(preifx_line + "%s\n" % cleanupString(line))
+                return ret
+            else:
+                return preifx_line + "%s\n" % cleanupString(self.msg.strip())
+
+    def __str__(self):
+        content = self.content()
+        if type(content) is str:
+            return "%s %s" % (self.format_time(), content)
+        else:
+            ret = ""
+            for item in content:
+                ret += "%s %s" % (self.format_time(), item)
+            return ret
+
+class LogEntry_Dmesg(LogEntry):
+    def __init__(self):
+        super().__init__()
+        self.mono_format = False
+        self.mono_tv_sec = 0
+        self.mono_tv_nsec = 0
+        self.msg_without_space = ""
+        self.is_dmesg = True
+
+    def set_msg(self, msg):
+        self.msg = msg
+        self.msg_without_space = msg.replace(" ", "")
+
+    def mono_time(self):
+        return self.mono_tv_sec * self.NS_PER_SEC + self.mono_tv_nsec
+
+    def is_same_content(self, other):
+        return self.msg_without_space.endswith(other.msg_without_space) or \
+            other.msg_without_space.endswith(self.msg_without_space)
+
+    def is_same_time(self, other):
+        return self.mono_tv_sec == other.mono_tv_sec and \
+            abs(self.mono_tv_nsec - other.mono_tv_nsec) <= 1000000
+
+    # self > other
+    def __cmp__(self,other):
+        if self.is_same_time(other) and \
+            self.is_same_content(other):
+            return 0
+        else:
+            return self.mono_time() - other.mono_time()
+
+    def __eq__(self, other):
+        return self.is_same_time(other) and \
+                self.is_same_content(other)
+
+    def __hash__(self):
+        walltime_nsec = self.wallTime()
+        walltime_msec = (int)(walltime_nsec / 1000000)
+        return hash(walltime_msec)*31 + hash(self.msg_without_space)
+
+    def set_mono_time(self, mono_nsec, wall_to_monotonic_tv_sec, wall_to_monotonic_tv_nsec):
+        self.mono_tv_sec = (int)(mono_nsec / self.NS_PER_SEC)
+        self.mono_tv_nsec = mono_nsec % self.NS_PER_SEC
+        self.tv_sec = self.mono_tv_sec + wall_to_monotonic_tv_sec
+        self.tv_nsec =  self.mono_tv_nsec + wall_to_monotonic_tv_nsec
+        if self.tv_nsec >= self.NS_PER_SEC:
+            self.tv_sec += 1
+            self.tv_nsec -= self.NS_PER_SEC
+
+    def set_rtc_time(self, tv_sec, tv_nsec, wall_to_monotonic_tv_sec, wall_to_monotonic_tv_nsec):
+        self.tv_sec = tv_sec
+        self.tv_nsec = tv_nsec
+
+        sec = tv_sec
+        nsec = tv_nsec
+        if nsec <= wall_to_monotonic_tv_nsec:
+            sec -=1
+            nsec = self.NS_PER_SEC + nsec - wall_to_monotonic_tv_nsec
+        else:
+            nsec = nsec - wall_to_monotonic_tv_nsec
+
+        if sec < wall_to_monotonic_tv_sec:
+            sec = 0
+            nsec = 0
+        else:
+            sec = sec - wall_to_monotonic_tv_sec
+
+        self.mono_tv_sec = sec
+        self.mono_tv_nsec = nsec
+
+    def format_full_time(self):
+        rtc_timestamp = self.format_time()
+        nsec = str(self.mono_tv_nsec // 1000)
+        nsec = str(nsec).zfill(6)
+        return rtc_timestamp + "[" + str(self.mono_tv_sec)+"."+str(nsec) + "]"
+
+    def __str__(self):
+        if self.mono_format:
+            content = self.content()
+            if type(content) is str:
+                return "%s %s" % (self.format_full_time(), content)
+            else:
+                ret = ""
+                for item in content:
+                    ret += "%s %s" % (self.format_time(), item)
+                return ret
+        else:
+            return super().__str__()
+
+class Logcat_base(RamParser, Constants):
+    def __init__(self, ramdump, mmu, logd_task):
         super().__init__(ramdump)
         self.mmu = mmu
+        self.logd_task = logd_task
         self.sizeUsed = {}
         self.maxSize = {}
         self.is_success = False
@@ -78,6 +261,74 @@ class Logcat_base(RamParser):
                     'struct timezone ', 'tz_minuteswest')
         self.tz_minuteswest = self.ramdump.read_s32(sys_tz_addr + tz_minuteswest_offset)
         print_out_str("struct timezone --> tz_minuteswest= "+str(self.tz_minuteswest)+"min")
+        print("struct timezone --> tz_minuteswest= "+str(self.tz_minuteswest)+"min")
+        self.wall_to_mono_found = False
+        self.wall_to_monotonic_tv_sec = 0
+        self.wall_to_monotonic_tv_nsec = 0
+        self.dmesg_list={}
+
+    def bss_start_addr(self):
+        offset_comm = self.ramdump.field_offset('struct task_struct', 'comm')
+        mm_offset = self.ramdump.field_offset('struct task_struct', 'mm')
+
+        mm_addr    = self.ramdump.read_word(self.logd_task + mm_offset)
+        mmap       = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'mmap')
+        logdmap    = mmap
+        start_data = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'start_data')
+        end_data   = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'end_data')
+
+        bss_start = None
+        # bss section is after data section
+        while logdmap != 0:
+            tmpstartVm = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_start')
+            tmpendVm   = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_end')
+
+            if (end_data > tmpstartVm) and (end_data < tmpendVm):
+                # android Q: 2 code vma + 2 data vma + 1bss, bss section is individual vma after end_data
+                if (start_data < tmpstartVm):
+                    logdmap   = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_next')
+                    bss_start = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_start')
+                else:
+                    # android R: 3 code vma and 1 data+bss vma, bss section is just after end_data,
+                    # data section is addr_length align and bss section is 8 bytes align
+                    bss_start = end_data
+
+                print_out_str("bss_start: 0x%x vma start 0x%x vma end 0x%x\n" %(bss_start, tmpstartVm, tmpendVm))
+                break
+            logdmap = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_next')
+        return bss_start, tmpendVm
+
+    #return offset of RTC to Mono
+    def findCorrection(self):
+        sec = 0
+        nsec = 0
+        found = False
+        correction_addr = 0
+        bss_start, bss_end = self.bss_start_addr()
+        if bss_start:
+            idx = 0
+            bss_size = bss_end - bss_start
+            while idx < bss_size:
+                if self.is_equal(bss_start + idx, 8, 3) and \
+                        self.is_equal(bss_start + idx + 8*2, 8, 7) and \
+                            self.is_equal(bss_start + idx + 8*4, 8, 5) and \
+                                self.is_equal(bss_start + idx + 8*6, 8, 4):
+                    correction_addr = bss_start + idx - 40
+                    sec = self.read_bytes(correction_addr, 4)
+                    nsec = self.read_bytes(correction_addr + 4, 4)
+                    found = True
+                    break
+                idx += 8
+
+        if found:
+            print_out_str(("Found &LogBuffer::Correction=0x%x LogBuffer::Correction=%ld.%ld") % (correction_addr, sec, nsec))
+        else:
+            print_out_str("&LogBuffer::Correction not found")
+        return found, sec, nsec
+
+    def is_equal(self, addr, lengh, value):
+        val = self.read_bytes(addr, lengh)
+        return val == value
 
     def read_bytes(self, addr, len):
         addr = self.mmu.virt_to_phys(addr)
@@ -118,32 +369,6 @@ class Logcat_base(RamParser):
             msg = msg + msg_binary
         return msg
 
-    def format_time(self, tv_sec, tv_nsec):
-        tv_nsec = str(tv_nsec // 1000000)
-        tv_nsec = str(tv_nsec).zfill(3)
-        tv_sec -= 60 * self.tz_minuteswest
-        date = datetime.datetime.utcfromtimestamp(tv_sec)
-        timestamp = date.strftime("%m-%d %H:%M:%S") + '.' + tv_nsec
-        return timestamp
-
-    def filter_pri_to_char(self, pri) :
-        if pri == self.ANDROID_LOG_VERBOSE:
-            return 'V'
-        elif pri == self.ANDROID_LOG_DEBUG:
-            return 'D'
-        elif pri == self.ANDROID_LOG_INFO:
-            return 'I'
-        elif pri == self.ANDROID_LOG_WARN:
-            return 'W'
-        elif pri == self.ANDROID_LOG_ERROR:
-            return 'E'
-        elif pri == self.ANDROID_LOG_FATAL:
-            return 'F'
-        elif pri == self.ANDROID_LOG_SILENT:
-            return 'S'
-        else:
-            return '?'
-
     def get_output_filename(self, log_id):
         if log_id >= self.LOG_ID_MIN and log_id <= self.LOG_ID_MAX:
             return "{}_{}.txt".format(self.__class__.__name__, self.LOG_NAME[log_id])
@@ -182,8 +407,8 @@ class Logcat_base(RamParser):
             msg = tmpmsg.decode('ascii', 'ignore').strip()
         return evt_type, msg, length
 
-    def process_log_and_save(self, _data):
-        ret=""
+    def process_log_and_save(self, _data, log_id):
+        ret=[]
         pos = 0
         while pos < len(_data):
             if pos +self.SIZEOF_LOG_ENTRY > len(_data):
@@ -203,23 +428,35 @@ class Logcat_base(RamParser):
                 break;
             msg = _data[pos:pos+msg_len-1] # last msg_len-1 bytes
             msgList = msg.decode('ascii', 'ignore').split('\0')
-            pos = pos+msg_len-1
-            timestamp = self.format_time(tv_sec, tv_nsec)
-            if len(msgList) >= 2 :
-                multilines = msgList[1].split("\n")
-                preifx_line = "%s %5d %5d %5d %c %-8.*s: " % (
-                    timestamp, uid, pid, tid, self.filter_pri_to_char(priority), len(msgList[0]),
-                    cleanupString(msgList[0].strip()))
-                if len(multilines) > 1:
-                    for line in multilines:
-                        if(len(cleanupString(line.strip())) > 0):
-                            ret += preifx_line + "%s\n" % cleanupString(line)
+            pos = pos + msg_len-1
+            if len(msgList) <2:
+                continue
+
+            try:
+                if log_id == self.LOG_ID_KERNEL:
+                    entry = LogEntry_Dmesg()
+                    entry.mono_format = self.wall_to_mono_found
+                    entry.set_rtc_time(tv_sec, tv_nsec, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec)
                 else:
-                    ret += preifx_line + "%s\n" % cleanupString(msgList[1].strip())
+                    entry = LogEntry()
+                    entry.tv_sec = tv_sec
+                    entry.tv_nsec = tv_nsec
+
+                entry.pid = pid
+                entry.uid = uid
+                entry.tid = tid
+                entry.prior = priority
+                entry.tag = cleanupString(msgList[0].strip())
+                entry.set_msg(msgList[1])
+                entry.tz_minuteswest = self.tz_minuteswest
+                ret.append(entry)
+            except Exception as result:
+                print_out_str(str(result))
+                traceback.print_exc()
         return ret
 
     def process_binary_log_and_save(self, _data):
-        ret=""
+        ret=[]
         pos = 0
         while pos < len(_data):
             if pos +self.SIZEOF_LOG_ENTRY > len(_data):
@@ -235,7 +472,6 @@ class Logcat_base(RamParser):
             tv_nsec = logEntry[5]
             msg_len = logEntry[6]
             priority = self.ANDROID_LOG_INFO
-            timestamp = self.format_time(tv_sec, tv_nsec)
             if pos + self.SIZEOF_HEADER_T > len(_data):
                 break
             tagidx = struct.unpack('<I', _data[pos : pos + self.SIZEOF_HEADER_T])[0] #4 bytes
@@ -245,11 +481,18 @@ class Logcat_base(RamParser):
             if evt_type == -1:
                 break
             if evt_type != self.EVENT_TYPE_LIST:
-                msg =str(tagidx) + ": " + tmpmsg
-                fmt_msg = "%s %5d %5d %5d %c %s\n" % (timestamp,
-                    uid, pid, tid, self.filter_pri_to_char(priority), cleanupString(msg))
-
-                ret += fmt_msg
+                entry = LogEntry()
+                entry.is_binary = True
+                entry.tv_sec = tv_sec
+                entry.tv_nsec = tv_nsec
+                entry.pid = pid
+                entry.uid = uid
+                entry.tid = tid
+                entry.prior = priority
+                entry.tag = str(tagidx)
+                entry.set_msg(tmpmsg)
+                entry.tz_minuteswest = self.tz_minuteswest
+                ret.append(entry)
                 continue #--> read next log entry
             if pos + self.SIZEOF_EVT_LIST_T > len(_data):
                 break
@@ -268,10 +511,19 @@ class Logcat_base(RamParser):
                 if i < evt_cnt -1:
                     msg = msg + ","
                 i = i+1
-            msg = str(tagidx) + ": [" + msg + "]"
-            fmt_msg = "%s %5d %5d %5d %c %s\n" % (timestamp,
-                    uid, pid, tid, self.filter_pri_to_char(priority), cleanupString(msg))
-            ret += fmt_msg
+
+            entry = LogEntry()
+            entry.is_binary = True
+            entry.tv_sec = tv_sec
+            entry.tv_nsec = tv_nsec
+            entry.pid = pid
+            entry.uid = uid
+            entry.tid = tid
+            entry.prior = priority
+            entry.tag = str(tagidx)
+            entry.set_msg("[" + msg + "]")
+            entry.tz_minuteswest = self.tz_minuteswest
+            ret.append(entry)
         return ret
 
     def process_work_chunk(self, _data, log_id, section, is_binary, write_active):
@@ -285,13 +537,16 @@ class Logcat_base(RamParser):
 
         ret = None
         if _data:
-            if is_binary:
-                ret = self.process_binary_log_and_save(_data)
-            else:
-                ret = self.process_log_and_save(_data)
-
+            try:
+                if is_binary:
+                    ret = self.process_binary_log_and_save(_data)
+                else:
+                    ret = self.process_log_and_save(_data, log_id)
+            except:
+                traceback.print_exc()
         return log_id, section, ret
 
+    # loglist is a dict type
     def save_log_to_file(self, loglist):
         if not loglist or len(loglist) == 0:
             return
@@ -299,6 +554,8 @@ class Logcat_base(RamParser):
             self.is_success = True
 
         for log_id in loglist.keys():
+            if log_id == self.LOG_ID_KERNEL and self.wall_to_mono_found:
+                continue
             sections  = loglist[log_id]
             if not sections:
                 continue
@@ -317,7 +574,100 @@ class Logcat_base(RamParser):
                     head="--------- beginning of {} section: {}\n".format(
                         self.LOG_NAME[log_id], str(section))
                     log_file.write(head)
-                    log_file.write(sections[section])
+                    for item in sections[section]:
+                        log_file.write(str(item))
+
+        if not self.wall_to_mono_found:
+            return
+        # start to combine dmesg
+        dmesgDict = []
+        if self.LOG_ID_KERNEL in loglist.keys():
+            sections = loglist[self.LOG_ID_KERNEL]
+            if sections:
+                for section in sorted(sections.keys()):
+                    dmesgDict.extend(sections[section])
+
+        filename = self.get_output_filename(self.LOG_ID_KERNEL)
+        log_file = self.ramdump.open_file(filename)
+
+        if len(dmesgDict) > 0:
+            head = "{} log buffer used: {}k   Max size:{}k\n".format(
+                self.LOG_NAME[self.LOG_ID_KERNEL],
+                round(self.sizeUsed[self.LOG_ID_KERNEL]/1024,1),
+                round(self.maxSize[self.LOG_ID_KERNEL]/1024,1))
+            log_file.write(head)
+
+        same_log_count = 0
+        log_added_count = 0
+        if len(self.dmesg_list) <= 0:
+            for item in dmesgDict:
+                log_file.write(str(item))
+        else:
+            self.combine_dmesg(dmesgDict, log_file)
+
+    def combine_dmesg(self, dmesgDict, log_file):
+        # compare dmesg with kernel log from logd
+        same_log_count = 0
+        log_added_count = 0
+
+        keys = sorted(self.dmesg_list)
+        dmesg_time_start = keys[0]
+
+        index = 0
+        for item in dmesgDict:
+            if item.mono_time() < dmesg_time_start:
+                log_file.write(str(item))
+            else:
+                should_delete = []
+                while index < len(keys):
+                    mono_time = keys[index]
+                    s_pid = self.dmesg_list[mono_time][0]
+                    s_line = self.dmesg_list[mono_time][1]
+                    entry = LogEntry_Dmesg()
+                    entry.mono_format = self.wall_to_mono_found
+                    entry.set_mono_time(mono_time, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec)
+                    entry.pid = s_pid
+                    entry.uid = 0
+                    entry.tid = s_pid
+                    entry.set_msg(cleanupString(s_line))
+                    entry.tz_minuteswest = self.tz_minuteswest
+                    cmpval = item.__cmp__(entry)
+                    if cmpval > 0: # time before
+                        log_added_count += 1
+                        index += 1
+                        log_file.write(str(entry))
+                        should_delete.append(mono_time)
+                        continue
+                    elif cmpval == 0:
+                        index += 1
+                        same_log_count += 1
+                        should_delete.append(mono_time)
+                        continue
+                    else:
+                        log_file.write(str(item))
+                        break
+                for time in should_delete:
+                    del self.dmesg_list[time]
+
+        for mono_time in self.dmesg_list:
+            s_pid = self.dmesg_list[mono_time][0]
+            s_line = self.dmesg_list[mono_time][1]
+            entry = LogEntry_Dmesg()
+            entry.mono_format = self.wall_to_mono_found
+            entry.set_mono_time(mono_time, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec)
+
+            entry.pid = s_pid
+            entry.uid = 0
+            entry.tid = s_pid
+            entry.set_msg(cleanupString(s_line))
+            entry.tz_minuteswest = self.tz_minuteswest
+            log_added_count += 1
+            log_file.write(str(entry))
+        print_out_str("Total dmesg log count %d, same count %d, added count %d" % \
+                    (len(self.dmesg_list), same_log_count, log_added_count))
+
+    def read_dmesg(self):
+        self.dmesg_list = dmesglib.DmesgLib(self.ramdump, print_out.out_file).get_dmesg_as_dict()
 
     def process_chunklist_and_save(self, logchunk_list_addr):
         log_id = 0
@@ -373,17 +723,20 @@ class Logcat_base(RamParser):
             else:
                 sections = {}
                 loglist[log_id] = sections
+
             sections[section] = ret
+
+
         self.save_log_to_file(loglist)
+
 
 class Logcat_v3(Logcat_base):
     def __init__(self, ramdump, mmu, logd_task):
-        super().__init__(ramdump, mmu)
-        self.task = logd_task
+        super().__init__(ramdump, mmu, logd_task)
 
     def get_logbuffer_addr(self):
         stack_offset = self.ramdump.field_offset('struct task_struct', 'stack')
-        stack_addr = self.ramdump.read_word(self.task + stack_offset)
+        stack_addr = self.ramdump.read_word(self.logd_task + stack_offset)
         pt_regs_size = self.ramdump.sizeof('struct pt_regs')
         pt_regs_addr = self.ramdump.thread_size + stack_addr - pt_regs_size
         user_regs_addr = pt_regs_addr + self.ramdump.field_offset('struct pt_regs', 'user_regs')
@@ -413,18 +766,24 @@ class Logcat_v3(Logcat_base):
         return logbuf_addrs
 
     def parse(self):
+        self.read_dmesg()
+        self.wall_to_mono_found, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec = self.findCorrection()
         logbuf_addrs = self.get_logbuffer_addr()
         for __logbuf_addr in logbuf_addrs:
             logchunk_list_addr = __logbuf_addr + 0x60
-            self.process_chunklist_and_save(logchunk_list_addr)
+            try:
+                self.process_chunklist_and_save(logchunk_list_addr)
+            except:
+                traceback.print_exc()
             if self.is_success:
                 print_out_str("logbuf_addr = 0x%x" %(__logbuf_addr))
                 break
+
         return self.is_success
 
 class Logcat_vma(Logcat_base):
-    def __init__(self, ramdump, mmu, bin_file):
-        super().__init__(ramdump, mmu)
+    def __init__(self, ramdump, mmu, logd_task, bin_file):
+        super().__init__(ramdump, mmu, logd_task)
         self.bin_file = bin_file
         self.HEAD_SIZE = 32
         self.vmas = []
@@ -540,6 +899,7 @@ class Logcat_vma(Logcat_base):
         return False, 0
 
     def parse(self):
+        self.read_dmesg()
         startTime = datetime.datetime.now()
         self.get_all_vmas()
         # find address of std::list<SerializedLogChunk>
@@ -557,7 +917,6 @@ class Logcat_vma(Logcat_base):
             print_out_str("There is no valid log in logbuf_addr = 0x%x" %(chunklist_addr-0x60))
             return False
         # start parsing
-        print("LogBuffer address",hex(chunklist_addr-0x60))
         self.process_chunklist_and_save(chunklist_addr)
         print_out_str("logbuf_addr = 0x%x" %(chunklist_addr-0x60))
         print("logcat_vma parse logcat cost "+str((datetime.datetime.now()-startTime).total_seconds())+" s")
