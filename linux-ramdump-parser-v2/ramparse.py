@@ -71,6 +71,7 @@ def get_ftrace_args(option, opt, value, parser):
 
 
 if __name__ == '__main__':
+    starttime = time.time()
     usage = 'usage: %prog [options to print]. Run with --help for more details'
     parser = OptionParser(usage)
     parser.add_option('', '--print-watchdog-time', action='store_true',
@@ -145,6 +146,9 @@ if __name__ == '__main__':
     parser.add_option('', '--wlan', dest='wlan', help='wlan.ko path')
     parser.add_option('', '--minidump', action='store_true', dest='minidump',
                       help='Parse minidump')
+    # Adding option for reduced dump
+    parser.add_option('', '--reduceddump', action='store_true', dest='reduceddump',
+                  help='Parse reduceddump')
     parser.add_option('', '--svm', default='', dest='svm',action='store',type="string",
                       help='Parse svm')
     parser.add_option('', '--ram-elf', dest='ram_elf_addr',
@@ -186,6 +190,16 @@ if __name__ == '__main__':
                           action='store_true')
 
     (options, args) = parser.parse_args()
+    if options.reduceddump:
+        try:
+            import ramreduction_util as elfutil
+        except ImportError as ierr:
+            print("Missing PyElftools library. Check README")
+            sys.exit(1)
+        except Exception as err:
+            print("{}".format(str(err)))
+            sys.exit(1)
+
     if options.minidump:
         default_list = []
         default_list.append("Schedinfo")
@@ -199,6 +213,7 @@ if __name__ == '__main__':
         default_list.append("RunQueues")
         default_list.append("PStore")
         default_list.append("Kconfig")
+        default_list.append("ThermalTemp")
 
     if options.outdir:
         if not os.path.exists(options.outdir):
@@ -262,8 +277,12 @@ if __name__ == '__main__':
 
     print_out_str('using vmlinux file {0}'.format(options.vmlinux))
 
-    if options.ram_addr is None and options.autodump is None and not options.minidump:
+    if options.ram_addr is None and options.autodump is None and not options.minidump and not options.reduceddump:
         print_out_str('Need one of --auto-dump or at least one --ram-file')
+        sys.exit(1)
+
+    if options.reduceddump and not options.autodump:
+        print_out_str('Need autodump with --reduceddump option')
         sys.exit(1)
 
     if options.ram_addr is not None:
@@ -439,6 +458,9 @@ if __name__ == '__main__':
                       or (options.everything and not p.optional)]
     if options.timeout:
         from func_timeout import func_timeout, FunctionTimedOut
+
+    print_out_str("Time taken to setup the subparsers run : {}".format(time.time()-starttime))
+    starttime = time.time()
     for i,p in enumerate(parsers_to_run):
         if i == 0:
             sys.stderr.write("\n")
@@ -478,3 +500,8 @@ if __name__ == '__main__':
     if options.t32launcher or options.everything or options.minidump:
         dump.create_t32_launcher()
 
+    dump.gdbmi.close()
+    print_out_str("Time taken to complete ramparser subscripts : {}".format(time.time()-starttime))
+    if options.reduceddump:
+        print_out_str("Number of cache hits on full cache : {}".format(elfutil.cachehits))
+        print_out_str("Number of cache misses on full cache : {}".format(elfutil.cachemiss))
