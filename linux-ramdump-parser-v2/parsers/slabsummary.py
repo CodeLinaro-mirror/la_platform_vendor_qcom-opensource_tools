@@ -1,4 +1,5 @@
 # Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -113,7 +114,7 @@ class Slabinfo_summary(RamParser):
                         slab_node_addr,
                         'struct kmem_cache_node', 'nr_slabs')
             # per cpu slab
-            for i in range(0, cpus):
+            for i in self.ramdump.iter_cpus():
                 cpu_slabn_addr = self.ramdump.read_word(
                                             cpu_slab_addr, cpu=i)
                 if cpu_slabn_addr == 0 or cpu_slabn_addr is None:
