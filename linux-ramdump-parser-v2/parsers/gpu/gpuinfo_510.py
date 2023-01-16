@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -16,7 +16,9 @@ import traceback
 
 from math import log2
 from parser_util import RamParser
+from parsers.gpu.gmu_info import generate_gmu_t32_files
 from parsers.gpu.gpu_snapshot import create_snapshot_from_ramdump
+from parsers.gpu.gpu_snapshot import extract_gmu_mem_from_snapshot
 from parsers.gpu.gpu_eventlog import parse_eventlog_buffer
 from print_out import print_out_str
 
@@ -242,9 +244,9 @@ class GpuParser_510(RamParser):
         self.writeln()
 
     def parse_globals(self, dump):
-        format_str = '{0:30} {1:30} {2:20} {3:30} {4:12}'
-        self.writeln(format_str.format("NAME", "MEMDESC_ADDR", "MEMDESC_SIZE",
-                                       "GPUADDR", "FLAGS"))
+        format_str = '{0:30} {1:30} {2:30} {3:20} {4:30} {5:12}'
+        self.writeln(format_str.format("NAME", "MEMDESC_ADDR", "HOSTPTR",
+                                       "MEMDESC_SIZE", "GPUADDR", "FLAGS"))
         node_addr = dump.struct_field_addr(self.devp, 'struct kgsl_device',
                                            'globals')
         list_elem_offset = dump.field_offset('struct kgsl_global_memdesc',
@@ -264,12 +266,22 @@ class GpuParser_510(RamParser):
         if name is None or gpuaddr == 0:
             return
 
+        hostptr = dump.read_structure_field(kgsl_global_memdesc_base,
+                                            'struct kgsl_memdesc', 'hostptr')
         size = dump.read_structure_field(kgsl_global_memdesc_base,
                                          'struct kgsl_memdesc', 'size')
         flags = self.prepare_global_memdesc_flags(kgsl_global_memdesc_base)
 
         self.writeln(format_str.format(name, hex(kgsl_global_memdesc_base),
-                                       str(size), hex(gpuaddr), str(flags)))
+                                       hex(hostptr), str(size), hex(gpuaddr),
+                                       str(flags)))
+        if (flags[2] != 's'):
+            filename = 'gpu_parser/globals/{0}.bin'.format(
+                name + '_' + hex(kgsl_global_memdesc_base))
+            file = dump.open_file(filename, 'wb')
+            data = dump.read_binarystring(hostptr, size)
+            file.write(data)
+            file.close()
 
     def prepare_global_memdesc_flags(self, memdesc_addr):
         '''
@@ -441,6 +453,10 @@ class GpuParser_510(RamParser):
         ft_policy = dump.read_structure_field(self.devp,
                                               'struct adreno_device',
                                               'ft_policy')
+        kgsl_mmu = dump.struct_field_addr(self.devp, 'struct kgsl_device',
+                                          'mmu')
+        pfpolicy = dump.read_structure_field(kgsl_mmu, 'struct kgsl_mmu',
+                                             'pfpolicy')
         long_ib_addr = dump.struct_field_addr(self.devp,
                                               'struct adreno_device',
                                               'long_ib_detect')
@@ -497,6 +513,7 @@ class GpuParser_510(RamParser):
         self.writeln('state: ' + str(state))
         self.writeln('requested_state: ' + str(requested_state))
         self.writeln('ft_policy: ' + str(ft_policy))
+        self.writeln('pfpolicy: ' + str(pfpolicy))
         self.writeln('long_ib_detect: ' + str(long_ib_detect))
         self.writeln('lm_enabled: ' + str(lm_enabled))
         self.writeln('acd_enabled: ' + str(acd_enabled))
@@ -567,6 +584,23 @@ class GpuParser_510(RamParser):
         self.writeln('count: ' + str(count))
         self.writeln('preempt_level: ' + str(preempt_level))
 
+    def parse_dispatcher_queues(self, arr_base, shift, queue_name):
+        self.write(queue_name + ': ')
+        active_jobs = False
+        for i in range(16):
+            first = self.ramdump.read_structure_field(
+                                arr_base, 'struct llist_head', 'first')
+            if first != 0:
+                if not active_jobs:
+                    self.writeln('')
+                self.writeln('\t' + queue_name + '[' + str(i) +
+                             '].first: ' + strhex(first))
+                active_jobs = True
+            arr_base += shift
+
+        if not active_jobs:
+            self.writeln('0x0')
+
     def parse_dispatcher_data(self, dump):
         dispatcher_addr = dump.struct_field_addr(self.devp,
                                                  'struct adreno_device',
@@ -577,26 +611,17 @@ class GpuParser_510(RamParser):
         jobs_base_addr = dump.struct_field_addr(dispatcher_addr,
                                                 'struct adreno_dispatcher',
                                                 'jobs')
+        requeue_base_addr = dump.struct_field_addr(dispatcher_addr,
+                                                   'struct adreno_dispatcher',
+                                                   'requeue')
         fault_counter = dump.read_structure_field(dispatcher_addr,
                                                   'struct adreno_dispatcher',
                                                   'fault')
 
         self.writeln('inflight: ' + str(inflight))
         shift = dump.sizeof('struct llist_head')
-        self.write('jobs: ')
-        active_jobs = False
-        for i in range(16):
-            first = dump.read_structure_field(jobs_base_addr,
-                                              'struct llist_head', 'first')
-            if first != 0:
-                if not active_jobs:
-                    self.writeln('')
-                self.writeln('\tjobs[' + str(i) + '].first: ' + strhex(first))
-                active_jobs = True
-
-            jobs_base_addr += shift
-        if not active_jobs:
-            self.writeln('0x0')
+        self.parse_dispatcher_queues(jobs_base_addr, shift, 'jobs')
+        self.parse_dispatcher_queues(requeue_base_addr, shift, 'requeue')
         self.writeln('fault_counter: ' + str(fault_counter))
 
     def parse_rb_inflight_data(self, dump):
@@ -1023,11 +1048,11 @@ class GpuParser_510(RamParser):
                      + str(kgsl_sync_timeline_kref_counter))
 
     def parse_open_process_data(self, dump):
-        format_str = '{0:10} {1:20} {2:20} {3:30} {4:20} {5:20} {6:20}'
+        format_str = '{0:10} {1:20} {2:20} {3:30} {4:20} {5:20} {6:10} {7:20}'
         self.writeln(format_str.format("PID", "PNAME", "PROCESS_PRIVATE_PTR",
                                        "KGSL_PAGETABLE_ADDRESS",
                                        "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
-                                       "CTX_CNT"))
+                                       "CTX_CNT", "CMDLINE STRING"))
 
         node_addr = dump.read('kgsl_driver.process_list.next')
         list_elem_offset = dump.field_offset(
@@ -1061,10 +1086,17 @@ class GpuParser_510(RamParser):
         ctxt_count = dump.read_structure_field(kgsl_private_base_addr,
                                                'struct kgsl_process_private',
                                                'ctxt_count')
+        cmdline_offset = dump.field_offset('struct kgsl_process_private',
+                                           'cmdline')
+        cmdline_string = dump.read_cstring(dump.read_pointer(
+                                           kgsl_private_base_addr +
+                                           cmdline_offset))
+
         self.writeln(format_str.format(
             str(upid), str(pname), hex(kgsl_private_base_addr),
             hex(kgsl_pagetable_address), str_convert_to_kb(kgsl_mem),
-            str_convert_to_kb(dmabuf_mem), str(ctxt_count)))
+            str_convert_to_kb(dmabuf_mem), str(ctxt_count),
+            str(cmdline_string)))
 
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20}'
@@ -1259,6 +1291,9 @@ class GpuParser_510(RamParser):
                                                   snapshot_size)
         file.write(data)
         file.close()
+
+        extract_gmu_mem_from_snapshot(dump, "gpu_parser/" + file_name)
+        generate_gmu_t32_files(dump)
 
     def dump_atomic_snapshot(self, dump):
         atomic_snapshot_addr = dump.struct_field_addr(self.devp,

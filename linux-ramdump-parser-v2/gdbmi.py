@@ -66,6 +66,7 @@ class GdbMI(object):
         self._cache = {}
         self._gdbmi = None
         self.mod_table = None
+        self.gdbmi_aslr_offset = 0
 
     def open(self):
         """Open the connection to the ``gdbmi`` backend. Not needed if using
@@ -202,6 +203,26 @@ class GdbMI(object):
         """Return GDB version"""
         return self._run_for_first('show version')
 
+    def set_gdbmi_aslr_offset(self):
+        """set gdb aslr offset"""
+        try:
+            lines = self._run('maintenance info sections').lines
+            for line in lines:
+                if re.search(".head.text ALLOC", line):
+                    text_addr = int(self._run_for_one('print /x &_text').split(' ')[-1], 16)
+                    if len(line.split("->")[0]) > 1 :
+                        head_text_addr =  int(line.split("->")[0].split() [-1], 16)
+                    else:
+                        head_text_addr = int(line.split("->")[0], 16)
+                    aslr_offset = head_text_addr - text_addr
+                    if aslr_offset != 0:
+                        self.gdbmi_aslr_offset = aslr_offset
+                    print_out_str("gdbmi_aslr_offset : 0x{0:x}".format(self.gdbmi_aslr_offset))
+                    break
+        except Exception as err:
+            print (err)
+            self.gdbmi_aslr_offset = 0
+
     def setup_aarch(self,type):
         self.aarch_set = True
         cmd = 'set architecture ' + type
@@ -294,7 +315,7 @@ class GdbMI(object):
         '0xc0b0006a'
         """
         result = self._run_for_one('print /x &{0}'.format(symbol))
-        return int(result.split(' ')[-1], 16) + self.kaslr_offset
+        return int(result.split(' ')[-1], 16) + self.kaslr_offset + self.gdbmi_aslr_offset
 
     def get_symbol_info(self, address):
         """Returns a GdbSymbol representing the nearest symbol found at

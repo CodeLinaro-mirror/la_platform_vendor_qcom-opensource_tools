@@ -800,6 +800,7 @@ class RamDump():
         self.kimage_vaddr_va = None
         self.datatype_dict = {}
         self.enum_data = {}
+        self.available_cores = []
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -822,7 +823,7 @@ class RamDump():
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
                         0)
             self.gdbmi.open()
-
+        self.gdbmi.set_gdbmi_aslr_offset()
         self.page_offset = 0xc0000000
         self.thread_size = 8192
         self.qtf_path = options.qtf_path
@@ -914,7 +915,7 @@ class RamDump():
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump):
+                if minidump_util.generate_elf(options.autodump, self.svm):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -969,7 +970,7 @@ class RamDump():
                     options.phys_offset))
             self.phys_offset = options.phys_offset
         self.s2_walk = False
-        if self.svm:
+        if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
             hyp_dump.vmtype = self.svm
@@ -1033,7 +1034,7 @@ class RamDump():
             if self.kimage_voffset is not None:
                 self.kimage_voffset = self.kimage_vaddr - self.phys_offset
                 self.modules_end = self.kimage_vaddr
-                if not (options.phys_offset or self.minidump):
+                if not (options.phys_offset or self.minidump or self.svm):
                     phys_offset_dyn = self.determine_phys_offset()
                     if phys_offset_dyn:
                         print_out_str("Dynamically determined phys offset is"
@@ -1144,6 +1145,8 @@ class RamDump():
                 self.dump_global_symbol_lookup_table()
 
         mm_init(self)
+        self.set_available_cores()
+
 
     def get_section_address(self,section):
         """
@@ -2742,17 +2745,30 @@ class RamDump():
             per_cpu_offset_addr, 'unsigned long', cpu)
         return self.read_slong(per_cpu_offset_addr_indexed)
 
-    def get_num_cpus(self):
-        """Gets the number of CPUs in the system."""
+
+    def set_available_cores(self):
+        """set available core numbers in the system."""
         major, minor, patch = self.kernel_version
         cpu_present_bits_addr = self.address_of('cpu_present_bits')
         cpu_present_bits = self.read_word(cpu_present_bits_addr)
-
+        ind = 0
         if (major, minor) >= (4, 5):
             cpu_present_bits_addr = self.address_of('__cpu_present_mask')
             bits_offset = self.field_offset('struct cpumask', 'bits')
             cpu_present_bits = self.read_word(cpu_present_bits_addr + bits_offset)
-        return bin(cpu_present_bits).count('1')
+        self.available_cores.clear()
+        while cpu_present_bits:
+            if cpu_present_bits & 1:
+                self.available_cores.append(ind)
+            cpu_present_bits = cpu_present_bits >> 1
+            ind += 1
+
+
+    def get_num_cpus(self):
+        """Gets the number of CPUs in the system."""
+        if not(len(self.available_cores)):
+            self.set_available_cores()
+        return len(self.available_cores)
 
     def iter_cpus(self):
         """Returns an iterator over all CPUs in the system.
@@ -2762,7 +2778,7 @@ class RamDump():
         >>> list(dump.iter_cpus())
         [0, 1, 2, 3]
         """
-        return range(self.get_num_cpus())
+        return (self.available_cores)
 
     def is_thread_info_in_task(self):
         return self.is_config_defined('CONFIG_THREAD_INFO_IN_TASK')
@@ -3595,7 +3611,7 @@ class RamDump():
 
         :return: The data read from the dumps.
         """
-        ptr_address = self.__resolve_virt(ptr_addr_or_name)
+        ptr_address = self.resolve_virt(ptr_addr_or_name)
         if ptr_address is None:
             if isinstance(ptr_addr_or_name, str):
                 raise SymbolNotFound(ptr_addr_or_name + " symbol not found")
