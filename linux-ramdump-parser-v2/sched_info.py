@@ -32,7 +32,9 @@ def mask_bitset_pos(cpumask):
 
 def cpu_isolation_mask(ramdump):
     cpu_isolated_bits = 0
-    if (ramdump.kernel_version >= (5, 10, 0)):
+    if (ramdump.kernel_version >= (5, 15, 0)):
+        cpu_isolated_bits = ramdump.read_word('__cpu_halt_mask')
+    elif (ramdump.kernel_version >= (5, 10, 0)):
         #Isolation replaced with pause feature.
         cpuhp_state_addr = ramdump.address_of('cpuhp_state')
         pause_state = ramdump.gdbmi.get_value_of('CPUHP_AP_ACTIVE') - 1
