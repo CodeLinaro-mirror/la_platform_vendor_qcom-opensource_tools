@@ -687,7 +687,7 @@ class DebugImage_v2():
             'msm_dump_type', 2)
         cpus = ram_dump.get_num_cpus()
         # per cpu entries
-        for i in range(0, cpus):
+        for i in ram_dump.iter_cpus():
 
                 self.dump_data_id_lookup_table[
                     client.MSM_DUMP_DATA_CPU_CTX + i] = 'MSM_DUMP_DATA_CPU_CTX'
@@ -749,7 +749,7 @@ class DebugImage_v2():
             client.MSM_DUMP_DATA_LOG_BUF_FIRST_IDX] = 'MSM_DUMP_DATA_LOG_BUF_FIRST_IDX'
         self.dump_data_id_lookup_table[
             client.MSM_DUMP_DATA_MHM] = 'MSM_DUMP_DATA_MHM'
-        for i in range(0, cpus):
+        for i in ram_dump.iter_cpus():
             self.dump_data_id_lookup_table[client.MSM_DUMP_DATA_L2_TLB + i] = 'MSM_DUMP_DATA_L2_TLB'
 
         if not ram_dump.minidump or (ram_dump.minidump and ram_dump.kernel_version > (5,10,0)):
