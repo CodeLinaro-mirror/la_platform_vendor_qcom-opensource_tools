@@ -47,7 +47,7 @@ class IrqParse(RamParser):
         irq_desc_entry_size = ram_dump.sizeof('irq_desc[0]')
         cpu_str = ''
 
-        for i ram_dump.iter_cpus():
+        for i in ram_dump.iter_cpus():
             cpu_str = cpu_str + '{0:10} '.format('CPU{0}'.format(i))
 
         print_out_str('{0:4} {1:12} {2:10} {3} {4:30} {5:10}'
