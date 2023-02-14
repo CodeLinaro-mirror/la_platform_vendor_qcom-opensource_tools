@@ -2306,6 +2306,12 @@ class RamDump():
         #print "hex of address in get_symbol_info1 {0}".format(hex(addr1))
         addr1, desc = self.step_through_jump_table(addr1)
         symbol_obj =  self.gdbmi.get_symbol_info(addr1)
+        module = symbol_obj.section.split('\\\\')[-1]
+        if self.minidump:
+            if module == 'vmlinux':
+                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset)
+            else:
+                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset) + " [" + module + "]"
         return symbol_obj.symbol + desc
 
     def type_of(self, symbol):
@@ -2407,6 +2413,16 @@ class RamDump():
         high = len(self.lookup_table) - 1
 
         addr, desc = self.step_through_jump_table(addr)
+
+        if self.minidump:
+            symbol_str = self.get_symbol_info1(addr)
+            words = symbol_str.split(" ")
+            symbol = words[0]
+            offset = words[1]
+            if len(words) == 3:
+                module = words[2]
+                return (symbol + ' ' + module, int(offset))
+            return (symbol, int(offset))
 
         if addr is None or addr < table[low][0] or addr > table[high][0]:
             return None
