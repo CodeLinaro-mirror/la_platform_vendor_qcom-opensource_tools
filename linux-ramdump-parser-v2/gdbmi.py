@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -121,7 +121,9 @@ class GdbMI(object):
         for mod in self.mod_table.module_table:
             if not mod.get_sym_path():
                 continue
-            load_mod_sym_cmd = ['add-symbol-file', mod.get_sym_path().replace('\\', '\\\\'), '0x{:x}'.format(mod.module_offset - self.kaslr_offset)]
+            load_mod_sym_cmd = ['add-symbol-file', mod.get_sym_path().replace('\\', '\\\\')]
+            if ".text" not in mod.section_offsets.keys():
+                load_mod_sym_cmd += ['0x{:x}'.format(mod.module_offset - self.kaslr_offset)]
             for segment, offset in mod.section_offsets.items():
                 load_mod_sym_cmd += ['-s', segment, '0x{:x}'.format(offset - self.kaslr_offset) ]
             self._run(' '.join(load_mod_sym_cmd))
