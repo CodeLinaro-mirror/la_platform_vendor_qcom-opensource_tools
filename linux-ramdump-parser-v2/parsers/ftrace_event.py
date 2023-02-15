@@ -85,7 +85,7 @@ class FtraceParser_Event(object):
             'struct ring_buffer_event', 'time_delta')
         self.rb_event_typelen_offset = self.ramdump.field_offset(
             'struct ring_buffer_event', 'type_len')
-        self.trace_entry_offset = self.ramdump.field_offset('struct trace_entry ', 'type')
+        self.trace_entry_type_offset = self.ramdump.field_offset('struct trace_entry ', 'type')
 
     def parse_buffer_page_entry(self,buffer_page_entry):
         buffer = None
@@ -104,103 +104,109 @@ class FtraceParser_Event(object):
         tr_event_type = None
         commit = 0
         buffer = buffer_page_entry
-        #print "buffer = {0}".format(hex(buffer))
-        #buffer_page_real_end_offset = self.ramdump.field_offset(
-        #    'struct buffer_page ', 'real_end')
-        #buffer_page_data_page_offset = self.ramdump.field_offset(
-        #    'struct buffer_page ', 'page')
         real_end = self.ramdump.read_u32(buffer + self.buffer_page_real_end_offset)
         if self.ramdump.arm64:
             buffer_data_page = self.ramdump.read_u64(buffer + self.buffer_page_data_page_offset)
         else:
             buffer_data_page = self.ramdump.read_u32(buffer + self.buffer_page_data_page_offset)
-        #print "buffer_data_page = {0}".format(hex(buffer_data_page))
 
-
-        #buffer_data_page_commit_offset = self.ramdump.field_offset(
-        #    'struct buffer_data_page ', 'commit')
         if self.ramdump.arm64:
             buffer_data_page_commit = self.ramdump.read_u64(buffer_data_page + self.buffer_data_page_commit_offset)
         else:
             buffer_data_page_commit = self.ramdump.read_u32(buffer_data_page + self.buffer_data_page_commit_offset)
-        #print "buffer_data_page_commit = {0}".format(buffer_data_page_commit)
-
-        #buffer_data_page_time_stamp_offset = self.ramdump.field_offset(
-        #    'struct buffer_data_page ', 'time_stamp')
-        #buffer_data_page_data_offset = self.ramdump.field_offset(
-        #    'struct buffer_data_page ', 'data')
-        """local_t_commita_offset = self.ramdump.field_offset(
-            'struct local_t', 'a')
-        atomic64_t_counter_offset = self.ramdump.field_offset(
-            'struct atomic64_t', 'counter')"""
-
-        #local_t_commita = self.ramdump.read_u64(buffer_data_page_commit + local_t_commita_offset)
-        #commit = self.ramdump.read_u64(local_t_commita + atomic64_t_counter_offset)
         commit = buffer_data_page_commit
+        abs_timestamp = False
 
         if commit and commit > 0:
             buffer_data_page_end = buffer_data_page + commit
             timestamp = self.ramdump.read_u64(buffer_data_page + self.buffer_data_page_time_stamp_offset)
             rb_event = buffer_data_page + self.buffer_data_page_data_offset
-            #print "buffer_data_page_end = {0}".format(hex(buffer_data_page_end))
-            #print "rb_event = {0}".format(hex(rb_event))
-            #rb_event_array_offset = self.ramdump.field_offset(
-            #    'struct ring_buffer_event', 'array')
-            #rb_event_timedelta_offset = self.ramdump.field_offset(
-            #    'struct ring_buffer_event', 'time_delta')
-            #rb_event_typelen_offset = self.ramdump.field_offset(
-            #    'struct ring_buffer_event', 'type_len')
-            #trace_entry_offset = self.ramdump.field_offset('struct trace_entry ', 'type')
+
             while( rb_event < buffer_data_page_end):
                 time_delta = self.ramdump.read_u32(rb_event + self.rb_event_timedelta_offset)
-                #print_out_str("time_delta before = {0} {1} ".format(time_delta,hex(rb_event)))
                 time_delta = time_delta >> 5
                 #print_out_str("time_delta after = {0} ".format(time_delta))
                 rb_event_timestamp = rb_event_timestamp + time_delta
-                rb_event_length_old = self.ramdump.read_u32(rb_event + self.rb_event_typelen_offset)
-                #print "rb_event_length_old before shift = %d " % rb_event_length_old
-                rb_event_length = (((1 << 5) - 1) & (rb_event_length_old >> (1 - 1)));
-                if rb_event_length == 0:
-                    #print "rb_event while rb_event_length is zero = {0}".format(hex(rb_event))
-                    if self.ramdump.arm64:
-                        rb_event_length = self.ramdump.read_u64(rb_event + self.rb_event_array_offset)
-                    else:
-                        rb_event_length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
-                    record_length = rb_event_length + 0x4
-                elif rb_event_length <= 28:
-                    #print "rb_event_length is 28"
-                    record_length = (rb_event_length << 2) + 4
-                    #tr_entry = self.ramdump.read_u64(rb_event + rb_event_array_offset)
-                    tr_entry = rb_event + self.rb_event_array_offset
-                    tr_event_type = self.ramdump.read_u16( tr_entry + self.trace_entry_offset)
-                    if tr_event_type < self.nr_ftrace_events:
-                        self.ftrace_out.write("unknown event \n")
-                    else:
-                        #start = time.time()
-                        self.parse_trace_entry(tr_entry,tr_event_type,timestamp+rb_event_timestamp)
-                        #self.parse_trace_entry_time += (time.time()-start)
-                elif rb_event_length == 29:
-                    time_delta = self.ramdump.read_u32(rb_event + self.rb_event_timedelta_offset)
-                    tr_entry = rb_event + self.rb_event_array_offset
-                    tr_event_type = self.ramdump.read_u16(tr_entry + self.trace_entry_offset)
-                    if time_delta == 1:
-                        record_length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset) + 4
-                    else:
-                        record_length = buffer_data_page_end - rb_event
-                    #start = time.time()
-                    self.parse_trace_entry(tr_entry, tr_event_type, timestamp + rb_event_timestamp)
-                    #self.parse_trace_entry_time += (time.time()-start)
-                elif rb_event_length == 30:
-                    #print "rb_event_length is 30"
-                    rb_event_timestamp = rb_event_timestamp + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27 )
-                    record_length = 8
-                elif rb_event_length == 31:
-                    #print "rb_event_length is 31"
-                    record_length = 16
 
-                #print "record_length = {0}".format(record_length)
-                #print "rb_event = {0}".format(hex(rb_event))
+                rb_event_length_old = self.ramdump.read_u32(rb_event + self.rb_event_typelen_offset)
+                rb_event_type = (((1 << 5) - 1) & rb_event_length_old);
+
+                def get_event_length():
+                    type_len = rb_event_type
+
+                    if(type_len == 0):
+                        length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
+                        return length
+
+                    elif(type_len <= 28):
+                        return (type_len << 2)
+
+                    elif(type_len == 29):
+                        if(time_delta == 1):
+                            length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
+                            return length
+                        else:
+                            return buffer_data_page_end - rb_event #Padding till end of page
+
+                    elif(type_len == 30):
+                        # Accounts for header size + one u32 array entry
+                        return 8
+
+                    elif(type_len == 31):
+                        return 8
+
+                record_length = get_event_length()
+                #print("rb_event_type is ", rb_event_type)
+                if rb_event_type == 0:
+                    # This could be that type_len * 4 > 112
+                    # so type_len is set to 0 and 32 bit array filed holds length
+                    # while payload starts afterwards at array[1]
+                    tr_entry = rb_event + self.rb_event_array_offset + 0x4
+                    tr_event_type = self.ramdump.read_u16( tr_entry + self.trace_entry_type_offset)
+                    if tr_event_type < self.nr_ftrace_events:
+                        #self.ftrace_out.write("unknown event \n")
+                        pass
+                    else:
+                        self.parse_trace_entry(tr_entry,tr_event_type,timestamp+rb_event_timestamp)
+                    record_length = record_length + 0x4   #Header Size
+
+                elif rb_event_type <= 28: #Data Events
+                    tr_entry = rb_event + self.rb_event_array_offset
+                    tr_event_type = self.ramdump.read_u16(tr_entry + self.trace_entry_type_offset)
+                    if tr_event_type < self.nr_ftrace_events:
+                        #self.ftrace_out.write("unknown event \n")
+                        pass
+                    else:
+                        self.parse_trace_entry(tr_entry,tr_event_type,timestamp+rb_event_timestamp)
+                    record_length = record_length + 0x4
+
+                elif rb_event_type == 29:
+                    """
+                        Padding event or discarded event
+                        time_delta here can be 0 or 1
+                        time delta is set 0 when event is bigger than minimum size (8 bytes)
+                        in this case we consider rest of the page as padding
+
+                        time delta is set to 1 for discarded event
+                        Here the size is stored in array[0]
+                    """
+                    record_length = record_length + 0x4
+                    pass
+
+                elif rb_event_type == 30:
+                    # This is a time extend event so we need to use the 32 bit field from array[0](28..59)
+                    # if time delta actually exceeds 2^27 nanoseconds which is > what 27 bit field can hold
+                    # We are accounting for a complete time stamp stored in this field (59 bits)
+                    rb_event_timestamp = rb_event_timestamp + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+
+                elif rb_event_type == 31:
+                    # Accounts for an absolute timestamp
+                    rb_event_timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+                    abs_timestamp = True
+
                 rb_event = rb_event + record_length
+                #alignment = 4 - (rb_event % 4)
+                #rb_event += alignment
 
     def remaing_space(self,count,text_count):
         r = count - text_count
@@ -248,7 +254,7 @@ class FtraceParser_Event(object):
             self.ftrace_time_data[t] = []
         #print "type = {0}".format(type)
         if str(type) not in self.ftrace_event_type:
-            print_out_str("unknown event type = {0}".format(str(type)))
+            #print_out_str("unknown event type = {0}".format(str(type)))
             return
         event_name = str(self.ftrace_event_type[str(type)])
         #print "event_name  {0}".format(event_name)

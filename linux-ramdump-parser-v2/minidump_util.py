@@ -15,6 +15,7 @@ import re
 import os
 import struct
 from print_out import print_out_str
+from fnmatch import fnmatch
 
 
 def minidump_virt_to_phys(ebi_files,addr):
@@ -122,9 +123,15 @@ def get_strings(buf, length):
                         return nlist
         return nlist
 
-def generate_elf(outdir):
-        elfhd_old = os.path.join(outdir, "md_KELF_HEADER.BIN")
-        elfhd_new = os.path.join(outdir, "md_KELF_HDR.BIN")
+def generate_elf(outdir, vm):
+        if vm == "oemvm":
+            vmid = "31_"
+        elif vm:
+            vmid = "2d_"
+        else:
+            vmid = ""
+        elfhd_old = os.path.join(outdir, "md_" + vmid + "KELF_HEADER.BIN")
+        elfhd_new = os.path.join(outdir, "md_" + vmid + "KELF_HDR.BIN")
         if os.path.exists(elfhd_old):
             elfhd = elfhd_old
             fi = open(elfhd, "rb")
@@ -143,9 +150,21 @@ def generate_elf(outdir):
         buf = fi.read(hsize)
         fo.write(buf)
         nlist = get_strings(buf, len(buf))
+        files = os.listdir(outdir)
         for names in nlist:
-            filepath = "md_" + names + ".BIN"
-            ret = add_file(fo, outdir, filepath)
+            if vm:
+                for file in files:
+                    filepath = "md_" + vmid + names + ".BIN"
+                    is_found = fnmatch(file, "md_" + vmid + names + "*.BIN")
+                    if is_found:
+                        break;
+                if not is_found:
+                    return 1
+                ret = add_file(fo, outdir, file)
+            else:
+                filepath = "md_" + names + ".BIN"
+                ret = add_file(fo, outdir, filepath)
+
             if ret == -1:
                 fo.close()
                 fi.close()
