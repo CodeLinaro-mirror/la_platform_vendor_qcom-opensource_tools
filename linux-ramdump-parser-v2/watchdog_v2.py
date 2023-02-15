@@ -1,5 +1,6 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
 # Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1452,10 +1453,13 @@ def get_wdog_timing(ramdump):
     if not ramdump.minidump:
         wdog_task = ramdump.read_structure_field(
             wdog_data_addr, 'struct msm_watchdog_data', 'watchdog_task')
-        wdog_task_state = ramdump.read_structure_field(
-            wdog_task, 'struct task_struct', 'state')
-        wdog_task_threadinfo = ramdump.read_structure_field(
-            wdog_task, 'struct task_struct', 'stack')
+        if ramdump.kernel_version >= (5, 15, 0):
+            wdog_task_state = ramdump.read_structure_field(
+                wdog_task, 'struct task_struct', '__state')
+        else:
+            wdog_task_state = ramdump.read_structure_field(
+                wdog_task, 'struct task_struct', 'state')
+        wdog_task_threadinfo = ramdump.get_thread_info_addr(wdog_task)
         wdog_task_cpu = ramdump.get_task_cpu(wdog_task, wdog_task_threadinfo)
         wdog_task_oncpu = ramdump.read_structure_field(
             wdog_task, 'struct task_struct', 'on_cpu')
