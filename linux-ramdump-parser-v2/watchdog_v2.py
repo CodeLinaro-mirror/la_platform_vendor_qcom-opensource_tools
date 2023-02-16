@@ -1407,13 +1407,13 @@ def get_wdog_timing(ramdump):
             wdog_data_addr + pet_timer_off + pet_timer_entry_offset + pet_timer_prev_offset)
 
         if(pet_timer_entry_prev == '0x200'):
-            pet_timer_expired = 1
+            pet_timer_expired = True
         else:
-            pet_timer_expired = 0
+            pet_timer_expired = False
     else:
         timer_expired_off = ramdump.field_offset(
             'struct msm_watchdog_data', 'timer_expired')
-        pet_timer_expired = ramdump.read_word(wdog_data_addr + timer_expired_off)
+        pet_timer_expired = ramdump.read_bool(wdog_data_addr + timer_expired_off)
     pet_time_off = ramdump.field_offset('struct msm_watchdog_data', 'pet_time')
     bark_time_off = ramdump.field_offset(
         'struct msm_watchdog_data', 'bark_time')
@@ -1500,8 +1500,11 @@ def get_wdog_timing(ramdump):
                 "Watchdog task is waiting on core {0} from {1:.6f}".format(
                     wdog_task_cpu, ns_to_sec(wdog_task_queued)))
 
-        elif wdog_task_state == 1 and pet_timer_expired == 1:
+        elif wdog_task_state == 1 and pet_timer_expired == True:
             print_out_str("Pet timer expired but Watchdog task is not queued")
+
+        elif pet_timer_expired == True:
+            print_out_str("Pet timer expired")
 
         else:
             print_out_str('Watchdog pet timer not expired')
