@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -833,10 +833,6 @@ class RamDump():
         self.dcc = False
         self.sysreg = False
         self.t32_host_system = options.t32_host_system or None
-        self.ipc_log_test = options.ipc_test
-        self.ipc_log_skip = options.ipc_skip
-        self.ipc_log_debug = options.ipc_debug
-        self.ipc_log_help = options.ipc_help
         self.use_stdout = options.stdout
         self.kernel_version = (0, 0, 0)
         self.linux_banner = None
