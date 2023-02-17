@@ -54,6 +54,9 @@ class Logcat(RamParser):
                 pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                    'pgd')
                 logd_task = task
+                if mmap is None:
+                    mm_mt = self.ramdump.field_offset('struct mm_struct', 'mm_mt')
+                    mmap = 0xDEADFEED if mm_mt is not None else mmap
                 break
 
         return mmap, pgd, logd_task
@@ -292,18 +295,21 @@ class Logcat(RamParser):
             pgdp = self.ramdump.virt_to_phys(pgd)
             mmu = Armv8MMU(self.ramdump, pgdp)
             propertyParser = Properties(self.ramdump)
-            try:
-                ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                        "ro.build.version.sdk","u:object_r:build_prop:s0"))
-            except:
-                ver = -1
-
-            if not ver or ver == -1: #secondary prop
+            if mmap == 0xDEADFEED:
+                ver = 0xFF
+            else:
                 try:
                     ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                            "ro.vndk.version","u:object_r:vndk_prop:s0"))
+                            "ro.build.version.sdk","u:object_r:build_prop:s0"))
                 except:
                     ver = -1
+
+                if not ver or ver == -1: #secondary prop
+                    try:
+                        ver = int(propertyParser.find_property_from_file(mmu, mmap,
+                                "ro.vndk.version","u:object_r:vndk_prop:s0"))
+                    except:
+                        ver = -1
             print_out_str("Current sdk version is "+ str(ver))
             if ver >= 31: # Android S
                 from parsers.logcat_v3 import Logcat_v3
