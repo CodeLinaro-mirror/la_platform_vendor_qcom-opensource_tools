@@ -1,4 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -742,15 +743,28 @@ class Armv8MMU(MMU):
             tl_index=(20,12),
             page_index=(11,0))
 
+        base = Register(base=(47, 12))
+        base.value = self.ttbr
+
+        if self.ramdump.va_bits == 48:
+            try:
+              zl_desc = self.do_fl_sl_level_lookup(self.ttbr, virt_r.zl_index, 12, 30)
+            except:
+              return None
+
+            if zl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
+                return None
+
+            base.base = zl_desc.next_level_base_addr_upper
+
         try:
-          fl_desc = self.do_fl_sl_level_lookup(self.ttbr, virt_r.fl_index, 12, 30)
+          fl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.fl_index, 12, 30)
         except:
           return None
 
         if fl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
             return self.fl_block_desc_2_phys(fl_desc, virt_r)
 
-        base = Register(base=(47, 12))
         base.base = fl_desc.next_level_base_addr_upper
         try:
             sl_desc = self.do_sl_level_lookup(
