@@ -317,7 +317,7 @@ class Logcat(RamParser):
 
             if not ver or ver == -1: #secondary prop
                 try:
-                    ver = int(propertyParser.find_property_from_file(mmu, mmap, vmalist,
+                    ver = int(propertyParser.find_property_from_file(mmu, mmap,
                             "ro.vndk.version","u:object_r:vndk_prop:s0", vmalist=vmalist))
                 except:
                     ver = -1
