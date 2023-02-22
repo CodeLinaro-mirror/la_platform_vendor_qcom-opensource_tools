@@ -2457,6 +2457,65 @@ class MDPinfo(RamParser):
         contents_for_analysis=self.ds0(contents_for_analysis)
         return contents_for_analysis
 
+    def check_rc_hang(self):
+        try:
+            dbgbus = self.ramdump.open_file('sde_dbgbus.txt', 'r')
+            lines = dbgbus.readlines()
+            rc0_debugbus_point = '00000348 00000034 00000002'
+            rc1_debugbus_point = '00000348 00000035 00000002'
+            for eachLine in lines:
+                if rc0_debugbus_point in eachLine or rc1_debugbus_point in eachLine:
+                    rc = eachLine
+                    rc_data=rc.split(' ')
+                    if len(rc_data) == 6 and (int(rc_data[4], 16) & int('6000000', 16)) == int('6000000',16):
+                        return True
+        except:
+            pass
+        return False
+
+    def check_LTM_status(self):
+        try:
+            reg_dump = self.ramdump.open_file('sde_regdump.txt', 'r')
+            lines = reg_dump.readlines()
+            ltm0_status_reg = '0x6a360'
+            ltm1_status_reg = '0x6b360'
+            ltm2_status_reg = '0x6c360'
+            ltm3_status_reg = '0x6d360'
+            for eachLine in lines:
+                if ltm0_status_reg in eachLine or ltm1_status_reg in eachLine or ltm2_status_reg in eachLine or ltm3_status_reg in eachLine:
+                    ltm = eachLine
+                    ltm_data = ltm.split(' ')
+                    if len(ltm_data) == 6 and (int(ltm_data[2], 16) & int('300', 16)) > 0:
+                        return True
+        except:
+            pass
+        return False
+
+    def sde_initial_analysis(self):
+        rc_hang = False
+        LTM_busy = False
+
+        rc_hang = self.check_rc_hang()
+        LTM_busy = self.check_LTM_status()
+        try:
+            self.file = self.ramdump.open_file('sde_evtlog_parsed.txt', 'r+')
+            content = self.file.read()
+            self.file.seek(0, 0)
+            self.file.write('%s \n' % ("---------------------------------------  SDE INITIAL ANALYSIS  ---------------------------------------"))
+            if rc_hang:
+                self.file.write('%s \n' % ("RC hang observed\n"))
+            else:
+                self.file.write('%s \n' % ("No RC hang\n"))
+            if LTM_busy:
+                self.file.write('%s \n' % ("LTM Hist/WB busy\n"))
+            else:
+                self.file.write('%s \n' % ("No LTM busy\n"))
+            self.file.write('%s \n' % ("------------------------------------------------------------------------------------------------------"))
+            self.file.write(content)
+            self.file.close()
+        except:
+            pass
+
     def parse(self):
 
         mdss_dbg = MdssDbgXlog(self.ramdump, 'mdss_dbg_xlog')
