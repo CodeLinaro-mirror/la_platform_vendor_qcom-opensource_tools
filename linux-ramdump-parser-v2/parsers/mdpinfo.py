@@ -1,4 +1,4 @@
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -2740,7 +2740,7 @@ class MDPinfo(RamParser):
                                             'val':Struct.get_u32,
                                             'blk_id':Struct.get_u8})
                     if (log_log.time == 0x0):
-                        break
+                        continue
                     self.outfile.write('%-20.5d ' % (log_log.time))
                     self.outfile.write('%-10.1d ' % (log_log.pid))
                     self.outfile.write('%-10.1x ' % (log_log.addr))
