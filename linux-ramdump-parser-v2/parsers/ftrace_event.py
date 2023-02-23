@@ -201,7 +201,8 @@ class FtraceParser_Event(object):
 
                 elif rb_event_type == 31:
                     # Accounts for an absolute timestamp
-                    rb_event_timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+                    timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+                    rb_event_timestamp = 0
                     abs_timestamp = True
 
                 rb_event = rb_event + record_length
