@@ -2491,12 +2491,45 @@ class MDPinfo(RamParser):
             pass
         return False
 
+    def check_LUTDMA_hang(self):
+        try:
+            reg_dump = self.ramdump.open_file('sde_regdump_parsed.txt', 'r')
+            lines = reg_dump.readlines()
+            LUT_regsister_dump = 'reg_dma'
+            reg_dma0_status = '--NA--'
+            reg_dma1_status = '--NA--'
+            ctl0 = '0x16060'
+            ctl1 = '0x17060'
+            ctl2 = '0x18060'
+            ctl3 = '0x19060'
+            ctl4 = '0x1a060'
+            ctl5 = '0x1b060'
+            for eachLine in lines:
+                if ctl0 in eachLine or ctl1 in eachLine or ctl2 in eachLine or ctl3 in eachLine or ctl4 in eachLine or ctl5 in eachLine:
+                    ctl_data = eachLine.split(' ')
+                    if len(ctl_data) == 6 and (int(ctl_data[2], 16) & int('20', 16)) > 0:
+                        return True
+                if LUT_regsister_dump in eachLine:
+                    reg_dma_dump = True
+                    reg_dma_start = eachLine.split(' ')
+                    reg_dma0_status = hex(int(reg_dma_start[1],16) + int('0x170',16))
+                    reg_dma1_status = hex(int(reg_dma_start[1],16) + int('0x570',16))
+                elif reg_dma0_status in eachLine or reg_dma1_status in eachLine:
+                    reg_dma_data = eachLine.split(' ')
+                    if int(reg_dma_data[1],16) > 0:
+                        return True
+        except:
+            pass
+        return False
+
     def sde_initial_analysis(self):
         rc_hang = False
         LTM_busy = False
+        LUTDMA_hang = False
 
         rc_hang = self.check_rc_hang()
         LTM_busy = self.check_LTM_status()
+        LUTDMA_hang = self.check_LUTDMA_hang()
         try:
             self.file = self.ramdump.open_file('sde_evtlog_parsed.txt', 'r+')
             content = self.file.read()
@@ -2510,6 +2543,10 @@ class MDPinfo(RamParser):
                 self.file.write('%s \n' % ("LTM Hist/WB busy\n"))
             else:
                 self.file.write('%s \n' % ("No LTM busy\n"))
+            if LUTDMA_hang:
+                self.file.write('%s \n' % ("LUT DMA hang observed\n"))
+            else:
+                self.file.write('%s \n' % ("No LUT DMA hang\n"))
             self.file.write('%s \n' % ("------------------------------------------------------------------------------------------------------"))
             self.file.write(content)
             self.file.close()
