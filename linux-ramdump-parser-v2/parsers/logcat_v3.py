@@ -273,6 +273,10 @@ class Logcat_base(RamParser, Constants):
 
         mm_addr    = self.ramdump.read_word(self.logd_task + mm_offset)
         mmap       = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'mmap')
+        if mmap is None:
+            mm_mt = self.ramdump.field_offset('struct mm_struct', 'mm_mt')
+            if mm_mt is not None:
+                return None, None
         logdmap    = mmap
         start_data = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'start_data')
         end_data   = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'end_data')
