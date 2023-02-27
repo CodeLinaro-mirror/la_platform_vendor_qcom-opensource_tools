@@ -1,5 +1,5 @@
 # Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -17,6 +17,7 @@ from print_out import print_out_str
 import struct
 from parsers.properties import Properties
 import traceback
+import maple_tree
 
 @register_parser('--logcat', 'Extract logcat logs from ramdump ')
 class Logcat(RamParser):
@@ -43,6 +44,7 @@ class Logcat(RamParser):
         pgd = None
         mmap = None
         logd_task = None
+        mm_mt = None
 
         for task in self.ramdump.for_each_process():
             task_name = task + offset_comm
@@ -54,9 +56,12 @@ class Logcat(RamParser):
                 pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                    'pgd')
                 logd_task = task
+                if mmap is None:
+                    mm_mt = self.ramdump.struct_field_addr(mm_addr, 'struct mm_struct',
+                                                       'mm_mt')
                 break
 
-        return mmap, pgd, logd_task
+        return mmap, pgd, logd_task, mm_mt
 
     def get_logd_cnt_and_addr(self, logdmap):
         logdcount = 0
@@ -283,25 +288,37 @@ class Logcat(RamParser):
                         min = min + 0x1000
         return
 
+    def get_vmalist(self, node, vmalist:list):
+        if node != 0:
+            vmalist.append(node)
+        return
+
     def parse(self):
         try:
-            mmap, pgd, logd_task = self.find_mmap_pgd()
-            if mmap is None:
+            mmap, pgd, logd_task, mm_mt = self.find_mmap_pgd()
+            if mmap is None and mm_mt is None:
                 print_out_str("logd process is not started")
                 return
+
+            vmalist = None
+            if mmap is None and mm_mt is not None:
+                vmalist = []
+                mt_walk = maple_tree.MapleTreeWalker(self.ramdump)
+                mt_walk.walk(mm_mt, self.get_vmalist, vmalist)
+
             pgdp = self.ramdump.virt_to_phys(pgd)
             mmu = Armv8MMU(self.ramdump, pgdp)
             propertyParser = Properties(self.ramdump)
             try:
                 ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                        "ro.build.version.sdk","u:object_r:build_prop:s0"))
+                        "ro.build.version.sdk","u:object_r:build_prop:s0", vmalist=vmalist))
             except:
                 ver = -1
 
             if not ver or ver == -1: #secondary prop
                 try:
                     ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                            "ro.vndk.version","u:object_r:vndk_prop:s0"))
+                            "ro.vndk.version","u:object_r:vndk_prop:s0", vmalist=vmalist))
                 except:
                     ver = -1
             print_out_str("Current sdk version is "+ str(ver))
@@ -310,18 +327,18 @@ class Logcat(RamParser):
                 logcat = Logcat_v3(self.ramdump, mmu, logd_task)
                 is_success = False
                 try:
-                    is_success = logcat.parse()
+                    is_success = logcat.parse(vmalist=vmalist)
                 except:
                     is_success = False
                     traceback.print_exc()
-                if not is_success:
+                if not is_success and mmap:
                     logdcount, logdaddr = self.get_logd_cnt_and_addr(mmap)
                     self.get_range(mmap, logdcount, logdaddr)
                     self.generate_bin(mmu)
                     from parsers.logcat_v3 import Logcat_vma
                     logcat = Logcat_vma(self.ramdump, mmu, logd_task, self.LOGCAT_BIN)
                     logcat.parse()
-            else:
+            elif mmap:
                 logdcount, logdaddr = self.get_logd_cnt_and_addr(mmap)
                 self.get_range(mmap, logdcount, logdaddr)
                 self.generate_bin(mmu)
