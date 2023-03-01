@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2022 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -800,7 +800,7 @@ class FtraceParser_Event(object):
                             tt = keyinfo + "=" + str(fmt_name_value_map[keyinfo])
                         temp = temp + tt + "  "
                 except Exception as err:
-                    print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
+                    #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                     pass
                 try:
                     temp = temp + "\n"
@@ -809,10 +809,10 @@ class FtraceParser_Event(object):
                     self.ftrace_time_data[t].append(temp_data)
                     temp = ""
                 except Exception as err:
-                    print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
+                    #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                     pass
             except Exception as err:
-                print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
+                #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                 pass
 
     def ftrace_event_parsing(self):

@@ -92,6 +92,8 @@ class client(object):
     MSM_DUMP_DATA_LOG_BUF = 0x110
     MSM_DUMP_DATA_LOG_BUF_FIRST_IDX = 0x111
     MSM_DUMP_DATA_L2_TLB = 0x120
+    MSM_DUMP_DATA_DCC_REG = 0xE6
+    MSM_DUMP_DATA_DCC_SRAM = 0xE7
     MSM_DUMP_DATA_SCANDUMP = 0xEB
     MSM_DUMP_DATA_RPMH = 0xEC
     MSM_DUMP_DATA_FCMDUMP = 0xEE
@@ -725,6 +727,10 @@ class DebugImage_v2():
             client.MSM_DUMP_DATA_TMC_ETF_SWAO] = 'MSM_DUMP_DATA_TMC_ETF_SWAO'
         self.dump_data_id_lookup_table[
             client.MSM_DUMP_DATA_TMC_ETF_REG] = 'MSM_DUMP_DATA_TMC_ETF_REG'
+        self.dump_data_id_lookup_table[
+            client.MSM_DUMP_DATA_DCC_REG] = 'MSM_DUMP_DATA_DCC_REG'
+        self.dump_data_id_lookup_table[
+            client.MSM_DUMP_DATA_DCC_SRAM] = 'MSM_DUMP_DATA_DCC_SRAM'
         self.dump_data_id_lookup_table[
             client.MSM_DUMP_DATA_SCANDUMP] = 'MSM_DUMP_DATA_SCANDUMP'
         self.dump_data_id_lookup_table[
