@@ -49,6 +49,8 @@ class Slabinfo_summary(RamParser):
             else:
                     count = self.ramdump.read_structure_field(
                                 page, 'struct page', 'counters')
+            if not(count):
+                count = 0
             inuse = count & 0x0000FFFF
             total_objects = (count >> 16) & 0x00007FFF
             freeobj = total_objects - inuse
@@ -150,8 +152,5 @@ class Slabinfo_summary(RamParser):
 
     def parse(self):
         slab_out = self.ramdump.open_file('slabsummary.txt')
-        if(self.ramdump.is_config_defined('CONFIG_SLUB_DEBUG_ON')):
-            self.print_slab_summary(slab_out)
-        else:
-            slab_out.write('CONFIG_SLUB_DEBUG_ON is disabled in this build')
+        self.print_slab_summary(slab_out)
         slab_out.close()
