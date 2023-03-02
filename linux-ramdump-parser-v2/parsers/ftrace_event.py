@@ -580,7 +580,35 @@ class FtraceParser_Event(object):
                             print_buffer_offset = (print_buffer_offset + (align)) & (~align)
                             continue
 
-                        elif 'ps' in match.group() or 'p' in match.group() or 'x' in match.group():
+                        elif '%ps' in match.group():
+                            replacement = "%s%x"
+                            if self.ramdump.arm64:
+                                addr = self.ramdump.read_u64(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 8
+                            else:
+                                addr = self.ramdump.read_u32(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 4
+
+                        elif '%p' in match.group() and '%ps' not in match.group():
+                            replacement = "%x"
+                            if self.ramdump.arm64:
+                                print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
+                                print_buffer_offset += 8
+                            else:
+                                print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                                print_buffer_offset += 4
+
+                        elif 'x' in match.group():
                             replacement = "%x"
                             if self.ramdump.arm64:
                                 print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
