@@ -1,4 +1,5 @@
 # Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -15,6 +16,7 @@ from mmu import Armv8MMU
 from print_out import print_out_str
 import struct
 from parsers.properties import Properties
+import traceback
 
 @register_parser('--logcat', 'Extract logcat logs from ramdump ')
 class Logcat(RamParser):
@@ -52,6 +54,9 @@ class Logcat(RamParser):
                 pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                    'pgd')
                 logd_task = task
+                if mmap is None:
+                    mm_mt = self.ramdump.field_offset('struct mm_struct', 'mm_mt')
+                    mmap = 0xDEADFEED if mm_mt is not None else mmap
                 break
 
         return mmap, pgd, logd_task
@@ -285,22 +290,26 @@ class Logcat(RamParser):
         try:
             mmap, pgd, logd_task = self.find_mmap_pgd()
             if mmap is None:
+                print_out_str("logd process is not started")
                 return
             pgdp = self.ramdump.virt_to_phys(pgd)
             mmu = Armv8MMU(self.ramdump, pgdp)
             propertyParser = Properties(self.ramdump)
-            try:
-                ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                        "ro.build.version.sdk","u:object_r:build_prop:s0"))
-            except:
-                ver = -1
-
-            if not ver or ver == -1: #secondary prop
+            if mmap == 0xDEADFEED:
+                ver = 0xFF
+            else:
                 try:
                     ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                            "ro.vndk.version","u:object_r:vndk_prop:s0"))
+                            "ro.build.version.sdk","u:object_r:build_prop:s0"))
                 except:
                     ver = -1
+
+                if not ver or ver == -1: #secondary prop
+                    try:
+                        ver = int(propertyParser.find_property_from_file(mmu, mmap,
+                                "ro.vndk.version","u:object_r:vndk_prop:s0"))
+                    except:
+                        ver = -1
             print_out_str("Current sdk version is "+ str(ver))
             if ver >= 31: # Android S
                 from parsers.logcat_v3 import Logcat_v3
@@ -310,12 +319,13 @@ class Logcat(RamParser):
                     is_success = logcat.parse()
                 except:
                     is_success = False
+                    traceback.print_exc()
                 if not is_success:
                     logdcount, logdaddr = self.get_logd_cnt_and_addr(mmap)
                     self.get_range(mmap, logdcount, logdaddr)
                     self.generate_bin(mmu)
                     from parsers.logcat_v3 import Logcat_vma
-                    logcat = Logcat_vma(self.ramdump, mmu, self.LOGCAT_BIN)
+                    logcat = Logcat_vma(self.ramdump, mmu, logd_task, self.LOGCAT_BIN)
                     logcat.parse()
             else:
                 logdcount, logdaddr = self.get_logd_cnt_and_addr(mmap)
@@ -323,4 +333,5 @@ class Logcat(RamParser):
                 self.generate_bin(mmu)
         except Exception as result:
             print_out_str(str(result))
+            traceback.print_exc()
 

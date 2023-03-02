@@ -57,9 +57,13 @@ class UfsHba():
                                 'SDEV_TRANSPORT_OFFLINE', 'SDEV_TRANSPORT_OFFLINE', 'SDEV_BLOCK', 'SDEV_CREATED_BLOCK']
     ufs_rpm_request_l = ['RPM_REQ_NONE', 'RPM_REQ_IDLE', 'RPM_REQ_SUSPEND', 'RPM_REQ_AUTOSUSPEND', 'RPM_REQ_RESUME']
     ufs_rpm_status_l = ['RPM_ACTIVE', 'RPM_RESUMING', 'RPM_SUSPENDED', 'RPM_SUSPENDING']
-    ufs_evt_l = ['UFS_EVT_PA_ERR', 'UFS_EVT_DL_ERR', 'UFS_EVT_NL_ERR', 'UFS_EVT_TL_ERR', 'UFS_EVT_DME_ERR',
-                   'UFS_EVT_AUTO_HIBERN8_ERR', 'UFS_EVT_FATAL_ERR', 'UFS_EVT_LINK_STARTUP_FAIL', 'UFS_EVT_RESUME_ERR',
-                   'UFS_EVT_SUSPEND_ERR', 'UFS_EVT_DEV_RESET', 'UFS_EVT_HOST_RESET', 'UFS_EVT_ABORT']
+    ufs_evt_bf_k515_l = ['UFS_EVT_PA_ERR', 'UFS_EVT_DL_ERR', 'UFS_EVT_NL_ERR', 'UFS_EVT_TL_ERR', 'UFS_EVT_DME_ERR',
+                    'UFS_EVT_AUTO_HIBERN8_ERR', 'UFS_EVT_FATAL_ERR', 'UFS_EVT_LINK_STARTUP_FAIL', 'UFS_EVT_RESUME_ERR',
+                        'UFS_EVT_SUSPEND_ERR',  'UFS_EVT_DEV_RESET','UFS_EVT_HOST_RESET', 'UFS_EVT_ABORT']
+    ufs_evt_af_k515_l = ['UFS_EVT_PA_ERR', 'UFS_EVT_DL_ERR', 'UFS_EVT_NL_ERR', 'UFS_EVT_TL_ERR', 'UFS_EVT_DME_ERR',
+                    'UFS_EVT_AUTO_HIBERN8_ERR', 'UFS_EVT_FATAL_ERR', 'UFS_EVT_LINK_STARTUP_FAIL', 'UFS_EVT_RESUME_ERR',
+                        'UFS_EVT_SUSPEND_ERR', 'UFS_EVT_WL_SUSP_ERR' , 'UFS_EVT_WL_RES_ERR' , 'UFS_EVT_DEV_RESET',
+                            'UFS_EVT_HOST_RESET', 'UFS_EVT_ABORT']
 
     def __init__(self, ramdump, ufs_hba_addr):
         self.ramdump = ramdump
@@ -100,7 +104,7 @@ class UfsHba():
         except:
             print_out_ufs('\t\tactive_uic_cmd = 0x0\n\t}')
 
-    def dump_ufs_event(self, ufs_stats_addr):
+    def dump_ufs_event_bfk515(self, ufs_stats_addr):
         print_out_ufs("\t\tufs_event {")
         ufs_evt_base = ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'event')
         evt_sz = self.ramdump.sizeof('struct ufs_event_hist')
@@ -110,7 +114,30 @@ class UfsHba():
             ufs_evt_addr = ufs_evt_base + (x * evt_sz)
             ufs_evt_cnt = self.ramdump.read_int(ufs_evt_addr + self.ramdump.field_offset(
                                 'struct ufs_event_hist', 'cnt'))
-            print_out_ufs("\t\t\t%s:" %self.ufs_evt_l[x], False)
+            print_out_ufs("\t\t\t%s:" %self.ufs_evt_bf_k515_l[x], False)
+            print_out_ufs("\tCnt: %d" %ufs_evt_cnt)
+            if ufs_evt_cnt != 0:
+                ts_base = ufs_evt_addr + self.ramdump.field_offset('struct ufs_event_hist', 'tstamp')
+                val_base = ufs_evt_addr + self.ramdump.field_offset('struct ufs_event_hist', 'val')
+                for y in range(8):
+                    ts_addr = ts_base + (y * ts_sz)
+                    if self.ramdump.read_s64(ts_addr) != 0:
+                        print_out_ufs("\t\t\t\tval: 0x%x" %self.ramdump.read_u32(val_base + (y * val_sz)), False)
+                        print_out_ufs("\tts: %d" %self.ramdump.read_s64(ts_addr))
+
+        print_out_ufs("\t\t}")
+
+    def dump_ufs_event_afk515(self, ufs_stats_addr):
+        print_out_ufs("\t\tufs_event {")
+        ufs_evt_base = ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'event')
+        evt_sz = self.ramdump.sizeof('struct ufs_event_hist')
+        ts_sz = self.ramdump.sizeof('ktime_t')
+        val_sz = self.ramdump.sizeof('u32')
+        for x in range(15):
+            ufs_evt_addr = ufs_evt_base + (x * evt_sz)
+            ufs_evt_cnt = self.ramdump.read_int(ufs_evt_addr + self.ramdump.field_offset(
+                                'struct ufs_event_hist', 'cnt'))
+            print_out_ufs("\t\t\t%s:" %self.ufs_evt_af_k515_l[x], False)
             print_out_ufs("\tCnt: %d" %ufs_evt_cnt)
             if ufs_evt_cnt != 0:
                 ts_base = ufs_evt_addr + self.ramdump.field_offset('struct ufs_event_hist', 'tstamp')
@@ -150,7 +177,12 @@ class UfsHba():
                 ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'last_intr_ts'))))
         except:
             print_out_ufs('\t\tenabled = 0')
-        self.dump_ufs_event(ufs_stats_addr)
+
+        if self.ramdump.get_kernel_version() < (5, 14, 0):
+            self.dump_ufs_event_bfk515(ufs_stats_addr)
+        else:
+            self.dump_ufs_event_afk515(ufs_stats_addr)
+
         print_out_ufs("\t}")
 
     def dump_ufs_dev_info(self):
@@ -809,6 +841,49 @@ class UfsIpc():
                     continue
                 print_out_ufs("\t%s" %result)
 
+class UfsRegs():
+    def __init__(self, ramdump, ufs_qc_host_addr):
+        self.ramdump = ramdump
+        self.ufs_qc_host_addr = ufs_qc_host_addr
+
+    def dump_ufs_regs(self, buf, word, prefix):
+        for i in range(word):
+            if i%4 == 0:
+                offest = (i//4)*0x10
+                print_out_ufs('\t%s:' %prefix, False)
+                print_out_ufs('\t%04x:' %offest, False)
+
+            if i%4 == 3 or i == word-1:
+                print_out_ufs('\t%08x' %self.ramdump.read_u32(buf + i*4))
+            else:
+                print_out_ufs('\t%08x' %self.ramdump.read_u32(buf + i*4), False)
+
+    def get_ufs_regs(self, regs_list_addr):
+        regs_list_next = self.ramdump.read_pointer(regs_list_addr + self.ramdump.field_offset('struct list_head', 'next'))
+        while regs_list_next != regs_list_addr:
+            prefix = self.ramdump.read_structure_cstring(regs_list_next, 'struct ufs_qcom_regs', 'prefix')
+            len = self.ramdump.read_u32(regs_list_next + self.ramdump.field_offset('struct ufs_qcom_regs', 'len'))
+            buf = self.ramdump.read_pointer(regs_list_next + self.ramdump.field_offset('struct ufs_qcom_regs', 'ptr'))
+            self.dump_ufs_regs(buf, len//4, prefix)
+            regs_list_next = self.ramdump.read_pointer(regs_list_next + self.ramdump.field_offset(
+                                        'struct list_head', 'next'))
+
+    def parse_ufs_regs(self):
+        gphy_p = self.ramdump.read_pointer(self.ufs_qc_host_addr + self.ramdump.field_offset(
+                                        'struct ufs_qcom_host',
+                                        'generic_phy'))
+        dev_addr = gphy_p + self.ramdump.field_offset('struct phy', 'dev')
+        qphy_p = self.ramdump.read_pointer(dev_addr + self.ramdump.field_offset(
+                                        'struct device',
+                                        'driver_data'))
+        host_regs_list_addr = self.ufs_qc_host_addr + self.ramdump.field_offset('struct ufs_qcom_host', 'regs_list_head')
+        phy_regs_list_addr = qphy_p + self.ramdump.field_offset('struct ufs_qcom_phy', 'regs_list_head')
+
+        print_out_ufs('\n\n===========================Parsed UFS Registers====================================')
+        self.get_ufs_regs(host_regs_list_addr)
+        self.get_ufs_regs(phy_regs_list_addr)
+
+
 @register_parser('--ufs-parser', 'Generate UFS diagnose report', optional=True)
 
 class UfsParser(RamParser):
@@ -835,6 +910,10 @@ class UfsParser(RamParser):
         # ufs ipc log parser
         ufs_ipc_0 = UfsIpc(self.ramdump, F_UFSIPC)
         ufs_ipc_0.parse_ufs_ipc()
+
+        # ufs register parser
+        ufs_regs_0 = UfsRegs(self.ramdump, ufs_qc_host_addr)
+        ufs_regs_0.parse_ufs_regs()
 
         return
 

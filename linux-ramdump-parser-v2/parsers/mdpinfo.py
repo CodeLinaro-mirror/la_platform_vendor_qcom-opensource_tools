@@ -1,4 +1,4 @@
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -841,36 +841,111 @@ class MDPinfo(RamParser):
     def pipe(self, pipe_id ) :
 
         pipe_id = int(pipe_id)
-        if pipe_id == 0 :
-            pipe = "ViG0"
-        elif pipe_id == 1 :
-            pipe = "ViG1"
-        elif pipe_id == 2 :
-            pipe = "ViG2"
-        elif pipe_id == 3 :
-            pipe = "ViG3"
-        elif pipe_id == 4 :
-            pipe = "RGB0"
-        elif pipe_id == 5 :
-            pipe = "RGB1"
-        elif pipe_id == 6 :
-            pipe = "RGB2"
-        elif pipe_id == 7 :
-            pipe = "RGB3"
-        elif pipe_id == 8 :
-            pipe = "DMA0"
-        elif pipe_id == 9 :
-            pipe = "DMA1"
-        elif pipe_id == 10 :
-            pipe = "DMA2"
-        elif pipe_id == 11 :
-            pipe = "DMA3"
-        elif pipe_id == 12 :
-            pipe = "SSPP_CURSOR0"
-        elif pipe_id == 13 :
-            pipe = "SSPP_CURSOR1"
-        else :
-            pipe = "PIPE_INVALID"
+
+        if(self.ramdump.kernel_version  <= (5, 4)) :
+            if pipe_id == 0 :
+                pipe = "ViG0"
+            elif pipe_id == 1 :
+                pipe = "ViG1"
+            elif pipe_id == 2 :
+                pipe = "ViG2"
+            elif pipe_id == 3 :
+                pipe = "ViG3"
+            elif pipe_id == 4 :
+                pipe = "RGB0"
+            elif pipe_id == 5 :
+                pipe = "RGB1"
+            elif pipe_id == 6 :
+                pipe = "RGB2"
+            elif pipe_id == 7 :
+                pipe = "RGB3"
+            elif pipe_id == 8 :
+                pipe = "DMA0"
+            elif pipe_id == 9 :
+                pipe = "DMA1"
+            elif pipe_id == 10 :
+                pipe = "DMA2"
+            elif pipe_id == 11 :
+                pipe = "DMA3"
+            elif pipe_id == 12 :
+                pipe = "SSPP_CURSOR0"
+            elif pipe_id == 13 :
+                pipe = "SSPP_CURSOR1"
+            else :
+                pipe = "PIPE_INVALID"
+
+        elif(self.ramdump.kernel_version  == (5, 10)) :
+            if pipe_id == 0 :
+                pipe = "ViG0"
+            elif pipe_id == 1 :
+                pipe = "ViG1"
+            elif pipe_id == 2 :
+                pipe = "ViG2"
+            elif pipe_id == 3 :
+                pipe = "ViG3"
+            elif pipe_id == 4 :
+                pipe = "ViG3"
+            elif pipe_id == 5 :
+                pipe = "RGB0"
+            elif pipe_id == 6 :
+                pipe = "RGB1"
+            elif pipe_id == 7 :
+                pipe = "RGB2"
+            elif pipe_id == 8 :
+                pipe = "RGB3"
+            elif pipe_id == 9 :
+                pipe = "RGB3"
+            elif pipe_id == 10 :
+                pipe = "DMA0"
+            elif pipe_id == 11 :
+                pipe = "DMA1"
+            elif pipe_id == 12 :
+                pipe = "DMA2"
+            elif pipe_id == 13 :
+                pipe = "DMA3"
+            elif pipe_id == 14 :
+                pipe = "DMA4"
+            elif pipe_id == 15 :
+                pipe = "DMA5"
+            elif pipe_id == 16 :
+                pipe = "DMA5"
+            elif pipe_id == 17 :
+                pipe = "SSPP_CURSOR0"
+            elif pipe_id == 18 :
+                pipe = "SSPP_CURSOR1"
+            elif pipe_id == 19 :
+                pipe = "SSPP_CURSOR1"
+            else :
+                pipe = "PIPE_INVALID"
+
+        elif(self.ramdump.kernel_version  >= (5, 15)) :
+            if pipe_id == 0 :
+                pipe = "ViG0"
+            elif pipe_id == 1 :
+                pipe = "ViG1"
+            elif pipe_id == 2 :
+                pipe = "ViG2"
+            elif pipe_id == 3 :
+                pipe = "ViG3"
+            elif pipe_id == 4 :
+                pipe = "ViG3"
+            elif pipe_id == 5 :
+                pipe = "DMA0"
+            elif pipe_id == 6 :
+                pipe = "DMA1"
+            elif pipe_id == 7 :
+                pipe = "DMA2"
+            elif pipe_id == 8 :
+                pipe = "DMA3"
+            elif pipe_id == 9 :
+                pipe = "DMA4"
+            elif pipe_id == 10 :
+                pipe = "DMA5"
+            elif pipe_id == 11 :
+                pipe = "DMA5"
+            else :
+                pipe = "PIPE_INVALID"
+
         return pipe
 
     def multirect_index(self, rect_index):
@@ -2665,7 +2740,7 @@ class MDPinfo(RamParser):
                                             'val':Struct.get_u32,
                                             'blk_id':Struct.get_u8})
                     if (log_log.time == 0x0):
-                        break
+                        continue
                     self.outfile.write('%-20.5d ' % (log_log.time))
                     self.outfile.write('%-10.1d ' % (log_log.pid))
                     self.outfile.write('%-10.1x ' % (log_log.addr))
