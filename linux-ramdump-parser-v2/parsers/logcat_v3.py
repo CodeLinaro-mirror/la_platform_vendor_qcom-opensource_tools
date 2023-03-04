@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -267,44 +267,57 @@ class Logcat_base(RamParser, Constants):
         self.wall_to_monotonic_tv_nsec = 0
         self.dmesg_list={}
 
-    def bss_start_addr(self):
+    def lookup_bss(self, vma, start_data, end_data):
+        tmpstartVm = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_start')
+        tmpendVm   = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_end')
+        bss_start = None
+
+        if (end_data > tmpstartVm) and (end_data < tmpendVm):
+            # android Q: 2 code vma + 2 data vma + 1bss, bss section is individual vma after end_data
+            if (start_data < tmpstartVm):
+                logdmap   = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_next')
+                bss_start = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_start')
+            else:
+                # android R: 3 code vma and 1 data+bss vma, bss section is just after end_data,
+                # data section is addr_length align and bss section is 8 bytes align
+                bss_start = end_data
+            print_out_str("bss_start: 0x%x vma start 0x%x vma end 0x%x\n" %(bss_start, tmpstartVm, tmpendVm))
+        return bss_start, tmpendVm
+
+    def bss_start_addr(self, vmalist=None):
         offset_comm = self.ramdump.field_offset('struct task_struct', 'comm')
         mm_offset = self.ramdump.field_offset('struct task_struct', 'mm')
 
         mm_addr    = self.ramdump.read_word(self.logd_task + mm_offset)
         mmap       = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'mmap')
-        logdmap    = mmap
+
         start_data = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'start_data')
         end_data   = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'end_data')
 
         bss_start = None
+        tmpendVm = None
         # bss section is after data section
-        while logdmap != 0:
-            tmpstartVm = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_start')
-            tmpendVm   = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_end')
-
-            if (end_data > tmpstartVm) and (end_data < tmpendVm):
-                # android Q: 2 code vma + 2 data vma + 1bss, bss section is individual vma after end_data
-                if (start_data < tmpstartVm):
-                    logdmap   = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_next')
-                    bss_start = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_start')
-                else:
-                    # android R: 3 code vma and 1 data+bss vma, bss section is just after end_data,
-                    # data section is addr_length align and bss section is 8 bytes align
-                    bss_start = end_data
-
-                print_out_str("bss_start: 0x%x vma start 0x%x vma end 0x%x\n" %(bss_start, tmpstartVm, tmpendVm))
-                break
-            logdmap = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_next')
+        if mmap is None and vmalist:
+            for vma in vmalist:
+                bss_start, tmpendVm = self.lookup_bss(vma, start_data, end_data)
+                if bss_start:
+                    break
+        elif mmap:
+            logdmap = mmap
+            while logdmap != 0:
+                bss_start, tmpendVm = self.lookup_bss(logdmap, start_data, end_data)
+                if bss_start:
+                    break
+                logdmap = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_next')
         return bss_start, tmpendVm
 
     #return offset of RTC to Mono
-    def findCorrection(self):
+    def findCorrection(self, vmalist=None):
         sec = 0
         nsec = 0
         found = False
         correction_addr = 0
-        bss_start, bss_end = self.bss_start_addr()
+        bss_start, bss_end = self.bss_start_addr(vmalist=vmalist)
         if bss_start:
             idx = 0
             bss_size = bss_end - bss_start
@@ -765,9 +778,9 @@ class Logcat_v3(Logcat_base):
             print_out_str("logbuf_addr from x23 = 0x%x" %(x23_logbuf_addr))
         return logbuf_addrs
 
-    def parse(self):
+    def parse(self, vmalist=None):
         self.read_dmesg()
-        self.wall_to_mono_found, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec = self.findCorrection()
+        self.wall_to_mono_found, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec = self.findCorrection(vmalist=vmalist)
         logbuf_addrs = self.get_logbuffer_addr()
         for __logbuf_addr in logbuf_addrs:
             logchunk_list_addr = __logbuf_addr + 0x60
