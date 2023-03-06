@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -143,29 +143,42 @@ class Properties(RamParser):
                 initmap = self.ramdump.read_structure_field(
                                initmap, 'struct vm_area_struct', 'vm_next') #next loop
 
-    def find_property_from_file(self, mmu, mmap, prop_name, prop_file):
-        index = 0
-        initmap = mmap
-        while initmap != 0:
-            tmpstartVm = self.ramdump.read_structure_field(
-                            initmap, 'struct vm_area_struct', 'vm_start')
-            tmpsEndVm = self.ramdump.read_structure_field(
-                            initmap, 'struct vm_area_struct', 'vm_end')
-            file = self.ramdump.read_structure_field(
-                            initmap, 'struct vm_area_struct', 'vm_file')
-            if file != 0:
-                dentry = self.ramdump.read_word(file + self.f_path_offset +
-                                        self.dentry_offset)
-                file_name = cleanupString(self.ramdump.read_cstring(
-                                        dentry + self.d_iname_offset, 32))
-                if file_name == prop_file:
-                    self.data = self.read_binary(mmu, self.ramdump, tmpstartVm, tmpsEndVm - tmpstartVm)
-                    if self.data and len(self.data) > 0:
-                        value = self.find_property(prop_name)
-                        return value
-            initmap = self.ramdump.read_structure_field(
-                            initmap, 'struct vm_area_struct', 'vm_next') #next loop
+    def lookup_file(self, mmu, vma, prop_name, prop_file):
+        tmpstartVm = self.ramdump.read_structure_field(
+                        vma, 'struct vm_area_struct', 'vm_start')
+        tmpsEndVm = self.ramdump.read_structure_field(
+                        vma, 'struct vm_area_struct', 'vm_end')
+        file = self.ramdump.read_structure_field(
+                        vma, 'struct vm_area_struct', 'vm_file')
+        if file != 0:
+            dentry = self.ramdump.read_word(file + self.f_path_offset +
+                                    self.dentry_offset)
+            file_name = cleanupString(self.ramdump.read_cstring(
+                                    dentry + self.d_iname_offset, 32))
+            if file_name == prop_file:
+                self.data = self.read_binary(mmu, self.ramdump, tmpstartVm, tmpsEndVm - tmpstartVm)
+                if self.data and len(self.data) > 0:
+                    value = self.find_property(prop_name)
+                    return value
         return -1
+
+    def find_property_from_file(self, mmu, mmap, prop_name, prop_file, vmalist=None):
+        retval = -1
+        if mmap is None and vmalist:
+            for vma in vmalist:
+                retval = self.lookup_file(mmu, vma, prop_name, prop_file)
+                if retval != -1:
+                    break
+        elif mmap:
+            index = 0
+            initmap = mmap
+            while initmap != 0:
+                retval = self.lookup_file(mmu, initmap, prop_name, prop_file)
+                if retval != -1:
+                    break
+                initmap = self.ramdump.read_structure_field(
+                                initmap, 'struct vm_area_struct', 'vm_next') #next loop
+        return retval
 
     def find_property(self, prop_name):
         remaining_name = prop_name
