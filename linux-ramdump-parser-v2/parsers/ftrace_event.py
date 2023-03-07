@@ -753,7 +753,10 @@ class FtraceParser_Event(object):
                             v = self.ramdump.read_u64(ftrace_raw_entry + offset)
                         else:
                             v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                        if "func" not in item:
+                        if "rwmmio" in event_name and "addr" in item:
+                            phys = self.ramdump.virt_to_phys(v)
+                            fmt_name_value_map[item] = "{}({})".format(hex(int(v)), hex(phys))
+                        elif "func" not in item:
                             fmt_name_value_map[item] = hex(int(v))
                         else:
                             fmt_name_value_map[item] = v
