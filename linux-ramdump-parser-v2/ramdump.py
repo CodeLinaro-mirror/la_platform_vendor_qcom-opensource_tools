@@ -1068,7 +1068,7 @@ class RamDump():
 
                 print_out_str('!!! Exiting now')
                 sys.exit(1)
-        if self.get_kernel_version() > (5, 7, 0):
+        if self.get_kernel_version() > (5, 7, 0) and self.arm64:
             stext = self.address_of('primary_entry')
         else:
             stext = self.address_of('stext')
