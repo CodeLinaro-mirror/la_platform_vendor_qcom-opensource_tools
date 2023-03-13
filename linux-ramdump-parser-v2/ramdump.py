@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -790,6 +790,7 @@ class RamDump():
         self.objdump_path = objdump_path
         self.outdir = options.outdir
         self.ftrace_args = options.ftrace_args
+        self.ftrace_max_size = options.ftrace_max_size
         self.imem_fname = None
         self.gdbmi = None
         self.gdbmi_hyp = None
@@ -833,10 +834,6 @@ class RamDump():
         self.dcc = False
         self.sysreg = False
         self.t32_host_system = options.t32_host_system or None
-        self.ipc_log_test = options.ipc_test
-        self.ipc_log_skip = options.ipc_skip
-        self.ipc_log_debug = options.ipc_debug
-        self.ipc_log_help = options.ipc_help
         self.use_stdout = options.stdout
         self.kernel_version = (0, 0, 0)
         self.linux_banner = None
@@ -915,7 +912,7 @@ class RamDump():
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump):
+                if minidump_util.generate_elf(options.autodump, self.svm):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -970,7 +967,7 @@ class RamDump():
                     options.phys_offset))
             self.phys_offset = options.phys_offset
         self.s2_walk = False
-        if self.svm:
+        if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
             hyp_dump.vmtype = self.svm
@@ -2077,7 +2074,7 @@ class RamDump():
         if not mod_tbl_ent.set_sym_path(ko_file_list[mod_tbl_ent.name]):
             return
 
-        if self.is_config_defined("CONFIG_KALLSYMS"):
+        if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
             symtab_offset = self.field_offset('struct mod_kallsyms', 'symtab')
             num_symtab_offset = self.field_offset('struct mod_kallsyms', 'num_symtab')
             strtab_offset = self.field_offset('struct mod_kallsyms', 'strtab')
@@ -2176,7 +2173,7 @@ class RamDump():
             self.parse_symbols_of_one_module(mod_tbl_ent, ko_file_list)
 
     def add_symbols_to_global_lookup_table(self):
-        if self.is_config_defined("CONFIG_KALLSYMS"):
+        if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
             for mod_tbl_ent in self.module_table.module_table:
                 for sym in mod_tbl_ent.kallsyms_table:
                     if sym[1].startswith('$x') or sym[1].startswith('$d'):
