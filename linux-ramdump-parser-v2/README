@@ -116,4 +116,4 @@ make_rpm.sh
 -------------------------------
 This script helps packages the linux-ramdump-parser-v2 subdirectory in this repo as an RPM deliverable.
 
-Usage: ./make_rpm.sh
+Usage: ./make_rpm.sh [-a <Architecture>]
