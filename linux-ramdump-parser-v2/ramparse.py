@@ -170,6 +170,14 @@ if __name__ == '__main__':
                                          ]
                           """,
                           default=[])
+    parser.add_option('--fs', '--ftrace_buffer_size_kb', type='int', dest='ftrace_max_size',
+                      help="""
+                      This option indicates that ftrace trace buffer max size in KB.
+                      It will be passed to ensure an early bailout from ftrace parser if size goes
+                      beyond this specified value.
+                      Example: --fs 4096
+                      This specifies that max size is 4096 KB.
+                      """)
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
