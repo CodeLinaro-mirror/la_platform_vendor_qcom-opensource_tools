@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1406,13 +1406,13 @@ def get_wdog_timing(ramdump):
             wdog_data_addr + pet_timer_off + pet_timer_entry_offset + pet_timer_prev_offset)
 
         if(pet_timer_entry_prev == '0x200'):
-            pet_timer_expired = 1
+            pet_timer_expired = True
         else:
-            pet_timer_expired = 0
+            pet_timer_expired = False
     else:
         timer_expired_off = ramdump.field_offset(
             'struct msm_watchdog_data', 'timer_expired')
-        pet_timer_expired = ramdump.read_word(wdog_data_addr + timer_expired_off)
+        pet_timer_expired = ramdump.read_bool(wdog_data_addr + timer_expired_off)
     pet_time_off = ramdump.field_offset('struct msm_watchdog_data', 'pet_time')
     bark_time_off = ramdump.field_offset(
         'struct msm_watchdog_data', 'bark_time')
@@ -1452,10 +1452,13 @@ def get_wdog_timing(ramdump):
     if not ramdump.minidump:
         wdog_task = ramdump.read_structure_field(
             wdog_data_addr, 'struct msm_watchdog_data', 'watchdog_task')
-        wdog_task_state = ramdump.read_structure_field(
-            wdog_task, 'struct task_struct', 'state')
-        wdog_task_threadinfo = ramdump.read_structure_field(
-            wdog_task, 'struct task_struct', 'stack')
+        if ramdump.kernel_version >= (5, 15, 0):
+            wdog_task_state = ramdump.read_structure_field(
+                wdog_task, 'struct task_struct', '__state')
+        else:
+            wdog_task_state = ramdump.read_structure_field(
+                wdog_task, 'struct task_struct', 'state')
+        wdog_task_threadinfo = ramdump.get_thread_info_addr(wdog_task)
         wdog_task_cpu = ramdump.get_task_cpu(wdog_task, wdog_task_threadinfo)
         wdog_task_oncpu = ramdump.read_structure_field(
             wdog_task, 'struct task_struct', 'on_cpu')
@@ -1496,8 +1499,11 @@ def get_wdog_timing(ramdump):
                 "Watchdog task is waiting on core {0} from {1:.6f}".format(
                     wdog_task_cpu, ns_to_sec(wdog_task_queued)))
 
-        elif wdog_task_state == 1 and pet_timer_expired == 1:
+        elif wdog_task_state == 1 and pet_timer_expired == True:
             print_out_str("Pet timer expired but Watchdog task is not queued")
+
+        elif pet_timer_expired == True:
+            print_out_str("Pet timer expired")
 
         else:
             print_out_str('Watchdog pet timer not expired')
@@ -1507,6 +1513,9 @@ def get_wdog_timing(ramdump):
     print_out_str('CPU online bits: {0:08b}'.format(cpu_online_bits))
     print_out_str('CPU runqueue online bits: {0:08b}'.format(runq_online_bits))
     print_out_str('CPU isolated bits: {0:08b}'.format(cpu_isolated_bits))
+    if (ramdump.kernel_version >= (5, 15, 0)):
+        cpu_dying_bits = ramdump.read_word('__cpu_dying_mask')
+        print_out_str('CPU dying bits: {0:08b}'.format(cpu_dying_bits))
     print_out_str('pet_timer_flags: 0x{0:x}'.format(pet_timer_flags))
     print_out_str('pet_timer_expires: {0}'.format(pet_timer_expires))
     print_out_str('Current jiffies  : {0}'.format(jiffies))
