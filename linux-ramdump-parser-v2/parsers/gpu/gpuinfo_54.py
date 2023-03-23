@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -477,6 +477,10 @@ class GpuParser_54(RamParser):
         reg_phys = dump.read('device_3d0.dev.reg_phys')
         reg_virt = dump.read('device_3d0.dev.reg_virt')
         ft_policy = dump.read('device_3d0.ft_policy')
+        kgsl_mmu = dump.struct_field_addr(self.devp, 'struct kgsl_device',
+                                          'mmu')
+        pfpolicy = dump.read_structure_field(kgsl_mmu, 'struct kgsl_mmu',
+                                             'pfpolicy')
         long_ib_detect = dump.read('device_3d0.long_ib_detect')
         pwrctrl_flag = dump.read('device_3d0.pwrctrl_flag')
         speed_bin = dump.read('device_3d0.speed_bin')
@@ -499,6 +503,7 @@ class GpuParser_54(RamParser):
         self.writeln('reg_phys: ' + strhex(reg_phys))
         self.writeln('reg_virt: ' + strhex(reg_virt))
         self.writeln('ft_policy: ' + str(ft_policy))
+        self.writeln('pfpolicy: ' + str(pfpolicy))
         self.writeln('long_ib_detect: ' + str(long_ib_detect))
         self.writeln('pwrctrl_flag: ' + strhex(pwrctrl_flag))
         self.writeln('speed_bin: ' + str(speed_bin))
