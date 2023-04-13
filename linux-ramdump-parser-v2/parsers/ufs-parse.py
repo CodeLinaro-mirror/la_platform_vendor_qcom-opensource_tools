@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 #
 # This program is free software; you can redistribute it and/or modify
@@ -77,7 +77,10 @@ class UfsHba():
         return self.ramdump.read_pointer(self.ufs_hba_addr + scsi_host_offset)
 
     def get_scsi_device(self):
-        scsi_dev_offset = self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device')
+        if self.ramdump.get_kernel_version() < (6, 1, 0):
+            scsi_dev_offset = self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device')
+        else:
+            scsi_dev_offset = self.ramdump.field_offset('struct ufs_hba', 'ufs_device_wlun')
         return self.ramdump.read_pointer(self.ufs_hba_addr + scsi_dev_offset)
 
     def dump_ufs_lrbs(self):
@@ -306,8 +309,11 @@ class UfsHba():
             print_out_ufs("\t\t[%d] {" %(x))
             lrb_addr = lrb_p + (x * lrb_sz)
             self.get_scsi_cmd(lrb_addr)
-            print_out_ufs("\t\t\tsense_bufflen = %d" %(self.ramdump.read_int(lrb_addr +
-                                                   self.ramdump.field_offset('struct ufshcd_lrb', 'sense_bufflen'))))
+
+            if self.ramdump.get_kernel_version() < (6, 1, 0):
+                print_out_ufs("\t\t\tsense_bufflen = %d" %(self.ramdump.read_int(lrb_addr +
+                                                       self.ramdump.field_offset('struct ufshcd_lrb', 'sense_bufflen'))))
+
             print_out_ufs("\t\t\tscsi_status = %d" % (self.ramdump.read_int(lrb_addr +
                                                     self.ramdump.field_offset('struct ufshcd_lrb', 'scsi_status'))))
             print_out_ufs("\t\t\tcommand_type = %d" % (self.ramdump.read_int(lrb_addr +
@@ -438,8 +444,13 @@ class UfsHba():
     def dump_ufs_hba_params(self):
         print_out_ufs("struct ufs_hba = 0x%x {" % (self.ufs_hba_addr))
 
-        ufs_scsi_device_addr = self.ramdump.read_pointer(
-                            self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device'))
+        if self.ramdump.get_kernel_version() < (6, 1, 0):
+            ufs_scsi_device_addr = self.ramdump.read_pointer(
+                                self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device'))
+        else:
+            ufs_scsi_device_addr = self.ramdump.read_pointer(
+                                self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'ufs_device_wlun'))
+
         print_out_ufs("\tvendor = %s" %(self.ramdump.read_structure_cstring(
                                         ufs_scsi_device_addr,'struct scsi_device', 'vendor')))
         print_out_ufs("\tmodel = %s" %(self.ramdump.read_structure_cstring(
