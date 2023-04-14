@@ -29,10 +29,12 @@ def gdb_hex_to_dec(val):
 
 class GdbSymbol(object):
 
-    def __init__(self, symbol, section, addr):
+    def __init__(self, symbol, section, addr, offset=None):
         self.symbol = symbol
         self.section = section
         self.addr = addr
+        if offset is not None:
+            self.offset = offset
 
 class GdbMIResult(object):
 
@@ -328,7 +330,11 @@ class GdbMI(object):
             raise GdbMIException('Output looks bogus...', result)
         symbol = parts[0]
         section = parts[-1]
-        return GdbSymbol(symbol, section, address)
+        try:
+            offset = int(parts[1] + parts[2])
+        except ValueError:
+            offset = 0
+        return GdbSymbol(symbol, section, address, offset)
 
     def symbol_at(self, address):
         """Get the symbol at the given address (using ``get_symbol_info``)"""
