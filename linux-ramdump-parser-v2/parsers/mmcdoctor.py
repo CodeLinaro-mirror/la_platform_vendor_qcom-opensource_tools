@@ -1,5 +1,5 @@
 # Copyright (c) 2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -194,6 +194,8 @@ class MmcCardInfo():
             self.ramdump.field_offset('struct mmc_card', 'ext_csd')
         self.mmc_ext_csd = ext_csd_off
         fw_version_offset = self.ramdump.field_offset('struct mmc_ext_csd', 'fw_version')
+	self.dev_life_a = self.ramdump.read_byte(self.mmc_ext_csd + self.ramdump.field_offset('struct mmc_ext_csd', 'device_life_time_est_typ_a'))
+	self.dev_life_b = self.ramdump.read_byte(self.mmc_ext_csd + self.ramdump.field_offset('struct mmc_ext_csd', 'device_life_time_est_typ_b'))
         if (fw_version_offset is None):
             return -2
         ext_csd_fwrev = ext_csd_off + fw_version_offset
@@ -347,6 +349,8 @@ class MmcDataStructure():
         fd.write("Host ios_timing = %d\n" %self.hostinfo.ios_timing)
         fd.write("Host ios_signal_voltage = %d\n" %self.hostinfo.ios_signal_voltage)
         fd.write("Host ios_drv_type = %d\n" %self.hostinfo.ios_drv_type)
+	fd.write("eMMC Life Time Estimation A =  %d%% device life time used\n" %(self.cardinfo.dev_life_a * 10))
+	fd.write("eMMC Life Time Estimation B =  %d%% device life time used\n" %(self.cardinfo.dev_life_b * 10))
         self.dump_trace_buf(fd)
         fd.write(MMC_DATA_FOOT % self.index)
         fd.close()
