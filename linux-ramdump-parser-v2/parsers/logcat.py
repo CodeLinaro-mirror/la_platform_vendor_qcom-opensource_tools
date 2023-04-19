@@ -10,14 +10,13 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-
 from parser_util import register_parser, RamParser, cleanupString
-from mmu import Armv8MMU
 from print_out import print_out_str
 import struct
 from parsers.properties import Properties
 import traceback
-import maple_tree
+from utasklib import UTaskLib
+from utasklib import ProcessNotFoundExcetion
 
 @register_parser('--logcat', 'Extract logcat logs from ramdump ')
 class Logcat(RamParser):
@@ -37,31 +36,6 @@ class Logcat(RamParser):
         for i in range(len(self.vma_list)):
             del self.vma_list[0]
         return
-
-    def find_mmap_pgd(self):
-        offset_comm = self.ramdump.field_offset('struct task_struct', 'comm')
-        mm_offset = self.ramdump.field_offset('struct task_struct', 'mm')
-        pgd = None
-        mmap = None
-        logd_task = None
-        mm_mt = None
-
-        for task in self.ramdump.for_each_process():
-            task_name = task + offset_comm
-            task_name = cleanupString(self.ramdump.read_cstring(task_name, 16))
-            if task_name == 'logd':
-                mm_addr = self.ramdump.read_word(task + mm_offset)
-                mmap = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
-                                                   'mmap')
-                pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
-                                                   'pgd')
-                logd_task = task
-                if mmap is None:
-                    mm_mt = self.ramdump.struct_field_addr(mm_addr, 'struct mm_struct',
-                                                       'mm_mt')
-                break
-
-        return mmap, pgd, logd_task, mm_mt
 
     def get_logd_cnt_and_addr(self, logdmap):
         logdcount = 0
@@ -288,61 +262,85 @@ class Logcat(RamParser):
                         min = min + 0x1000
         return
 
-    def get_vmalist(self, node, vmalist:list):
-        if node != 0:
-            vmalist.append(node)
-        return
+    def generate_logcat_bin(self, taskinfo):
+        '''
+        generate logcat.bin for the older android version
+        param taskinfo: utasklib.UTaskInfo
+        '''
+        meta_size = 32
+        magic = 0xCECEC0DE
+        store_offset = 0
+        mm_offset = self.ramdump.field_offset('struct task_struct', 'mm')
+        mm_addr = self.ramdump.read_word(taskinfo.task_addr + mm_offset)
+        mmap = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
+                                                 'mmap')
+        if mmap:
+            logdcount, logdaddr = self.get_logd_cnt_and_addr(mmap)
+            self.get_range(mmap, logdcount, logdaddr)
+            self.generate_bin(taskinfo.mmu)
+        else:
+            for vma in taskinfo.vmalist:
+                if vma.flags & 0b11 != 0b11:
+                    continue
+                vma_info = {}
+                size = vma.vm_end - vma.vm_start
+                vma_info['header'] = "{0:016x}{1:016x}{2:016x}{3:016x}".format(
+                                          self.swap64(magic), self.swap64(vma.vm_start), self.swap64(size),
+                                          self.swap64(store_offset + meta_size))
+                vma_info['start'] = vma.vm_start
+                vma_info['size'] = size
+                self.vma_list.append(vma_info)
+                store_offset = store_offset + size + meta_size
+        self.generate_bin(taskinfo.mmu)
 
     def parse(self):
         try:
-            mmap, pgd, logd_task, mm_mt = self.find_mmap_pgd()
-            if mmap is None and mm_mt is None:
+            try:
+                taskinfo = UTaskLib(self.ramdump).get_utask_info("logd")
+            except ProcessNotFoundExcetion:
                 print_out_str("logd process is not started")
                 return
-
-            vmalist = None
-            if mmap is None and mm_mt is not None:
-                vmalist = []
-                mt_walk = maple_tree.MapleTreeWalker(self.ramdump)
-                mt_walk.walk(mm_mt, self.get_vmalist, vmalist)
-
-            pgdp = self.ramdump.virt_to_phys(pgd)
-            mmu = Armv8MMU(self.ramdump, pgdp)
             propertyParser = Properties(self.ramdump)
+            ver = -1
             try:
-                ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                        "ro.build.version.sdk","u:object_r:build_prop:s0", vmalist=vmalist))
+                # generate system/vendor properties to Properties.txt
+                propertyParser.parse()
+                for name, value in propertyParser.proplist:
+                    if name == "ro.build.version.sdk" or name == "ro.vndk.version":
+                        ver = int(value)
             except:
                 ver = -1
 
-            if not ver or ver == -1: #secondary prop
-                try:
-                    ver = int(propertyParser.find_property_from_file(mmu, mmap,
-                            "ro.vndk.version","u:object_r:vndk_prop:s0", vmalist=vmalist))
-                except:
-                    ver = -1
             print_out_str("Current sdk version is "+ str(ver))
             if ver >= 31: # Android S
                 from parsers.logcat_v3 import Logcat_v3
-                logcat = Logcat_v3(self.ramdump, mmu, logd_task)
-                is_success = False
+                logcat = Logcat_v3(self.ramdump, taskinfo)
                 try:
-                    is_success = logcat.parse(vmalist=vmalist)
+                    is_success = logcat.parse()
                 except:
                     is_success = False
+                    print_out_str("logcat_v3 parser failed")
                     traceback.print_exc()
-                if not is_success and mmap:
-                    logdcount, logdaddr = self.get_logd_cnt_and_addr(mmap)
-                    self.get_range(mmap, logdcount, logdaddr)
-                    self.generate_bin(mmu)
+
+                if is_success:
+                    print_out_str("logcat_v3 parse logcat success")
+                    return
+                try:
                     from parsers.logcat_v3 import Logcat_vma
-                    logcat = Logcat_vma(self.ramdump, mmu, logd_task, self.LOGCAT_BIN)
-                    logcat.parse()
-            elif mmap:
-                logdcount, logdaddr = self.get_logd_cnt_and_addr(mmap)
-                self.get_range(mmap, logdcount, logdaddr)
-                self.generate_bin(mmu)
+                    logcat = Logcat_vma(self.ramdump, taskinfo)
+                    is_success = logcat.parse()
+                except:
+                    is_success = False
+                    print_out_str("logcat_vma parser failed")
+                    traceback.print_exc()
+
+                if is_success:
+                    print_out_str("logcat_vma parse logcat success")
+                else:
+                    # generate logcat.bin when both logcat_v3 and logcat_vma parse failed
+                    self.generate_logcat_bin(taskinfo)
+            else:
+                self.generate_logcat_bin(taskinfo)
         except Exception as result:
             print_out_str(str(result))
             traceback.print_exc()
-
