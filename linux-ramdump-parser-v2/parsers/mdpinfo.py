@@ -1,4 +1,4 @@
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -2457,6 +2457,102 @@ class MDPinfo(RamParser):
         contents_for_analysis=self.ds0(contents_for_analysis)
         return contents_for_analysis
 
+    def check_rc_hang(self):
+        try:
+            dbgbus = self.ramdump.open_file('sde_dbgbus.txt', 'r')
+            lines = dbgbus.readlines()
+            rc0_debugbus_point = '00000348 00000034 00000002'
+            rc1_debugbus_point = '00000348 00000035 00000002'
+            for eachLine in lines:
+                if rc0_debugbus_point in eachLine or rc1_debugbus_point in eachLine:
+                    rc = eachLine
+                    rc_data=rc.split(' ')
+                    if len(rc_data) == 6 and (int(rc_data[4], 16) & int('6000000', 16)) == int('6000000',16):
+                        return True
+        except:
+            pass
+        return False
+
+    def check_LTM_status(self):
+        try:
+            reg_dump = self.ramdump.open_file('sde_regdump.txt', 'r')
+            lines = reg_dump.readlines()
+            ltm0_status_reg = '0x6a360'
+            ltm1_status_reg = '0x6b360'
+            ltm2_status_reg = '0x6c360'
+            ltm3_status_reg = '0x6d360'
+            for eachLine in lines:
+                if ltm0_status_reg in eachLine or ltm1_status_reg in eachLine or ltm2_status_reg in eachLine or ltm3_status_reg in eachLine:
+                    ltm = eachLine
+                    ltm_data = ltm.split(' ')
+                    if len(ltm_data) == 6 and (int(ltm_data[2], 16) & int('300', 16)) > 0:
+                        return True
+        except:
+            pass
+        return False
+
+    def check_LUTDMA_hang(self):
+        try:
+            reg_dump = self.ramdump.open_file('sde_regdump_parsed.txt', 'r')
+            lines = reg_dump.readlines()
+            LUT_regsister_dump = 'reg_dma'
+            reg_dma0_status = '--NA--'
+            reg_dma1_status = '--NA--'
+            ctl0 = '0x16060'
+            ctl1 = '0x17060'
+            ctl2 = '0x18060'
+            ctl3 = '0x19060'
+            ctl4 = '0x1a060'
+            ctl5 = '0x1b060'
+            for eachLine in lines:
+                if ctl0 in eachLine or ctl1 in eachLine or ctl2 in eachLine or ctl3 in eachLine or ctl4 in eachLine or ctl5 in eachLine:
+                    ctl_data = eachLine.split(' ')
+                    if len(ctl_data) == 6 and (int(ctl_data[2], 16) & int('20', 16)) > 0:
+                        return True
+                if LUT_regsister_dump in eachLine:
+                    reg_dma_dump = True
+                    reg_dma_start = eachLine.split(' ')
+                    reg_dma0_status = hex(int(reg_dma_start[1],16) + int('0x170',16))
+                    reg_dma1_status = hex(int(reg_dma_start[1],16) + int('0x570',16))
+                elif reg_dma0_status in eachLine or reg_dma1_status in eachLine:
+                    reg_dma_data = eachLine.split(' ')
+                    if int(reg_dma_data[1],16) > 0:
+                        return True
+        except:
+            pass
+        return False
+
+    def sde_initial_analysis(self):
+        rc_hang = False
+        LTM_busy = False
+        LUTDMA_hang = False
+
+        rc_hang = self.check_rc_hang()
+        LTM_busy = self.check_LTM_status()
+        LUTDMA_hang = self.check_LUTDMA_hang()
+        try:
+            self.file = self.ramdump.open_file('sde_evtlog_parsed.txt', 'r+')
+            content = self.file.read()
+            self.file.seek(0, 0)
+            self.file.write('%s \n' % ("---------------------------------------  SDE INITIAL ANALYSIS  ---------------------------------------"))
+            if rc_hang:
+                self.file.write('%s \n' % ("RC hang observed\n"))
+            else:
+                self.file.write('%s \n' % ("No RC hang\n"))
+            if LTM_busy:
+                self.file.write('%s \n' % ("LTM Hist/WB busy\n"))
+            else:
+                self.file.write('%s \n' % ("No LTM busy\n"))
+            if LUTDMA_hang:
+                self.file.write('%s \n' % ("LUT DMA hang observed\n"))
+            else:
+                self.file.write('%s \n' % ("No LUT DMA hang\n"))
+            self.file.write('%s \n' % ("------------------------------------------------------------------------------------------------------"))
+            self.file.write(content)
+            self.file.close()
+        except:
+            pass
+
     def parse(self):
 
         mdss_dbg = MdssDbgXlog(self.ramdump, 'mdss_dbg_xlog')
@@ -2740,7 +2836,7 @@ class MDPinfo(RamParser):
                                             'val':Struct.get_u32,
                                             'blk_id':Struct.get_u8})
                     if (log_log.time == 0x0):
-                        break
+                        continue
                     self.outfile.write('%-20.5d ' % (log_log.time))
                     self.outfile.write('%-10.1d ' % (log_log.pid))
                     self.outfile.write('%-10.1x ' % (log_log.addr))
