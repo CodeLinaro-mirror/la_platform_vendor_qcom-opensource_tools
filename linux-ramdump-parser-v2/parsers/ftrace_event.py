@@ -201,7 +201,8 @@ class FtraceParser_Event(object):
 
                 elif rb_event_type == 31:
                     # Accounts for an absolute timestamp
-                    rb_event_timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+                    timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+                    rb_event_timestamp = 0
                     abs_timestamp = True
 
                 rb_event = rb_event + record_length
@@ -579,7 +580,35 @@ class FtraceParser_Event(object):
                             print_buffer_offset = (print_buffer_offset + (align)) & (~align)
                             continue
 
-                        elif 'ps' in match.group() or 'p' in match.group() or 'x' in match.group():
+                        elif '%ps' in match.group():
+                            replacement = "%s%x"
+                            if self.ramdump.arm64:
+                                addr = self.ramdump.read_u64(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 8
+                            else:
+                                addr = self.ramdump.read_u32(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 4
+
+                        elif '%p' in match.group() and '%ps' not in match.group():
+                            replacement = "%x"
+                            if self.ramdump.arm64:
+                                print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
+                                print_buffer_offset += 8
+                            else:
+                                print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                                print_buffer_offset += 4
+
+                        elif 'x' in match.group():
                             replacement = "%x"
                             if self.ramdump.arm64:
                                 print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
@@ -724,7 +753,10 @@ class FtraceParser_Event(object):
                             v = self.ramdump.read_u64(ftrace_raw_entry + offset)
                         else:
                             v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                        if "func" not in item:
+                        if "rwmmio" in event_name and "addr" in item:
+                            phys = self.ramdump.virt_to_phys(v)
+                            fmt_name_value_map[item] = "{}({})".format(hex(int(v)), hex(phys))
+                        elif "func" not in item:
                             fmt_name_value_map[item] = hex(int(v))
                         else:
                             fmt_name_value_map[item] = v
