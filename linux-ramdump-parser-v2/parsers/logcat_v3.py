@@ -13,10 +13,10 @@ from parser_util import RamParser, cleanupString
 from print_out import print_out_str
 import struct
 import datetime
-import os
 import dmesglib
 import print_out
-
+from parsers.zram import Zram
+from utasklib import UTaskLib
 from concurrent import futures
 import traceback
 
@@ -237,10 +237,11 @@ class LogEntry_Dmesg(LogEntry):
             return super().__str__()
 
 class Logcat_base(RamParser, Constants):
-    def __init__(self, ramdump, mmu, logd_task):
+    def __init__(self, ramdump, taskinfo):
         super().__init__(ramdump)
-        self.mmu = mmu
-        self.logd_task = logd_task
+        self.taskinfo = taskinfo
+        self.mmu = taskinfo.mmu
+        self.logd_task = taskinfo.task_addr
         self.sizeUsed = {}
         self.maxSize = {}
         self.is_success = False
@@ -266,59 +267,32 @@ class Logcat_base(RamParser, Constants):
         self.wall_to_monotonic_tv_sec = 0
         self.wall_to_monotonic_tv_nsec = 0
         self.dmesg_list={}
+        self.zram_parser = Zram(ramdump)
 
-    def lookup_bss(self, vma, start_data, end_data):
-        tmpstartVm = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_start')
-        tmpendVm   = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_end')
-        bss_start = None
-
-        if (end_data > tmpstartVm) and (end_data < tmpendVm):
-            # android Q: 2 code vma + 2 data vma + 1bss, bss section is individual vma after end_data
-            if (start_data < tmpstartVm):
-                logdmap   = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_next')
-                bss_start = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_start')
-            else:
-                # android R: 3 code vma and 1 data+bss vma, bss section is just after end_data,
-                # data section is addr_length align and bss section is 8 bytes align
-                bss_start = end_data
-            print_out_str("bss_start: 0x%x vma start 0x%x vma end 0x%x\n" %(bss_start, tmpstartVm, tmpendVm))
-        return bss_start, tmpendVm
-
-    def bss_start_addr(self, vmalist=None):
-        offset_comm = self.ramdump.field_offset('struct task_struct', 'comm')
-        mm_offset = self.ramdump.field_offset('struct task_struct', 'mm')
-
-        mm_addr    = self.ramdump.read_word(self.logd_task + mm_offset)
-        mmap       = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'mmap')
-
-        start_data = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'start_data')
-        end_data   = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'end_data')
-
-        bss_start = None
-        tmpendVm = None
+    def find_bss_addrs(self):
+        """ find vma list of bss section """
+        bss_vms_list = []
         # bss section is after data section
-        if mmap is None and vmalist:
-            for vma in vmalist:
-                bss_start, tmpendVm = self.lookup_bss(vma, start_data, end_data)
-                if bss_start:
-                    break
-        elif mmap:
-            logdmap = mmap
-            while logdmap != 0:
-                bss_start, tmpendVm = self.lookup_bss(logdmap, start_data, end_data)
-                if bss_start:
-                    break
-                logdmap = self.ramdump.read_structure_field(logdmap, 'struct vm_area_struct', 'vm_next')
-        return bss_start, tmpendVm
+        for index, vma in enumerate(self.taskinfo.vmalist):
+            tmpstartVm = vma.vm_start
+            tmpendVm   = vma.vm_end
+            # rw flags
+            if vma.file_name == "logd" and vma.flags & 0b11 == 0b11:
+                bss_vms_list.append([tmpstartVm, tmpendVm])
+                # anon page
+                vma_next = self.taskinfo.vmalist[index + 1]
+                if not vma_next.file_name and vma_next.flags & 0b11 == 0b11:
+                    bss_vms_list.append([vma_next.vm_start, vma_next.vm_end])
+        return bss_vms_list
 
     #return offset of RTC to Mono
-    def findCorrection(self, vmalist=None):
+    def findCorrection(self):
         sec = 0
         nsec = 0
         found = False
         correction_addr = 0
-        bss_start, bss_end = self.bss_start_addr(vmalist=vmalist)
-        if bss_start:
+        bss_addrs = self.find_bss_addrs()
+        for bss_start, bss_end in bss_addrs:
             idx = 0
             bss_size = bss_end - bss_start
             while idx < bss_size:
@@ -333,8 +307,12 @@ class Logcat_base(RamParser, Constants):
                     break
                 idx += 8
 
+            if found:
+                break
+
         if found:
-            print_out_str(("Found &LogBuffer::Correction=0x%x LogBuffer::Correction=%ld.%ld") % (correction_addr, sec, nsec))
+            print_out_str(("Found &LogBuffer::Correction=0x%x LogBuffer::Correction=%ld.%ld")
+                          % (correction_addr, sec, nsec))
         else:
             print_out_str("&LogBuffer::Correction not found")
         return found, sec, nsec
@@ -344,43 +322,10 @@ class Logcat_base(RamParser, Constants):
         return val == value
 
     def read_bytes(self, addr, len):
-        addr = self.mmu.virt_to_phys(addr)
-        s = self.ramdump.read_physical(addr, len)
-        if (s is None) or (s == ''):
-            return None
-        if len == 8:
-            s = struct.unpack('<Q', s)
-        elif len == 4:
-            s = struct.unpack('<I', s)
-        elif len == 2:
-            s = struct.unpack('<H', s)
-        elif len == 1:
-            s = struct.unpack('<B', s)
-        else:
-            print_out_str("This api used to unpack 1/2/4/8 bytes data, check the len\n")
-            exit()
-        return s[0]
+        return UTaskLib.read_bytes(self.ramdump, self.mmu, addr, len, self.zram_parser)
 
-    def read_binary(self, addr, length):
-        """Reads binary data of specified length from addr_or_name."""
-        min = 0
-        msg = b''
-        size = length
-        while length > 0:
-            addr = addr + min
-            # msg located in the same page
-            if length < (0x1000 - addr % 0x1000):
-                min = length
-            # msg separated in two pages
-            else:
-                min = 0x1000 - addr % 0x1000
-            length = length - min
-            addr_phys = self.mmu.virt_to_phys(addr)
-            msg_binary = self.ramdump.read_physical(addr_phys, min)
-            if msg_binary is None or msg_binary == '':
-                return msg
-            msg = msg + msg_binary
-        return msg
+    def read_binary(self, addr, len):
+        return UTaskLib.read_binary(self.ramdump, self.mmu, addr, len, self.zram_parser)
 
     def get_output_filename(self, log_id):
         if log_id >= self.LOG_ID_MIN and log_id <= self.LOG_ID_MAX:
@@ -546,6 +491,8 @@ class Logcat_base(RamParser, Constants):
             try:
                 _data = self.zstd.ZstdDecompressor().decompress(_data)
             except:
+                print_out_str("decompress caused error on logid:section(%d:%d), size(%d)" %(log_id, section, len(_data)))
+                traceback.format_exc()
                 _data = None
 
         ret = None
@@ -744,8 +691,8 @@ class Logcat_base(RamParser, Constants):
 
 
 class Logcat_v3(Logcat_base):
-    def __init__(self, ramdump, mmu, logd_task):
-        super().__init__(ramdump, mmu, logd_task)
+    def __init__(self, ramdump, taskinfo):
+        super().__init__(ramdump, taskinfo)
 
     def get_logbuffer_addr(self):
         stack_offset = self.ramdump.field_offset('struct task_struct', 'stack')
@@ -778,15 +725,16 @@ class Logcat_v3(Logcat_base):
             print_out_str("logbuf_addr from x23 = 0x%x" %(x23_logbuf_addr))
         return logbuf_addrs
 
-    def parse(self, vmalist=None):
+    def parse(self):
         self.read_dmesg()
-        self.wall_to_mono_found, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec = self.findCorrection(vmalist=vmalist)
+        self.wall_to_mono_found, self.wall_to_monotonic_tv_sec, self.wall_to_monotonic_tv_nsec = self.findCorrection()
         logbuf_addrs = self.get_logbuffer_addr()
         for __logbuf_addr in logbuf_addrs:
             logchunk_list_addr = __logbuf_addr + 0x60
             try:
                 self.process_chunklist_and_save(logchunk_list_addr)
-            except:
+            except Exception as e:
+                print(str(e))
                 traceback.print_exc()
             if self.is_success:
                 print_out_str("logbuf_addr = 0x%x" %(__logbuf_addr))
@@ -795,9 +743,8 @@ class Logcat_v3(Logcat_base):
         return self.is_success
 
 class Logcat_vma(Logcat_base):
-    def __init__(self, ramdump, mmu, logd_task, bin_file):
-        super().__init__(ramdump, mmu, logd_task)
-        self.bin_file = bin_file
+    def __init__(self, ramdump, taskinfo):
+        super().__init__(ramdump, taskinfo)
         self.HEAD_SIZE = 32
         self.vmas = []
         if int(ramdump.get_config_val("CONFIG_BASE_SMALL")) == 0:
@@ -838,33 +785,18 @@ class Logcat_vma(Logcat_base):
                 return vma["data"][offset:offset+len]
         return b''
 
-    def get_all_vmas(self):
-        file_path = os.path.join(self.ramdump.outdir, self.bin_file)
-        if not os.path.exists(file_path):
-            print_out_str(file_path+" not exist!!")
-            return
-
-        with self.ramdump.open_file(self.bin_file, "rb") as f:
-            size = os.path.getsize(file_path)
-            data = f.read(size)
-            pos = 0
-            while pos < size:
-                if pos + self.HEAD_SIZE > size:
-                    break
-                header = struct.unpack('<QQQQ', data[pos:pos+self.HEAD_SIZE])
-                magic = header[0]
-                min_addr = header[1]
-                vma_size = header[2]
-                vma_offset = header[3]
-                if pos + self.HEAD_SIZE > size:
-                    break
-                vma_data = data[vma_offset: vma_offset + vma_size]
-                vma = {}
-                vma["vmstart"] = min_addr
-                vma["size"] = vma_size
-                vma["data"] = vma_data
-                self.vmas.append(vma)
-                pos = pos + self.HEAD_SIZE + vma_size
+    def get_vmas_with_rw(self):
+        '''
+        return vma list with read+write permissions
+        '''
+        for vma in self.taskinfo.vmalist:
+            if vma.flags & 0b11 != 0b11:
+                continue
+            item = {}
+            item["vmstart"] = vma.vm_start
+            item["size"] = vma.vm_end - vma.vm_start
+            item["data"] = super().read_binary(item["vmstart"], item["size"])
+            self.vmas.append(item)
 
     def has_valid_log(self, main_chunklist_addr):
         end_node_addr = self.read_bytes(main_chunklist_addr, self.addr_length)
@@ -914,7 +846,7 @@ class Logcat_vma(Logcat_base):
     def parse(self):
         self.read_dmesg()
         startTime = datetime.datetime.now()
-        self.get_all_vmas()
+        self.get_vmas_with_rw()
         # find address of std::list<SerializedLogChunk>
         chunklist_addr = 0
         for vma in self.vmas:
@@ -923,6 +855,7 @@ class Logcat_vma(Logcat_base):
                 chunklist_addr = vma["vmstart"]+offset
                 break
         if chunklist_addr == 0:
+            print("logbuf_addr was not found")
             return False
         # start parsing
         is_valid_chunklist = self.has_valid_log(chunklist_addr + self.LOG_ID_MAIN * 0x18)
@@ -931,7 +864,7 @@ class Logcat_vma(Logcat_base):
             return False
         # start parsing
         self.process_chunklist_and_save(chunklist_addr)
-        print_out_str("logbuf_addr = 0x%x" %(chunklist_addr-0x60))
+        print_out_str("logbuf_addr = 0x%x" % (chunklist_addr-0x60))
         print("logcat_vma parse logcat cost "+str((datetime.datetime.now()-startTime).total_seconds())+" s")
         return self.is_success
 
