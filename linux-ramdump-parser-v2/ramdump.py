@@ -171,22 +171,27 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
             return
 
         with open(os.path.join(self.autodumpdir, filename)) as f:
-            for line in f.readlines():
-                words = line.split()
-                if not words or not is_ramdump_file(words[-1], self.minidump):
-                    continue
-                fname = words[-1]
-                start = int(words[1], 16)
-                size = int(words[2])
-                filesize = os.path.getsize(
-                    os.path.join(self.autodumpdir, fname))
-                if size != filesize:
-                    print_out_str(
-                        ("!!! Size of %s on disk (%d) doesn't match size " +
-                         "from dump_info.txt (%d). Skipping...")
-                        % (fname, filesize, size))
-                    continue
-                yield fname, start
+            try:
+                for line in f.readlines():
+                    words = line.split()
+                    if not words or not is_ramdump_file(words[-1],
+                                                        self.minidump):
+                        continue
+                    fname = words[-1]
+                    start = int(words[1], 16)
+                    size = int(words[2])
+                    filesize = os.path.getsize(
+                        os.path.join(self.autodumpdir, fname))
+                    if size != filesize:
+                        print_out_str(
+                            ("!!! Size of %s on disk (%d) doesn't match size " +
+                             "from dump_info.txt (%d). Skipping...")
+                            % (fname, filesize, size))
+                        continue
+                    yield fname, start
+            except:
+                print_out_str('!!! Cannot parse dump_info.txt due to improper format!')
+                return
 
 class AutoDumpInfoReducedDump(AutoDumpInfo):
     # Parses binoffsets.txt, dump_info.txt
