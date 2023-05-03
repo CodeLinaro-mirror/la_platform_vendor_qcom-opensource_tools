@@ -930,7 +930,7 @@ class RamDump():
                             kva_dump_addr = pa
                 self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
 
-            if os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
+            if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
                 fd = open(file_path, 'rb')
                 kva_elf = ELFFile(fd)
@@ -1068,7 +1068,7 @@ class RamDump():
 
                 print_out_str('!!! Exiting now')
                 sys.exit(1)
-        if self.get_kernel_version() > (5, 7, 0):
+        if self.get_kernel_version() > (5, 7, 0) and self.arm64:
             stext = self.address_of('primary_entry')
         else:
             stext = self.address_of('stext')
@@ -1735,7 +1735,7 @@ class RamDump():
             else:
                 if self.minidump:
                     for a in self.ebi_files:
-                        if "md_SHRDIMEM" in a[3]:
+                        if "md_SHRDIMEM".lower() in a[3].lower():
                             self.kaslr_addr = a[1] + 0x6d0
                             break
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
@@ -2307,6 +2307,12 @@ class RamDump():
         #print "hex of address in get_symbol_info1 {0}".format(hex(addr1))
         addr1, desc = self.step_through_jump_table(addr1)
         symbol_obj =  self.gdbmi.get_symbol_info(addr1)
+        module = symbol_obj.section.split('\\\\')[-1]
+        if self.minidump:
+            if module == 'vmlinux':
+                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset)
+            else:
+                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset) + " [" + module + "]"
         return symbol_obj.symbol + desc
 
     def type_of(self, symbol):
@@ -2408,6 +2414,16 @@ class RamDump():
         high = len(self.lookup_table) - 1
 
         addr, desc = self.step_through_jump_table(addr)
+
+        if self.minidump:
+            symbol_str = self.get_symbol_info1(addr)
+            words = symbol_str.split(" ")
+            symbol = words[0]
+            offset = words[1]
+            if len(words) == 3:
+                module = words[2]
+                return (symbol + ' ' + module, int(offset))
+            return (symbol, int(offset))
 
         if addr is None or addr < table[low][0] or addr > table[high][0]:
             return None
