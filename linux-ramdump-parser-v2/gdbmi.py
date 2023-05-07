@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -29,10 +29,12 @@ def gdb_hex_to_dec(val):
 
 class GdbSymbol(object):
 
-    def __init__(self, symbol, section, addr):
+    def __init__(self, symbol, section, addr, offset=None):
         self.symbol = symbol
         self.section = section
         self.addr = addr
+        if offset is not None:
+            self.offset = offset
 
 class GdbMIResult(object):
 
@@ -121,7 +123,9 @@ class GdbMI(object):
         for mod in self.mod_table.module_table:
             if not mod.get_sym_path():
                 continue
-            load_mod_sym_cmd = ['add-symbol-file', mod.get_sym_path().replace('\\', '\\\\'), '0x{:x}'.format(mod.module_offset - self.kaslr_offset)]
+            load_mod_sym_cmd = ['add-symbol-file', mod.get_sym_path().replace('\\', '\\\\')]
+            if ".text" not in mod.section_offsets.keys():
+                load_mod_sym_cmd += ['0x{:x}'.format(mod.module_offset - self.kaslr_offset)]
             for segment, offset in mod.section_offsets.items():
                 load_mod_sym_cmd += ['-s', segment, '0x{:x}'.format(offset - self.kaslr_offset) ]
             self._run(' '.join(load_mod_sym_cmd))
@@ -326,7 +330,11 @@ class GdbMI(object):
             raise GdbMIException('Output looks bogus...', result)
         symbol = parts[0]
         section = parts[-1]
-        return GdbSymbol(symbol, section, address)
+        try:
+            offset = int(parts[1] + parts[2])
+        except ValueError:
+            offset = 0
+        return GdbSymbol(symbol, section, address, offset)
 
     def symbol_at(self, address):
         """Get the symbol at the given address (using ``get_symbol_info``)"""

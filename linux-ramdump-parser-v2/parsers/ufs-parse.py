@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 #
 # This program is free software; you can redistribute it and/or modify
@@ -77,7 +77,10 @@ class UfsHba():
         return self.ramdump.read_pointer(self.ufs_hba_addr + scsi_host_offset)
 
     def get_scsi_device(self):
-        scsi_dev_offset = self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device')
+        if self.ramdump.get_kernel_version() < (6, 1, 0):
+            scsi_dev_offset = self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device')
+        else:
+            scsi_dev_offset = self.ramdump.field_offset('struct ufs_hba', 'ufs_device_wlun')
         return self.ramdump.read_pointer(self.ufs_hba_addr + scsi_dev_offset)
 
     def dump_ufs_lrbs(self):
@@ -306,8 +309,11 @@ class UfsHba():
             print_out_ufs("\t\t[%d] {" %(x))
             lrb_addr = lrb_p + (x * lrb_sz)
             self.get_scsi_cmd(lrb_addr)
-            print_out_ufs("\t\t\tsense_bufflen = %d" %(self.ramdump.read_int(lrb_addr +
-                                                   self.ramdump.field_offset('struct ufshcd_lrb', 'sense_bufflen'))))
+
+            if self.ramdump.get_kernel_version() < (6, 1, 0):
+                print_out_ufs("\t\t\tsense_bufflen = %d" %(self.ramdump.read_int(lrb_addr +
+                                                       self.ramdump.field_offset('struct ufshcd_lrb', 'sense_bufflen'))))
+
             print_out_ufs("\t\t\tscsi_status = %d" % (self.ramdump.read_int(lrb_addr +
                                                     self.ramdump.field_offset('struct ufshcd_lrb', 'scsi_status'))))
             print_out_ufs("\t\t\tcommand_type = %d" % (self.ramdump.read_int(lrb_addr +
@@ -438,8 +444,13 @@ class UfsHba():
     def dump_ufs_hba_params(self):
         print_out_ufs("struct ufs_hba = 0x%x {" % (self.ufs_hba_addr))
 
-        ufs_scsi_device_addr = self.ramdump.read_pointer(
-                            self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device'))
+        if self.ramdump.get_kernel_version() < (6, 1, 0):
+            ufs_scsi_device_addr = self.ramdump.read_pointer(
+                                self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'sdev_ufs_device'))
+        else:
+            ufs_scsi_device_addr = self.ramdump.read_pointer(
+                                self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'ufs_device_wlun'))
+
         print_out_ufs("\tvendor = %s" %(self.ramdump.read_structure_cstring(
                                         ufs_scsi_device_addr,'struct scsi_device', 'vendor')))
         print_out_ufs("\tmodel = %s" %(self.ramdump.read_structure_cstring(
@@ -841,6 +852,49 @@ class UfsIpc():
                     continue
                 print_out_ufs("\t%s" %result)
 
+class UfsRegs():
+    def __init__(self, ramdump, ufs_qc_host_addr):
+        self.ramdump = ramdump
+        self.ufs_qc_host_addr = ufs_qc_host_addr
+
+    def dump_ufs_regs(self, buf, word, prefix):
+        for i in range(word):
+            if i%4 == 0:
+                offest = (i//4)*0x10
+                print_out_ufs('\t%s:' %prefix, False)
+                print_out_ufs('\t%04x:' %offest, False)
+
+            if i%4 == 3 or i == word-1:
+                print_out_ufs('\t%08x' %self.ramdump.read_u32(buf + i*4))
+            else:
+                print_out_ufs('\t%08x' %self.ramdump.read_u32(buf + i*4), False)
+
+    def get_ufs_regs(self, regs_list_addr):
+        regs_list_next = self.ramdump.read_pointer(regs_list_addr + self.ramdump.field_offset('struct list_head', 'next'))
+        while regs_list_next != regs_list_addr:
+            prefix = self.ramdump.read_structure_cstring(regs_list_next, 'struct ufs_qcom_regs', 'prefix')
+            len = self.ramdump.read_u32(regs_list_next + self.ramdump.field_offset('struct ufs_qcom_regs', 'len'))
+            buf = self.ramdump.read_pointer(regs_list_next + self.ramdump.field_offset('struct ufs_qcom_regs', 'ptr'))
+            self.dump_ufs_regs(buf, len//4, prefix)
+            regs_list_next = self.ramdump.read_pointer(regs_list_next + self.ramdump.field_offset(
+                                        'struct list_head', 'next'))
+
+    def parse_ufs_regs(self):
+        gphy_p = self.ramdump.read_pointer(self.ufs_qc_host_addr + self.ramdump.field_offset(
+                                        'struct ufs_qcom_host',
+                                        'generic_phy'))
+        dev_addr = gphy_p + self.ramdump.field_offset('struct phy', 'dev')
+        qphy_p = self.ramdump.read_pointer(dev_addr + self.ramdump.field_offset(
+                                        'struct device',
+                                        'driver_data'))
+        host_regs_list_addr = self.ufs_qc_host_addr + self.ramdump.field_offset('struct ufs_qcom_host', 'regs_list_head')
+        phy_regs_list_addr = qphy_p + self.ramdump.field_offset('struct ufs_qcom_phy', 'regs_list_head')
+
+        print_out_ufs('\n\n===========================Parsed UFS Registers====================================')
+        self.get_ufs_regs(host_regs_list_addr)
+        self.get_ufs_regs(phy_regs_list_addr)
+
+
 @register_parser('--ufs-parser', 'Generate UFS diagnose report', optional=True)
 
 class UfsParser(RamParser):
@@ -867,6 +921,10 @@ class UfsParser(RamParser):
         # ufs ipc log parser
         ufs_ipc_0 = UfsIpc(self.ramdump, F_UFSIPC)
         ufs_ipc_0.parse_ufs_ipc()
+
+        # ufs register parser
+        ufs_regs_0 = UfsRegs(self.ramdump, ufs_qc_host_addr)
+        ufs_regs_0.parse_ufs_regs()
 
         return
 
