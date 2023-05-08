@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -45,8 +45,8 @@ def read_physical_minidump(ebi_files,ebi_files_ramfile,elffile,addr,length):
         endoff = off + length
         if endoff > ebi[4]:
             endoff = ebi[4]
-        val = textSec.data()
-        return val[off:endoff]
+        textSec.stream.seek(textSec['p_offset'] + off)
+        return textSec.stream.read(endoff - off)
     else:
         ebi = (-1, -1, -1)
         for a in ebi_files_ramfile:
