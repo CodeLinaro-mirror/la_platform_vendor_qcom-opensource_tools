@@ -930,7 +930,7 @@ class RamDump():
                             kva_dump_addr = pa
                 self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
 
-            if os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
+            if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
                 fd = open(file_path, 'rb')
                 kva_elf = ELFFile(fd)
@@ -1735,7 +1735,7 @@ class RamDump():
             else:
                 if self.minidump:
                     for a in self.ebi_files:
-                        if "md_SHRDIMEM" in a[3]:
+                        if "md_SHRDIMEM".lower() in a[3].lower():
                             self.kaslr_addr = a[1] + 0x6d0
                             break
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
