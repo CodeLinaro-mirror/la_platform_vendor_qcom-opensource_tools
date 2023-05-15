@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2022 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -201,7 +201,8 @@ class FtraceParser_Event(object):
 
                 elif rb_event_type == 31:
                     # Accounts for an absolute timestamp
-                    rb_event_timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+                    timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
+                    rb_event_timestamp = 0
                     abs_timestamp = True
 
                 rb_event = rb_event + record_length
@@ -451,23 +452,74 @@ class FtraceParser_Event(object):
                 #trace_event_raw_wqfunction_offset = self.ramdump.field_offset('struct ' + struct_type, "function")
                 #wq_function = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_wqfunction_offset)
                 trace_event_raw_work_offset = self.ramdump.field_offset('struct ' + 'trace_event_raw_workqueue_execute_start', "work")
+                function_offset = self.ramdump.field_offset(
+                    'struct ' + 'work_struct', "func")
+
                 if trace_event_raw_work_offset:
                     space_data = self.remaing_space(space_count,len("workqueue_activate_work:"))
                     if self.ramdump.arm64:
                         work = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_work_offset)
+                        function = self.ramdump.read_u64(work + function_offset)
                     else:
                         work = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_work_offset)
+                        function = self.ramdump.read_u32(work + function_offset)
+                    if function != None:
+                        function_name = self.ramdump.unwind_lookup(function)
+                        if function_name == None:
+                            function_name = 'na'
+                    else:
+                        function = 0
+                        function_name = 'na'
+                    #print (function, function_name)
                     '''self.ftrace_out.write("                <TBD>     {0}  {1}: workqueue_activate_work:{2}work struct {3}\n".format(self.cpu,
                                                                                                                                       local_timestamp/1000000000.0,space_data,
                                                                                                                                       str(hex(work)).replace("L","")
                                                                                                                                       ))
                     '''
                     #t = local_timestamp / 1000000000.0
-                    temp_data = "                {4}     {0}  {1:.6f}: workqueue_activate_work:{2}work struct {3}\n".format(self.cpu,
-                                                                                                                                      local_timestamp/1000000000.0,space_data,
-                                                                                                                                      str(hex(work)).replace("L",""),curr_com)
+                    temp_data = "                {4}     {0}  {1:.6f}: workqueue_activate_work:{2}work struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                                 local_timestamp/1000000000.0,space_data,
+                                 str(hex(work)).replace("L",""),curr_com , function, function_name)
 
                     self.ftrace_time_data[t].append(temp_data)
+        elif event_name == "workqueue_execute_start" or event_name == "workqueue_execute_end" or event_name == "workqueue_queue_work":
+                trace_event_raw_work_offset = 0
+                function_offset = 0
+                if event_name == "workqueue_execute_start":
+                    function_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_start', "function")
+                    trace_event_raw_work_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_start', "work")
+                elif event_name == "workqueue_execute_end":
+                    function_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_queue_work', "function")
+                    trace_event_raw_work_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_queue_work', "work")
+                elif event_name == "workqueue_queue_work":
+                    function_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_end', "function")
+                    trace_event_raw_work_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_end', "work")
+                function = 0
+                if function_offset:
+                    if self.ramdump.arm64:
+                        function = self.ramdump.read_u64(ftrace_raw_entry + function_offset)
+                    else:
+                        function = self.ramdump.read_u32(ftrace_raw_entry + function_offset)
+                function_name = 'na'
+                if function != 0:
+                    function_name = self.ramdump.unwind_lookup(function)
+                    if function_name == None:
+                        function_name = 'na'
+                if trace_event_raw_work_offset:
+                   if self.ramdump.arm64:
+                        work = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_work_offset)
+                   else:
+                        work = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_work_offset)
+                   temp_data = "                {4}     {0}  {1:.6f}: {2}  work_struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                                local_timestamp/1000000000.0, event_name,
+                                str(hex(work)).replace("L",""), curr_com, function, function_name)
+                   self.ftrace_time_data[t].append(temp_data)
         elif event_name == "regulator_set_voltage":
             #print "new event meachanism= {0}".format(event_name)
             event_data = self.fromat_event_map[event_name]
@@ -579,7 +631,35 @@ class FtraceParser_Event(object):
                             print_buffer_offset = (print_buffer_offset + (align)) & (~align)
                             continue
 
-                        elif 'ps' in match.group() or 'p' in match.group() or 'x' in match.group():
+                        elif '%ps' in match.group():
+                            replacement = "%s%x"
+                            if self.ramdump.arm64:
+                                addr = self.ramdump.read_u64(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 8
+                            else:
+                                addr = self.ramdump.read_u32(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 4
+
+                        elif '%p' in match.group() and '%ps' not in match.group():
+                            replacement = "%x"
+                            if self.ramdump.arm64:
+                                print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
+                                print_buffer_offset += 8
+                            else:
+                                print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
+                                print_buffer_offset += 4
+
+                        elif 'x' in match.group():
                             replacement = "%x"
                             if self.ramdump.arm64:
                                 print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
@@ -724,7 +804,10 @@ class FtraceParser_Event(object):
                             v = self.ramdump.read_u64(ftrace_raw_entry + offset)
                         else:
                             v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                        if "func" not in item:
+                        if "rwmmio" in event_name and "addr" in item:
+                            phys = self.ramdump.virt_to_phys(v)
+                            fmt_name_value_map[item] = "{}({})".format(hex(int(v)), hex(phys))
+                        elif "func" not in item:
                             fmt_name_value_map[item] = hex(int(v))
                         else:
                             fmt_name_value_map[item] = v
@@ -800,7 +883,7 @@ class FtraceParser_Event(object):
                             tt = keyinfo + "=" + str(fmt_name_value_map[keyinfo])
                         temp = temp + tt + "  "
                 except Exception as err:
-                    print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
+                    #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                     pass
                 try:
                     temp = temp + "\n"
@@ -809,10 +892,10 @@ class FtraceParser_Event(object):
                     self.ftrace_time_data[t].append(temp_data)
                     temp = ""
                 except Exception as err:
-                    print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
+                    #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                     pass
             except Exception as err:
-                print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
+                #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                 pass
 
     def ftrace_event_parsing(self):
