@@ -452,23 +452,74 @@ class FtraceParser_Event(object):
                 #trace_event_raw_wqfunction_offset = self.ramdump.field_offset('struct ' + struct_type, "function")
                 #wq_function = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_wqfunction_offset)
                 trace_event_raw_work_offset = self.ramdump.field_offset('struct ' + 'trace_event_raw_workqueue_execute_start', "work")
+                function_offset = self.ramdump.field_offset(
+                    'struct ' + 'work_struct', "func")
+
                 if trace_event_raw_work_offset:
                     space_data = self.remaing_space(space_count,len("workqueue_activate_work:"))
                     if self.ramdump.arm64:
                         work = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_work_offset)
+                        function = self.ramdump.read_u64(work + function_offset)
                     else:
                         work = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_work_offset)
+                        function = self.ramdump.read_u32(work + function_offset)
+                    if function != None:
+                        function_name = self.ramdump.unwind_lookup(function)
+                        if function_name == None:
+                            function_name = 'na'
+                    else:
+                        function = 0
+                        function_name = 'na'
+                    #print (function, function_name)
                     '''self.ftrace_out.write("                <TBD>     {0}  {1}: workqueue_activate_work:{2}work struct {3}\n".format(self.cpu,
                                                                                                                                       local_timestamp/1000000000.0,space_data,
                                                                                                                                       str(hex(work)).replace("L","")
                                                                                                                                       ))
                     '''
                     #t = local_timestamp / 1000000000.0
-                    temp_data = "                {4}     {0}  {1:.6f}: workqueue_activate_work:{2}work struct {3}\n".format(self.cpu,
-                                                                                                                                      local_timestamp/1000000000.0,space_data,
-                                                                                                                                      str(hex(work)).replace("L",""),curr_com)
+                    temp_data = "                {4}     {0}  {1:.6f}: workqueue_activate_work:{2}work struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                                 local_timestamp/1000000000.0,space_data,
+                                 str(hex(work)).replace("L",""),curr_com , function, function_name)
 
                     self.ftrace_time_data[t].append(temp_data)
+        elif event_name == "workqueue_execute_start" or event_name == "workqueue_execute_end" or event_name == "workqueue_queue_work":
+                trace_event_raw_work_offset = 0
+                function_offset = 0
+                if event_name == "workqueue_execute_start":
+                    function_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_start', "function")
+                    trace_event_raw_work_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_start', "work")
+                elif event_name == "workqueue_execute_end":
+                    function_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_queue_work', "function")
+                    trace_event_raw_work_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_queue_work', "work")
+                elif event_name == "workqueue_queue_work":
+                    function_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_end', "function")
+                    trace_event_raw_work_offset = self.ramdump.field_offset(
+                        'struct ' + 'trace_event_raw_workqueue_execute_end', "work")
+                function = 0
+                if function_offset:
+                    if self.ramdump.arm64:
+                        function = self.ramdump.read_u64(ftrace_raw_entry + function_offset)
+                    else:
+                        function = self.ramdump.read_u32(ftrace_raw_entry + function_offset)
+                function_name = 'na'
+                if function != 0:
+                    function_name = self.ramdump.unwind_lookup(function)
+                    if function_name == None:
+                        function_name = 'na'
+                if trace_event_raw_work_offset:
+                   if self.ramdump.arm64:
+                        work = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_work_offset)
+                   else:
+                        work = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_work_offset)
+                   temp_data = "                {4}     {0}  {1:.6f}: {2}  work_struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                                local_timestamp/1000000000.0, event_name,
+                                str(hex(work)).replace("L",""), curr_com, function, function_name)
+                   self.ftrace_time_data[t].append(temp_data)
         elif event_name == "regulator_set_voltage":
             #print "new event meachanism= {0}".format(event_name)
             event_data = self.fromat_event_map[event_name]
