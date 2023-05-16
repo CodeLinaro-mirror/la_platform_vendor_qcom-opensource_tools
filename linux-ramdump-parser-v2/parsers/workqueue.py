@@ -12,11 +12,12 @@
 
 import re
 import linux_list
-from parser_util import register_parser, RamParser
-
+from parser_util import register_parser, RamParser, cleanupString
 
 @register_parser('--print-workqueues', 'Print the state of the workqueues', shortopt='-q')
 class Workqueues(RamParser):
+    def get_caller(self, caller):
+        return self.ramdump.gdbmi.get_func_info(caller)
 
     def print_workqueue_state_3_0(self, ram_dump):
         per_cpu_offset_addr = ram_dump.address_of('__per_cpu_offset')
@@ -375,10 +376,10 @@ class Workqueues(RamParser):
         try:
             # virt to phys may throw an exception if the virtual address is bad
             # if that happens, just skip any printing
-            phys = self.ramdump.virt_to_phys(work_func_addr)
             work_func_name, foo = self.ramdump.unwind_lookup(work_func_addr)
+            line  = self.get_caller(work_func_addr)
             self.f.write(
-                'Pending entry: {0}\n'.format(work_func_name))
+                '       Pending entry: v.v (struct work_struct)0x{0:x} {1}  {2}\n '.format(work, work_func_name, line))
         except:
             pass
 
@@ -437,6 +438,84 @@ class Workqueues(RamParser):
                 pending_list = linux_list.ListWalker(ram_dump, worklist_addr, work_entry_offset)
                 pending_list.walk(self.ramdump.read_word(worklist_addr), self.pending_list_walk)
 
+    def get_workqueues_func(self, workqueue_struct_base):
+        name_offset = self.ramdump.field_offset('struct workqueue_struct', 'name')
+        flags_offset = self.ramdump.field_offset('struct workqueue_struct', 'flags')
+        name = self.ramdump.read_cstring(workqueue_struct_base + name_offset)
+        flags = self.ramdump.read_int(workqueue_struct_base + flags_offset)
+        aList = []
+        for (d, x) in self.flags_array.items():
+            if flags & x:
+                aList.append(d)
+        if name is None:
+            name =''
+        print("     v.v (struct workqueue_struct *)0x%x %-32s  flags 0x%-8x  %-64s "
+              % (workqueue_struct_base, name, flags, aList), file=self.f)
+
+    def get_workqueues_list(self):
+        print("\n\n", file = self.f)
+        self.flags_array = {'WQ_UNBOUND':1<<1,'WQ_FREEZABLE':1 << 2,'WQ_MEM_RECLAIM':1 << 3,
+                            'WQ_HIGHPRI':1 << 4,'WQ_CPU_INTENSIVE':1 << 5,'WQ_SYSFS':1 << 6}
+        workqueues = self.ramdump.address_of('workqueues')
+        list_offset = self.ramdump.field_offset('struct workqueue_struct', 'list')
+        list_walker = linux_list.ListWalker(self.ramdump, workqueues, list_offset)
+        list_walker.walk(workqueues, self.get_workqueues_func)
+
+    def get_busy_hash(self, worker_pool_addr):
+        busy_hash_offset  = self.ramdump.field_offset('struct worker_pool', 'busy_hash')
+        nr_busy_hash_entries = 64
+        busy_hash_base_addr = worker_pool_addr + busy_hash_offset
+        busy_hash_entry_size = self.ramdump.sizeof('struct  hlist_head')
+        busy_hash_index = 0
+        base_addr = busy_hash_base_addr
+        busy_hash_entry = base_addr
+        first_offset = self.ramdump.field_offset('struct hlist_head', 'first')
+        current_work_offset  = self.ramdump.field_offset('struct worker', 'current_work')
+        func_offset = self.ramdump.field_offset('struct work_struct', 'func')
+        while busy_hash_index < nr_busy_hash_entries:
+            first_worker_pool = self.ramdump.read_pointer(busy_hash_entry + first_offset)
+            if first_worker_pool != 0:
+                next_busy_worker = first_worker_pool
+                current_work = self.ramdump.read_pointer(next_busy_worker + current_work_offset)
+                func = self.ramdump.read_pointer(current_work + func_offset)
+                wname = self.ramdump.unwind_lookup(func)
+                print("     v.v (struct worker*)0x%x v.v (struct work_struct*)0x%x  %s"
+                      % (next_busy_worker, current_work, wname), file=self.f)
+            busy_hash_index =  busy_hash_index + 1
+            busy_hash_entry =  base_addr + busy_hash_entry_size * busy_hash_index
+
+    def get_unbound_pool_hash(self):
+        unbound_pool_hash = self.ramdump.address_of('unbound_pool_hash')
+        unbound_pool_hash_base = unbound_pool_hash
+        hash_entry_size = self.ramdump.sizeof('struct  hlist_head')
+        worker_pool_hlist_offset = self.ramdump.field_offset('struct worker_pool', 'hash_node')
+        hash_index = 0
+        nr_busy_hash_entries = 64
+        first_offset  = self.ramdump.field_offset('struct hlist_head', 'first')
+        next_offset = self.ramdump.field_offset('struct hlist_node', 'next')
+        worklist_offset = self.ramdump.field_offset('struct worker_pool', 'worklist')
+        print("==========>Unbound wqs", file = self.f)
+        while (hash_index < nr_busy_hash_entries):
+            first_worker_pool = self.ramdump.read_pointer(unbound_pool_hash + first_offset)
+
+            if first_worker_pool != 0:
+                next_worker_pool = first_worker_pool
+                while next_worker_pool != 0:
+                    worker_pool_addr = next_worker_pool - worker_pool_hlist_offset
+                    print ( "v.v (struct worker_pool*)0x%x" %(worker_pool_addr), file=self.f)
+                    worklist = (worker_pool_addr + worklist_offset)
+
+                    list_offset = self.ramdump.field_offset('struct  work_struct', 'entry')
+                    list_walker = linux_list.ListWalker(self.ramdump, worklist, list_offset)
+                    list_walker.walk(worklist, self.pending_list_walk)
+                    '''
+                    walk the busy_hash
+                    '''
+                    self.get_busy_hash(worker_pool_addr)
+                    next_worker_pool = self.ramdump.read_pointer(next_worker_pool + next_offset)
+            hash_index = hash_index + 1
+            unbound_pool_hash =  unbound_pool_hash_base + hash_entry_size * hash_index
+
     def parse(self):
             self.f = open(self.ramdump.outdir + "/workqueue.txt", "w")
             major, minor, patch = self.ramdump.kernel_version
@@ -457,4 +536,6 @@ class Workqueues(RamParser):
                     self.print_workqueue_state_3_10(self.ramdump)
             else:
                     self.f.write('Kernel version {0}.{1} is not yet supported for parsing workqueues\n'.format(major, minor))
+            self.get_unbound_pool_hash()
+            self.get_workqueues_list()
             self.f.close()
