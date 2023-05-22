@@ -13,6 +13,7 @@
 from sizes import SZ_4K, SZ_64K, SZ_2M, SZ_32M, SZ_1G, SZ_256G
 from sizes import get_order, order_size_strings
 import re
+import mm
 
 NUM_PT_LEVEL = 4
 NUM_FL_PTE = 512
@@ -201,7 +202,8 @@ def add_flat_mapping(mappings, fl_idx, sl_idx, tl_idx, ll_idx, phy_addr,
 
 
 def get_super_section_mapping_info(ramdump, pg_table, index):
-    phy_addr = ramdump.read_u64(pg_table, False)
+    pg_table_virt = mm.phys_to_virt(ramdump, pg_table)
+    phy_addr = ramdump.read_u64(pg_table_virt)
     current_phy_addr = -1
     current_page_size = SZ_1G
     current_map_type = 0
@@ -216,7 +218,8 @@ def get_super_section_mapping_info(ramdump, pg_table, index):
     return (current_phy_addr, current_page_size, current_map_type, status)
 
 def get_section_mapping_info(ramdump, pg_table, index):
-    phy_addr = ramdump.read_u64(pg_table, False)
+    pg_table_virt = mm.phys_to_virt(ramdump, pg_table)
+    phy_addr = ramdump.read_u64(pg_table_virt)
     current_phy_addr = -1
     current_page_size = SZ_2M
     current_map_type = 0
@@ -253,7 +256,8 @@ def get_section_mapping_info(ramdump, pg_table, index):
 
 def get_mapping_info(ramdump, pg_table, index):
     ll_pte = pg_table + (index * 8)
-    phy_addr = ramdump.read_u64(ll_pte, False)
+    ll_pte_virt = mm.phys_to_virt(ramdump, ll_pte)
+    phy_addr = ramdump.read_u64(ll_pte_virt)
     current_phy_addr = -1
     current_page_size = SZ_4K
     current_map_type = 0
@@ -315,7 +319,8 @@ def parse_2nd_level_table(ramdump, sl_pg_table_entry, fl_index,
     section_skip_count = 0
 
     for tl_index in range(0, NUM_TL_PTE):
-        tl_pg_table_entry = ramdump.read_u64(tl_pte, False)
+        tl_pte_virt = mm.phys_to_virt(ramdump, tl_pte)
+        tl_pg_table_entry = ramdump.read_u64(tl_pte_virt)
 
         if tl_pg_table_entry == 0 or tl_pg_table_entry is None:
             tmp_mapping = add_flat_mapping(
@@ -372,12 +377,10 @@ def create_flat_mappings(ramdump, pg_table, level):
     fl_pte = pg_table
     skip_fl = 0
     fl_range = NUM_FL_PTE
-    read_virtual = False
 
     if level == 3:
         skip_fl = 1
         fl_range = 1
-        read_virtual = True
 
     # In case we have only 3 level page table we want to skip first level
     # and just parse second, third and last level. To keep unify code for 3
@@ -397,7 +400,7 @@ def create_flat_mappings(ramdump, pg_table, level):
 
         for sl_index in range(0, NUM_SL_PTE):
 
-            sl_pg_table_entry = ramdump.read_u64(sl_pte, read_virtual)
+            sl_pg_table_entry = ramdump.read_u64(sl_pte)
 
             if sl_pg_table_entry == 0 or sl_pg_table_entry is None:
                 tmp_mapping = add_flat_mapping(tmp_mapping,
