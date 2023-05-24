@@ -1,5 +1,5 @@
 # Copyright (c) 2014-2015, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -194,9 +194,9 @@ class DmesgLib(object):
         desc_id_mask = ~desc_flags_mask
 
         off = self.ramdump.field_offset('struct prb_desc_ring','tail_id')
-        tail_id = self.ramdump.read_u64(desc_ring_addr + off)
+        tail_id = self.ramdump.read_ulong(desc_ring_addr + off)
         off = self.ramdump.field_offset('struct prb_desc_ring','head_id')
-        head_id = self.ramdump.read_u64(desc_ring_addr + off)
+        head_id = self.ramdump.read_ulong(desc_ring_addr + off)
 
         did = tail_id
 
@@ -207,7 +207,7 @@ class DmesgLib(object):
             info_off = info_sz * ind
 
             # skip non-committed record
-            state = 3 & (self.ramdump.read_u64(descs_addr + desc_off +
+            state = 3 & (self.ramdump.read_ulong(descs_addr + desc_off +
                                             sv_off) >> desc_flags_shift)
             if state != desc_committed and state != desc_finalized:
                 if did == head_id:
