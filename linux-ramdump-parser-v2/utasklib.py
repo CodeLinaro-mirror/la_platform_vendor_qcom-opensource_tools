@@ -41,14 +41,24 @@ class UTaskLib:
         self.f_path_offset = ramdump.field_offset('struct file', 'f_path')
         self.dentry_offset = ramdump.field_offset('struct path', 'dentry')
         self.d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
+        self.active_mm_offset = ramdump.field_offset('struct task_struct', 'active_mm')
         self.ramdump = ramdump
 
-    def get_utask_info(self, process_name):
+    def get_utask_info(self, process_name, logging=False):
         for task in self.ramdump.for_each_process():
             task_name = cleanupString(self.ramdump.read_cstring(task + self.offset_comm, 16))
             if task_name == process_name:
                 print("found process {}".format(task_name))
                 mm_addr = self.ramdump.read_word(task + self.mm_offset)
+                if process_name == "init" and mm_addr == 0:
+                    mm_addr = self.ramdump.read_word(task + self.active_mm_offset)
+                if mm_addr == 0:
+                    if logging is True:
+                        print_out_str("mm for {} is null\n".format(process_name))
+                    _utask = UTaskInfo()
+                    _utask.name = task_name
+                    _utask.task_addr = task
+                    return _utask
                 pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                    'pgd')
                 pgdp = self.ramdump.virt_to_phys(pgd)
