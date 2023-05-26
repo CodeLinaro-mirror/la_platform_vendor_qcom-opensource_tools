@@ -26,10 +26,11 @@ class Vma:
         self.vm_start = 0
         self.vm_end = 0
         self.flags = 0
+        self.file = 0
         self.file_name = ""
 
     def __repr__(self):
-        return "0x{}-0x{} flags:0x{}".format(self.vm_start, self.vm_end, self.flags)
+        return "0x{0:x}-0x{1:x} flags:0x{2:x} file_name:{3}".format(self.vm_start, self.vm_end, self.flags, self.file_name)
 
 class ProcessNotFoundExcetion(Exception):
     pass
@@ -182,6 +183,7 @@ class UTaskLib:
         vma_obj.vm_start = tmpstartVm
         vma_obj.vm_end = tmpsEndVm
         vma_obj.flags = flags
+        vma_obj.file = file
         vma_obj.file_name = file_name
 
         return vma_obj
