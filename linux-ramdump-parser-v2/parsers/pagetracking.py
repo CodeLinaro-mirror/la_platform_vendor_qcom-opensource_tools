@@ -149,8 +149,12 @@ class PageTracking(RamParser):
 
                 if handle == 0 or handle == None:
                     return -1, -1, -1, -1, -1
-                slabindex = handle & 0x1fffff
-                handle_offset = (handle >> 0x15) & 0x3ff
+                if self.ramdump.kernel_version >= (6, 1, 0):
+                    slabindex = handle & 0xffff
+                    handle_offset = (handle >> 0x10) & 0x3ff
+                else:
+                    slabindex = handle & 0x1fffff
+                    handle_offset = (handle >> 0x15) & 0x3ff
                 handle_offset = handle_offset << 4
 
                 slab = self.ramdump.read_word(
