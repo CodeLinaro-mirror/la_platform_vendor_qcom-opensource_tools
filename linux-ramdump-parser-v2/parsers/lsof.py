@@ -96,12 +96,14 @@ def get_pathname_by_file(self, ramdump, file):
     mnt_parent_pre = 0
     mnt_parent = mount
     mount_name = []
-    while  mnt_parent_pre !=  mnt_parent:
+    while  mnt_parent_pre != mnt_parent:
         mnt_parent_pre = mnt_parent
-        mnt_mountpoint = ramdump.read_word(mnt_parent +  mnt_mountpoint_offset)
+        mnt_mountpoint = ramdump.read_word(mnt_parent + mnt_mountpoint_offset)
         name = get_dname_of_dentry(self, mnt_mountpoint)
         mnt_parent = ramdump.read_word(mnt_parent + mnt_parent_offset)
-        if name == '/':
+        if name == None or name == '/':
+            break
+        if mnt_parent == 0:
             break
         mount_name.append(name)
 
@@ -116,9 +118,11 @@ def get_pathname_by_file(self, ramdump, file):
         d_parent_pre = d_parent
         name = get_dname_of_dentry(self, d_parent)
         d_parent = ramdump.read_word(d_parent + d_parent_offset)
-        if name == '/':
+        if name == None or name == '/':
             break
         names.append(name)
+        if d_parent == 0:
+            break
     full_name = ''
     for item in mount_name:
         names.append(item)
