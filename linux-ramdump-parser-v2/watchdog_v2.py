@@ -1470,7 +1470,7 @@ def get_wdog_timing(ramdump):
     for i in ramdump.iter_cpus():
         cpu_logical_map_addr = logical_map_addr + (i * 8)
         core_id = ramdump.read_u64(cpu_logical_map_addr)
-        logical_map.append(core_id)
+        logical_map.append(core_id >> 8)
     print_out_str('Non-secure Watchdog data')
     print_out_str('Pet time: {0}s'.format(pet_time / 1000.0))
     print_out_str('Bark time: {0}s'.format(bark_time / 1000.0))
