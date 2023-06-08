@@ -1,5 +1,5 @@
 # Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -230,11 +230,17 @@ class MemStats(RamParser):
         ion_mem = self.calculate_ionmem()
 
         # kgsl memory
-        kgsl_memory = self.ramdump.read_word(
-                        'kgsl_driver.stats.page_alloc')
-        if kgsl_memory is not None:
+        # Duplicates gpuinfo_510.py@parse_kgsl_mem()'s 'KGSL Total'
+        try:
+            kgsl_memory = self.ramdump.read_word(
+                            'kgsl_driver.stats.page_alloc')
+            kgsl_memory += self.ramdump.read_word(
+                            'kgsl_driver.stats.coherent')
+            kgsl_memory += self.ramdump.read_word(
+                            'kgsl_driver.stats.secure')
             kgsl_memory = self.bytes_to_mb(kgsl_memory)
-        else:
+        except TypeError as e:
+            out_mem_stat.write("Failed to retrieve total kgsl memory\n")
             kgsl_memory = 0
 
         # zcompressed ram
