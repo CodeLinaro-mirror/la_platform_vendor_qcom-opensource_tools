@@ -280,7 +280,7 @@ class Logcat(RamParser):
             self.generate_bin(taskinfo.mmu)
         else:
             for vma in taskinfo.vmalist:
-                if vma.flags & 0b11 != 0b11:
+                if vma.file != 0 or vma.flags & 0b11 != 0b11:
                     continue
                 vma_info = {}
                 size = vma.vm_end - vma.vm_start

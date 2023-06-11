@@ -26,10 +26,11 @@ class Vma:
         self.vm_start = 0
         self.vm_end = 0
         self.flags = 0
+        self.file = 0
         self.file_name = ""
 
     def __repr__(self):
-        return "0x{}-0x{} flags:0x{}".format(self.vm_start, self.vm_end, self.flags)
+        return "0x{0:x}-0x{1:x} flags:0x{2:x} file_name:{3}".format(self.vm_start, self.vm_end, self.flags, self.file_name)
 
 class ProcessNotFoundExcetion(Exception):
     pass
@@ -41,14 +42,24 @@ class UTaskLib:
         self.f_path_offset = ramdump.field_offset('struct file', 'f_path')
         self.dentry_offset = ramdump.field_offset('struct path', 'dentry')
         self.d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
+        self.active_mm_offset = ramdump.field_offset('struct task_struct', 'active_mm')
         self.ramdump = ramdump
 
-    def get_utask_info(self, process_name):
+    def get_utask_info(self, process_name, logging=False):
         for task in self.ramdump.for_each_process():
             task_name = cleanupString(self.ramdump.read_cstring(task + self.offset_comm, 16))
             if task_name == process_name:
                 print("found process {}".format(task_name))
                 mm_addr = self.ramdump.read_word(task + self.mm_offset)
+                if process_name == "init" and mm_addr == 0:
+                    mm_addr = self.ramdump.read_word(task + self.active_mm_offset)
+                if mm_addr == 0:
+                    if logging is True:
+                        print_out_str("mm for {} is null\n".format(process_name))
+                    _utask = UTaskInfo()
+                    _utask.name = task_name
+                    _utask.task_addr = task
+                    return _utask
                 pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                    'pgd')
                 pgdp = self.ramdump.virt_to_phys(pgd)
@@ -172,6 +183,7 @@ class UTaskLib:
         vma_obj.vm_start = tmpstartVm
         vma_obj.vm_end = tmpsEndVm
         vma_obj.flags = flags
+        vma_obj.file = file
         vma_obj.file_name = file_name
 
         return vma_obj
