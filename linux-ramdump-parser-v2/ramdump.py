@@ -807,6 +807,7 @@ class RamDump():
         self.datatype_dict = {}
         self.enum_data = {}
         self.available_cores = []
+        self.skip_TLB_Cache_parse = options.skip_TLB_Cache_parse
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
