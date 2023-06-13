@@ -1,5 +1,5 @@
 # Copyright (c) 2012,2014-2015,2017-2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -149,8 +149,12 @@ class PageTracking(RamParser):
 
                 if handle == 0 or handle == None:
                     return -1, -1, -1, -1, -1
-                slabindex = handle & 0x1fffff
-                handle_offset = (handle >> 0x15) & 0x3ff
+                if self.ramdump.kernel_version >= (6, 1, 0):
+                    slabindex = handle & 0xffff
+                    handle_offset = (handle >> 0x10) & 0x3ff
+                else:
+                    slabindex = handle & 0x1fffff
+                    handle_offset = (handle >> 0x15) & 0x3ff
                 handle_offset = handle_offset << 4
 
                 slab = self.ramdump.read_word(
@@ -314,8 +318,8 @@ class PageTracking(RamParser):
 
         if self.ramdump.kernel_version >= (4, 4):
             if self.ramdump.kernel_version >= (5, 10):
-                page_owner_enabled = self.ramdump.address_of("page_owner_enabled")
-                if not self.ramdump.read_bool(page_owner_enabled):
+                page_owner_inited = self.ramdump.address_of("page_owner_inited.key.enabled.counter")
+                if self.ramdump.read_int(page_owner_inited) != 1:
                     print_out_str("page_owner is not set in cmdline")
                     return
             else:
