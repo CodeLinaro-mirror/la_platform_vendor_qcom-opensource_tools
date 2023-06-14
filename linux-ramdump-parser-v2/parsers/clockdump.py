@@ -213,6 +213,9 @@ class ClockDumps(RamParser):
                                     'struct clk_vdd_class', 'cur_level')
         counter = 0
 
+        if size > 10000:
+            return
+
         while counter < size:
             clk = self.ramdump.read_word(clks + (sizeof_clk_pointer * counter))
             if clk == 0 or clk is None:
