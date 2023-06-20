@@ -194,7 +194,7 @@ class Properties(RamParser):
 
     def parse(self):
         try:
-            taskinfo = UTaskLib(self.ramdump).get_utask_info("init")
+            taskinfo = UTaskLib(self.ramdump).get_utask_info("init", logging=True)
         except ProcessNotFoundExcetion:
             print_out_str("init process was not started")
             return False
