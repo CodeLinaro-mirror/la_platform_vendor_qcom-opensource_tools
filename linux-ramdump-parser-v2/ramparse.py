@@ -211,6 +211,7 @@ if __name__ == '__main__':
         default_list.append("PStore")
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
+        default_list.append("ipc_logging_cn")
 
     if options.outdir:
         if not os.path.exists(options.outdir):
@@ -470,7 +471,7 @@ if __name__ == '__main__':
 
 
         print("    [%d/%d] %s ... " %
-                         (i + 1, len(parsers_to_run), p.longopt), end='')
+                         (i + 1, len(parsers_to_run), p.longopt), end='', flush=True)
         before = time.time()
         with print_out_section(p.cls.__name__):
             try:
@@ -489,7 +490,7 @@ if __name__ == '__main__':
                     print("FAILED! ")
                 else:
                     raise
-        print("%fs" % (time.time() - before))
+        print("%fs" % (time.time() - before),  flush=True)
         flush_outfile()
 
     sys.stderr.write("\n")

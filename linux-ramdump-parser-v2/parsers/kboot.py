@@ -1,4 +1,5 @@
 # Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -48,8 +49,8 @@ class KBootLog(RamParser):
         if logbuf_size is None:
             logbuf_size = 524288
         if logbuf_addr:
-            data = self.ramdump.read_cstring(logbuf_addr, logbuf_size)
-            self.outfile.write(data)
+            data = self.ramdump.read_binarystring(logbuf_addr, logbuf_size)
+            self.outfile.write(data.decode('ascii', 'ignore').replace('\x00', ''))
         else:
             self.outfile.write("kernel boot log support is not present\n")
             return
