@@ -129,6 +129,8 @@ class GpuParser_510(RamParser):
             (self.parse_open_process_mementry, "Open Process Mementries",
              'open_process_mementries.txt'),
             (self.parse_eventlog_data, "Eventlog Buffer", 'eventlog.txt'),
+            (self.parse_gpu_dcvs_data, "GPU DCVS Info",
+             'gpuinfo.txt'),
         ]
 
         self.rtw = linux_radix_tree.RadixTreeWalker(dump)
@@ -1330,3 +1332,36 @@ class GpuParser_510(RamParser):
 
     def create_mini_snapshot(self, dump):
         create_snapshot_from_ramdump(self.devp, dump)
+
+    def parse_gpu_dcvs_data(self, dump):
+        state = dump.read_structure_field(self.devp,
+                                          'struct kgsl_device', 'state')
+
+        # Skip dumping and extraction of the DCVS data if GPU is not
+        # in active state.
+        if state == 2:
+            adreno_tz_data_addr = dump.address_of('adreno_tz_data')
+
+            bin_addr = dump.struct_field_addr(
+                adreno_tz_data_addr, 'struct devfreq_msm_adreno_tz_data',
+                'bin')
+            total_time = dump.read_s64(bin_addr)
+            busy_time = dump.read_s64(bin_addr + 8)
+
+            bus_addr = dump.struct_field_addr(
+                adreno_tz_data_addr, 'struct devfreq_msm_adreno_tz_data',
+                'bus')
+            ram_time = dump.read_u64(bus_addr + 8)
+            ram_wait = dump.read_u64(bus_addr + 16)
+
+            mod_percent = dump.read_structure_field(
+                adreno_tz_data_addr, 'struct devfreq_msm_adreno_tz_data',
+                'mod_percent')
+
+            self.writeln("total_time: " + str(total_time))
+            self.writeln("busy_time: " + str(busy_time))
+            self.writeln("ram_time: " + str(ram_time))
+            self.writeln("ram_wait: " + str(ram_wait))
+            self.writeln("mod_percent: " + str(mod_percent))
+        else:
+            self.writeln("DCVS data dump skipped if GPU state is not ACTIVE")
