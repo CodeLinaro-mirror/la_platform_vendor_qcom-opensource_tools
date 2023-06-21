@@ -76,6 +76,9 @@ if __name__ == '__main__':
     parser = OptionParser(usage)
     parser.add_option('', '--print-watchdog-time', action='store_true',
                       dest='watchdog_time', help='Print watchdog timing information', default=False)
+    parser.add_option('', '--logcat_limit_time_sec',
+                      dest='logcat_limit_time', type='int', default=0,
+                      help='Defined the max time logcat parse running')
     parser.add_option('-e', '--ram-file', dest='ram_addr',
                       help='List of ram files (name, start, end)', action='callback', callback=parse_ram_file)
     parser.add_option('-v', '--vmlinux', dest='vmlinux', help='vmlinux path')
@@ -211,6 +214,7 @@ if __name__ == '__main__':
         default_list.append("PStore")
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
+        default_list.append("ipc_logging_cn")
 
     if options.outdir:
         if not os.path.exists(options.outdir):
@@ -470,7 +474,7 @@ if __name__ == '__main__':
 
 
         print("    [%d/%d] %s ... " %
-                         (i + 1, len(parsers_to_run), p.longopt), end='')
+                         (i + 1, len(parsers_to_run), p.longopt), end='', flush=True)
         before = time.time()
         with print_out_section(p.cls.__name__):
             try:
@@ -489,7 +493,7 @@ if __name__ == '__main__':
                     print("FAILED! ")
                 else:
                     raise
-        print("%fs" % (time.time() - before))
+        print("%fs" % (time.time() - before),  flush=True)
         flush_outfile()
 
     sys.stderr.write("\n")
