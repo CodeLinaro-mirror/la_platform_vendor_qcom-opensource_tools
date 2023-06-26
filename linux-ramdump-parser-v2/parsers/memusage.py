@@ -68,7 +68,10 @@ def get_shmem_swap_usage(ramdump, memory_file):
                     'd_name')) + ramdump.field_offset('struct qstr', 'name')
                 name = ramdump.read_cstring(ramdump.read_pointer(d_name_ptr),
                         100)
-                path, cycle_flag = pathtracking.get_filepath('', name, dentry)
+                if name is not None:
+                    path, cycle_flag = pathtracking.get_filepath('', name, dentry)
+                else:
+                    path = 'None'
                 path = "file name:  " + path + '\n'
                 string = string + path
         else:

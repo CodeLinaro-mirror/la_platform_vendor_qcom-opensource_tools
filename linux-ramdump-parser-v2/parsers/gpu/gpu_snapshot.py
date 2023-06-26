@@ -329,11 +329,7 @@ def create_snapshot_from_ramdump(devp, dump):
 
 
 def extract_gmu_mem_from_snapshot(dump, snapshot_path):
-    try:
-        file = open(snapshot_path, 'rb')
-    except:
-        print("Could not find snapshot, path = ", snapshot_path)
-        return
+    file = dump.open_file(snapshot_path, 'rb')
 
     header = kgsl_snapshot_header()
     file.readinto(header)
@@ -367,3 +363,5 @@ def extract_gmu_mem_from_snapshot(dump, snapshot_path):
             break
 
         file.seek(current_pos + section_header.size, 0)
+
+    file.close()
