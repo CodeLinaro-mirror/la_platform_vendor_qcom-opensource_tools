@@ -72,14 +72,16 @@ class PageTracking(RamParser):
 
         self.stack_slabs = self.ramdump.address_of('stack_slabs')
         self.stack_slabs_size = self.ramdump.sizeof('void *')
+        self.offset_comm = self.ramdump.field_offset('struct page_owner', 'comm')
 
     def page_trace(self, pfn, alloc):
         offset = 0
         struct_holding_trace_entries = 0
         gfp = 0
+        comm = -1
 
         if not alloc and self.ramdump.kernel_version < (5, 4, 0):
-            return -1, -1, -1, -1, -1
+            return -1, -1, -1, -1, -1, -1
 
         page = pfn_to_page(self.ramdump, pfn)
         order = 0
@@ -93,14 +95,14 @@ class PageTracking(RamParser):
         else:
             phys = pfn << 12
             if phys is None or phys == 0:
-                return -1, -1, -1, -1, -1
+                return -1, -1, -1, -1, -1, -1
             page_ext = self.ramdump.mm.lookup_page_ext(pfn)
             """
             page_ext will be null here if the first page of a section is not valid.
             See page_ext_init().
             """
             if not page_ext:
-                return -1, -1, -1, -1, -1
+                return -1, -1, -1, -1, -1, -1
  
             if self.ramdump.arm64:
                 temp_page_ext = page_ext + (pfn * self.page_ext_size)
@@ -119,6 +121,8 @@ class PageTracking(RamParser):
                                 temp_page_ext, 'struct page_owner', 'ts_nsec')
                     gfp = self.ramdump.read_structure_field(
                                 temp_page_ext, 'struct page_owner', 'gfp_mask')
+                    if self.offset_comm is not None:
+                        comm = self.ramdump.read_cstring(temp_page_ext + self.offset_comm, 16)
                 else:
                     pid = -1
                     ts_nsec = self.ramdump.read_structure_field(temp_page_ext,
@@ -148,15 +152,19 @@ class PageTracking(RamParser):
                         temp_page_ext, 'struct page_ext', 'handle')
 
                 if handle == 0 or handle == None:
-                    return -1, -1, -1, -1, -1
-                slabindex = handle & 0x1fffff
-                handle_offset = (handle >> 0x15) & 0x3ff
+                    return -1, -1, -1, -1, -1, -1
+                if self.ramdump.kernel_version >= (6, 1, 0):
+                    slabindex = handle & 0xffff
+                    handle_offset = (handle >> 0x10) & 0x3ff
+                else:
+                    slabindex = handle & 0x1fffff
+                    handle_offset = (handle >> 0x15) & 0x3ff
                 handle_offset = handle_offset << 4
 
                 slab = self.ramdump.read_word(
                     self.stack_slabs + (self.stack_slabs_size * slabindex))
                 if slab is None:
-                    return -1, -1, -1, -1, -1
+                    return -1, -1, -1, -1, -1, -1
                 stack = slab + handle_offset
 
                 nr_trace_entries = self.ramdump.read_structure_field(
@@ -164,11 +172,11 @@ class PageTracking(RamParser):
 
                 struct_holding_trace_entries = stack
         if nr_trace_entries is None:
-            return -1, -1, -1, -1, -1
+            return -1, -1, -1, -1, -1, -1
         if nr_trace_entries <= 0 or nr_trace_entries > 16:
-            return -1, -1, -1, -1, -1
+            return -1, -1, -1, -1, -1, -1
         if order >= self.max_order:
-            return -1, -1, -1, -1, -1
+            return -1, -1, -1, -1, -1, -1
 
         alloc_str = ''
         for i in range(0, nr_trace_entries):
@@ -186,32 +194,37 @@ class PageTracking(RamParser):
                 addr, symname, offset)
             alloc_str = alloc_str + unwind_dat
 
-        return alloc_str, order, pid, ts_nsec, gfp
+        return alloc_str, order, pid, ts_nsec, gfp, comm
 
     def parse_output(self, pfn, out_tracking, out_tracking_freed,
                      page_size, sorted_pages):
-        str_f = "PFN : 0x{0:x}-0x{1:x} Page : 0x{2:x} Order : {3} PID : {4} ts_nsec {5} gfp 0x{6:x}\n{" \
-              "7}\n"
+        str_f = "PFN : 0x{0:x}-0x{1:x} Page : 0x{2:x} Order : {3} PID : {4} {5}ts_nsec {6} gfp 0x{7:x}\n" \
+              "{8}\n"
         page = pfn_to_page(self.ramdump, pfn)
         order = 0
         if (page_buddy(self.ramdump, page) or
             page_count(self.ramdump, page) == 0):
-            function_list, order, pid, ts_nsec, gfp = self.page_trace(pfn, False)
+            function_list, order, pid, ts_nsec, gfp, comm = self.page_trace(pfn, False)
             if function_list == -1:
                 return
             out_tracking_freed.write(str_f.format(pfn, pfn + (1 << order) - 1,
-                                                  page, order, pid, ts_nsec, gfp,
-                                                  function_list))
+                                                  page, order, pid,
+                                                  "Comm: {} ".format(comm) if comm != -1 else "",
+                                                  ts_nsec, gfp, function_list))
             return
 
-        function_list, order, pid, ts_nsec, gfp = self.page_trace(pfn, True)
+        function_list, order, pid, ts_nsec, gfp, comm = self.page_trace(pfn, True)
         if function_list == -1:
             return
         if order >= self.max_order:
             out_tracking.write('PFN 0x{:x} page 0x{:x} skip as order '
                                '0x{:x}\n'.format(pfn, page, order))
         out_tracking.write(str_f.format(pfn, pfn + (1 << order) - 1,
-                            page, order, pid, ts_nsec, gfp, function_list))
+                            page, order, pid, "Comm: {} ".format(comm) if comm != -1 else "",
+                            ts_nsec, gfp, function_list))
+
+        if comm != -1:
+            pid = "{}-{}".format(pid, comm)
         if function_list in sorted_pages:
             sorted_pages[function_list]["page_count"] = \
                 sorted_pages[function_list]["page_count"] + 1
