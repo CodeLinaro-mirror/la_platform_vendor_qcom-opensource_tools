@@ -265,7 +265,7 @@ class FtraceParser(RamParser):
                               "#              | |       |   ||||       |         |\n"
                 ftrace_out.write(header_data)
             else:
-                if trace_name in self.whitelisted_trace_names:
+                if trace_name in self.whitelisted_trace_names or self.whitelisted_trace_names == ["all"]:
                     #ftrace_out = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
                     fout = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
                     ftrace_out = BufferedWrite(fout)
@@ -344,7 +344,7 @@ class FtraceParser(RamParser):
                 ftrace_core6_fd = self.ramdump.open_file('ftrace_core6.txt', 'w')
                 ftrace_core7_fd = self.ramdump.open_file('ftrace_core7.txt', 'w')
             else:
-                if trace_name in self.whitelisted_trace_names:
+                if trace_name in self.whitelisted_trace_names or self.whitelisted_trace_names == ["all"]:
                     ftrace_core0_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core0.txt','w')
                     ftrace_core1_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core1.txt','w')
                     ftrace_core2_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core2.txt','w')
