@@ -1469,10 +1469,7 @@ class RamDump():
         launch_config.write('PBI=SIM\n')
         launch_config.write('\n')
         launch_config.write('SCREEN=\n')
-        if t32_host_system != 'Linux':
-            launch_config.write('FONT=SMALL\n')
-        else:
-            launch_config.write('FONT=LARGE\n')
+        launch_config.write('FONT=LARGE\n')
         launch_config.write('HEADER=Trace32-ScorpionSimulator\n')
         launch_config.write('\n')
         if t32_host_system != 'Linux':
