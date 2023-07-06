@@ -1,3 +1,4 @@
+# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
 # Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 #
@@ -34,6 +35,13 @@ class TimerList(RamParser) :
         # As of kernel 4.15, timer list structure no longer has data field
         if (major, minor) >= (4, 15):
             self.timer_has_data = False
+        HZ = self.ramdump.get_config_val("CONFIG_HZ")
+
+        if HZ != None:
+            self.HZ = float(HZ)
+        else:
+            self.HZ = 100.0
+
         if (major, minor) >= (4, 9):
             self.vectors = {'vectors': 512}
             self.timer_jiffies = 'clk'
@@ -93,9 +101,9 @@ class TimerList(RamParser) :
             if timer_base != base:
                 remarks += "Timer Base Mismatch detected"
 
-        if expires:
-            output = "\t{0:<6} {1:<18x} {2:<14} {3:<40} {4:<52} {5}\n".format(index, node, expires, function, data, remarks)
-            self.output.append(output)
+        expires_s = (expires-(0xFFFFFFFF - 300 * int(self.HZ)) )/(self.HZ)
+        output = "\t{0:<6} {1:<18x} {2:<14} {3:<14} {4:<40} {5:<52} {6}\n".format(index, node, expires, str(expires_s) + 's', function, data, remarks)
+        self.output.append(output)
 
     def iterate_vec(self, type, base):
         vec_addr = base + self.ramdump.field_offset(self.tvec_base, type)
@@ -125,7 +133,7 @@ class TimerList(RamParser) :
             headers[4] = 'WORK'
         if len(self.output):
             self.output_file.write("+ {0} Timers ({1})\n\n".format(type, len(self.output)))
-            self.output_file.write("\t{0:6} {1:18} {2:14} {3:40} {4:52} {5}\n".format(headers[0], headers[1], headers[2], headers[3], headers[4], headers[5]))
+            self.output_file.write("\t{0:6} {1:18} {2:14} {3:14} {4:40} {5:52} {6}\n".format(headers[0], headers[1], headers[2], 'EXPIRES(s)', headers[3], headers[4], headers[5]))
             for out in self.output:
                 self.output_file.write(out)
             self.output_file.write("\n")
@@ -187,7 +195,10 @@ class TimerList(RamParser) :
             else:
                 active_timers = "NA"
 
-            title += "timer_jiffies: {0} next_timer: {1} active_timers: {2})\n".format(timer_jiffies, next_timer, active_timers)
+            timer_jiffies_s = (timer_jiffies-(0xFFFFFFFF - 300 * int(self.HZ)) )/(self.HZ)
+            next_timer_s = (next_timer-(0xFFFFFFFF - 300 * int(self.HZ)) )/(self.HZ)
+
+            title += "timer_jiffies: {0}({1}s) next_timer: {2}({3}s) active_timers: {4})\n".format(timer_jiffies, timer_jiffies_s, next_timer, next_timer_s, active_timers)
             self.output_file.write("-" * len(title) + "\n")
             self.output_file.write(title)
             self.output_file.write("-" * len(title) + "\n\n")
