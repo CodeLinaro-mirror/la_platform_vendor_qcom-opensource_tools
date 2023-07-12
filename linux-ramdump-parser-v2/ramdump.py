@@ -2015,6 +2015,9 @@ class RamDump():
         next_offset = self.field_offset('struct list_head', 'next')
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
+        if self.is_config_defined('CONFIG_SMP'):
+            percpu_offset = self.field_offset('struct module', 'percpu')
+            percpu_size_offset = self.field_offset('struct module', 'percpu_size')
 
         if self.kernel_version > (4, 9, 0):
             module_core_offset = self.field_offset('struct module', 'core_layout.base')
@@ -2078,6 +2081,11 @@ class RamDump():
                                      '.text', '.text.bss', '.text.hot', '.text.unlikely']:
                     continue
                 mod_tbl_ent.section_offsets[sect_name] = sect_addr
+            if self.is_config_defined('CONFIG_SMP'):
+                percpu_size = self.read_u32(module + percpu_size_offset)
+                if percpu_size is not 0:
+                    percpu_pointer = self.read_pointer(module + percpu_offset)
+                    mod_tbl_ent.section_offsets['.data..percpu'] = percpu_pointer
             self.module_table.add_entry(mod_tbl_ent)
 
             next_list_ent = self.read_pointer(next_list_ent + next_offset)
