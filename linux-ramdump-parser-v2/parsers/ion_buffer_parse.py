@@ -1,6 +1,6 @@
 """
 Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
-
+Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
 met:
@@ -99,14 +99,15 @@ def ion_buffer_info(self, ramdump, ion_info):
     prev_offset = ramdump.field_offset('struct list_head', 'prev')
     list_node_offset = ramdump.field_offset('struct dma_buf', 'list_node')
     size_offset = ramdump.field_offset('struct dma_buf', 'size')
+    ops_offset = ramdump.field_offset('struct dma_buf', 'ops')
     file_offset = ramdump.field_offset('struct dma_buf', 'file')
     f_count_offset = ramdump.field_offset('struct file', 'f_count')
     name_offset = ramdump.field_offset('struct dma_buf', 'buf_name')
     if name_offset is None:
         name_offset = ramdump.field_offset('struct dma_buf', 'name')
     exp_name_offset = ramdump.field_offset('struct dma_buf', 'exp_name')
-    ion_info.write("{0:40} {1:4} {2:15} {3:10} {4:10} {5:10} {6:20}\n".format(
-            'File_addr', 'REF', 'Name', 'Size', 'Exp', 'Heap', 'Size in KB'))
+    ion_info.write("{0:40} {1:4} {2:15} {3:10} {4:10} {5:10} {6:20} {7:32} {8:32}\n".format(
+            'File_addr', 'REF', 'Name', 'Size', 'Exp', 'Heap', 'Size in KB', 'dma_heap->ops', 'dma_buf->ops'))
     dma_buf_info = []
     if (ramdump.kernel_version >= (5, 10)):
         if get_dmabuf_heap_names(self, ramdump, ion_info) is False:
@@ -120,19 +121,31 @@ def ion_buffer_info(self, ramdump, ion_info):
         f_count = ramdump.read_u64(file + f_count_offset)
         exp_name = ramdump.read_word(dma_buf_addr + exp_name_offset)
         exp_name = ramdump.read_cstring(exp_name, 48)
+        dma_buf_ops = ''
+        dma_buf_ops_addr = ramdump.read_word(dma_buf_addr + ops_offset)
+        look = ramdump.unwind_lookup(dma_buf_ops_addr)
+        if look != None:
+            fop, offset = look
+            dma_buf_ops = fop
         ionheap_name = None
+        ops = ''
         if (ramdump.kernel_version >= (5, 10)):
             if exp_name in dmabuf_heap_names:
                 ion_buffer = ramdump.read_structure_field(dma_buf_addr, 'struct dma_buf', 'priv')
                 ion_heap = ramdump.read_structure_field(ion_buffer, 'struct qcom_sg_buffer', 'heap')
                 ionheap_name_addr = ramdump.read_structure_field(ion_heap, 'struct dma_heap', 'name')
-                ionheap_name = ramdump.read_cstring(ionheap_name_addr, TASK_NAME_LENGTH)
+                ionheap_name = ramdump.read_cstring(ionheap_name_addr, 48)
+                dma_heap_ops = ramdump.read_structure_field(ion_heap, 'struct dma_heap', 'ops')
+                look = ramdump.unwind_lookup(dma_heap_ops)
+                if look !=None:
+                    fop, offset = look
+                    ops = fop
         else:
             if exp_name == 'ion':
                 ion_buffer = ramdump.read_structure_field(dma_buf_addr, 'struct dma_buf', 'priv')
                 ion_heap = ramdump.read_structure_field(ion_buffer, 'struct ion_buffer', 'heap')
                 ionheap_name_addr = ramdump.read_structure_field(ion_heap, 'struct ion_heap', 'name')
-                ionheap_name = ramdump.read_cstring(ionheap_name_addr, TASK_NAME_LENGTH)
+                ionheap_name = ramdump.read_cstring(ionheap_name_addr, 48)
         if ionheap_name is None:
             ionheap_name = "None"
         name = ramdump.read_word(dma_buf_addr + name_offset)
@@ -140,59 +153,16 @@ def ion_buffer_info(self, ramdump, ion_info):
             name = "None"
         else:
             name = ramdump.read_cstring(name, 48)
-        dma_buf_info.append([file, f_count, name, hex(size), exp_name,
-                             ionheap_name, bytes_to_KB(size)])
+        dma_buf_info.append([dma_buf_addr, f_count, name, size, exp_name,
+                             ionheap_name, size, ops, dma_buf_ops])
         head = ramdump.read_word(head)
-        next_node = ramdump.read_word(head + next_offset)
-        if next_node == 0:
-            print_out_str("db_list is corrupted!\nComplete ion buffer "
-                          "ionformation may not be available")
-            head = ramdump.read_word(db_list + head_offset + prev_offset)
-            while (head != db_list):
-                dma_buf_addr = head - list_node_offset
-                size = ramdump.read_word(dma_buf_addr + size_offset)
-                total_dma_heap = total_dma_heap + size
-                file = ramdump.read_word(dma_buf_addr + file_offset)
-                f_count = ramdump.read_u64(file + f_count_offset)
-                exp_name = ramdump.read_word(dma_buf_addr + exp_name_offset)
-                exp_name = ramdump.read_cstring(exp_name, 48)
-                if (ramdump.kernel_version >= (5, 10)):
-                    if exp_name in dmabuf_heap_names:
-                        ion_buffer = ramdump.read_structure_field(dma_buf_addr, 'struct dma_buf', 'priv')
-                        ion_heap = ramdump.read_structure_field(ion_buffer, 'struct qcom_sg_buffer', 'heap')
-                        ionheap_name_addr = ramdump.read_structure_field(ion_heap, 'struct dma_heap', 'name')
-                        ionheap_name = ramdump.read_cstring(ionheap_name_addr, TASK_NAME_LENGTH)
-                else:
-                    if exp_name == 'ion':
-                        ion_buffer = ramdump.read_structure_field(dma_buf_addr, 'struct dma_buf', 'priv')
-                        ion_heap = ramdump.read_structure_field(ion_buffer, 'struct ion_buffer', 'heap')
-                        ionheap_name_addr = ramdump.read_structure_field(ion_heap, 'struct ion_heap', 'name')
-                        ionheap_name = ramdump.read_cstring(ionheap_name_addr, TASK_NAME_LENGTH)
-                if ionheap_name is None:
-                    ionheap_name = "None"
-                name = ramdump.read_word(dma_buf_addr + name_offset)
-                if not name:
-                    name = "None"
-                else:
-                    name = ramdump.read_cstring(name, 48)
-                dma_buf_info.append([file, f_count, name, hex(size), exp_name,
-                                     ionheap_name, bytes_to_KB(size)])
-                head = ramdump.read_word(head + prev_offset)
-                prev_node = ramdump.read_word(head + prev_offset)
-                if prev_node == 0:
-                    break
-            break
-
     dma_buf_info = sorted(dma_buf_info, key=lambda l: l[6], reverse=True)
     total_dma_heap_mb = bytes_to_mb(total_dma_heap)
     total_dma_heap_mb = str(total_dma_heap_mb) + "MB"
     total_dma_info.write("Total dma memory: {0}".format(total_dma_heap_mb))
     for item in dma_buf_info:
-        str_data = "v.v (struct file *)0x{0:x}\t {1:2}   {2:15} {3:10} {4:10} {" \
-              "5:10} ({6} KB)\n".format(item[0], item[1], item[2], item[3],
-                                        item[4], item[5], item[6])
-        ion_info.write(str_data)
-
+        print("v.v (struct dma_buf*)0x%x   %2d   %8s  0x%-8x  %-24s  %-24s  %16dKB  %-32s %-32s"
+              %(item[0], item[1], item[2], item[3],  item[4], item[5], item[6]/1024, item[7], item[8] ), file = ion_info)
 
 def get_bufs(self, task, bufs, ion_info, ramdump):
     t_size = 0
@@ -235,7 +205,7 @@ def get_bufs(self, task, bufs, ion_info, ramdump):
         else:
             name = ramdump.read_cstring(name, 48)
 
-        item = [name, hex(size), bytes_to_KB(size), str(time), hex(file)]
+        item = [name, hex(size), bytes_to_KB(size), str(time), file, dmabuf]
         if item not in bufs:
             t_size = t_size + size
             bufs.append(item)
@@ -270,12 +240,11 @@ def ion_proc_info(self, ramdump, ion_info):
         str = "\n{0} (PID {1}) size (KB): {2}\n"\
             .format(proc[0], proc[1], proc[2])
         ion_info.write(str)
-        ion_info.write("{0:15} {1:15} {2:10} {3:20} {4:25}\n".format(
-                'Name', 'Size', 'Size in KB', 'Time Alive(sec)', '(struct file *)'))
+        ion_info.write("{0:15} {1:15} {2:10} {3:20} {4:20} {5:20}\n".format(
+                'Name', 'Size', 'Size in KB', 'Time Alive(sec)', 'file', 'dma_buf'))
         for item in proc[3]:
-            str = "{0:15} {1:15} {2:10} {3:20} {4:25}\n".\
-                format(item[0], item[1], item[2], item[3], item[4])
-            ion_info.write(str)
+            print("%-32s  %8s %8s  %8s v.v (struct file*)0x%x v.v (struct dma_buf)0x%x" %(
+                  item[0], item[1], item[2], item[3], item[4], item[5]), file = ion_info)
 
 
 def do_dump_ionbuff_info(self, ramdump, ion_info):
