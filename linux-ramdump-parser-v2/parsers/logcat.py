@@ -280,7 +280,7 @@ class Logcat(RamParser):
             self.generate_bin(taskinfo.mmu)
         else:
             for vma in taskinfo.vmalist:
-                if vma.flags & 0b11 != 0b11:
+                if vma.file != 0 or vma.flags & 0b11 != 0b11:
                     continue
                 vma_info = {}
                 size = vma.vm_end - vma.vm_start
@@ -294,6 +294,14 @@ class Logcat(RamParser):
         self.generate_bin(taskinfo.mmu)
 
     def parse(self):
+        if self.ramdump.logcat_limit_time == 0:
+            self.__parse()
+        else:
+            from func_timeout import func_timeout
+            print_out_str("Limit logcat parser running time to {}s".format(self.ramdump.logcat_limit_time))
+            func_timeout(self.ramdump.logcat_limit_time, self.__parse)
+
+    def __parse(self):
         try:
             try:
                 taskinfo = UTaskLib(self.ramdump).get_utask_info("logd")
@@ -317,11 +325,10 @@ class Logcat(RamParser):
                 logcat = Logcat_v3(self.ramdump, taskinfo)
                 try:
                     is_success = logcat.parse()
-                except:
+                except Exception as e:
                     is_success = False
-                    print_out_str("logcat_v3 parser failed")
+                    print_out_str("logcat_v3 parser failed " + str(e))
                     traceback.print_exc()
-
                 if is_success:
                     print_out_str("logcat_v3 parse logcat success")
                     return
@@ -329,11 +336,10 @@ class Logcat(RamParser):
                     from parsers.logcat_v3 import Logcat_vma
                     logcat = Logcat_vma(self.ramdump, taskinfo)
                     is_success = logcat.parse()
-                except:
+                except Exception as e:
                     is_success = False
-                    print_out_str("logcat_vma parser failed")
+                    print_out_str("logcat_vma parser failed" + str(e))
                     traceback.print_exc()
-
                 if is_success:
                     print_out_str("logcat_vma parse logcat success")
                 else:

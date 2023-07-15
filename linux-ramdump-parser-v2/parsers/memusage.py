@@ -1,5 +1,5 @@
 # Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
-#
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -68,7 +68,10 @@ def get_shmem_swap_usage(ramdump, memory_file):
                     'd_name')) + ramdump.field_offset('struct qstr', 'name')
                 name = ramdump.read_cstring(ramdump.read_pointer(d_name_ptr),
                         100)
-                path, cycle_flag = pathtracking.get_filepath('', name, dentry)
+                if name is not None:
+                    path, cycle_flag = pathtracking.get_filepath('', name, dentry)
+                else:
+                    path = 'None'
                 path = "file name:  " + path + '\n'
                 string = string + path
         else:
@@ -142,7 +145,7 @@ def do_dump_process_memory(ramdump):
         if adj & 0x8000:
             adj = adj - 0x10000
         rss, swap = get_rss(ramdump, task)
-        if rss != 0:
+        if rss != 0 or swap != 0:
             task_info.append([thread_task_name, thread_task_pid, rss, swap, rss + swap, adj])
 
     task_info = sorted(task_info, key=lambda l: l[4], reverse=True)
