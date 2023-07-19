@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -413,6 +413,8 @@ class DebugImage_v2():
             setattr(self.qdss, qdss_tag_to_field_name[client_name], start)
 
     def parse_cache_common(self, version, start, end, client_id, ramdump):
+        if ramdump.skip_TLB_Cache_parse:
+            return
         client_name = self.dump_data_id_lookup_table[client_id]
         core = client_id & 0xF
         filename = '{0}_0x{1:x}'.format(client_name, core)
@@ -433,6 +435,8 @@ class DebugImage_v2():
         outfile.close()
 
     def parse_system_cache_common(self, version, start, end, client_id, ramdump):
+        if ramdump.skip_TLB_Cache_parse:
+            return
         client_name = self.dump_data_id_lookup_table[client_id]
         bank_number = client_id - client.MSM_DUMP_DATA_LLC_CACHE
         filename = '{0}_0x{1:x}'.format(client_name, bank_number)
@@ -453,6 +457,8 @@ class DebugImage_v2():
         outfile.close()
 
     def parse_tlb_common(self, version, start, end, client_id, ramdump):
+        if ramdump.skip_TLB_Cache_parse:
+            return
         client_name = self.dump_data_id_lookup_table[client_id]
         core = client_id & 0xF
         filename = '{0}_0x{1:x}'.format(client_name, core)
