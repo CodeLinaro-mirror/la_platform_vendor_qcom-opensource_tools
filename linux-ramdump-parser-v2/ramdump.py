@@ -2890,6 +2890,10 @@ class RamDump():
         if self.arm64:
             return self.thread_saved_field_common_64(task, self.field_offset('struct cpu_context', 'fp'))
         else:
+            pc  = self.thread_saved_pc(task)
+            # PC value last bit is 1 for Thumb and 0 for ARM
+            if (pc & 0x1):
+                return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'r7'))
             return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'fp'))
 
     def for_each_process(self):
