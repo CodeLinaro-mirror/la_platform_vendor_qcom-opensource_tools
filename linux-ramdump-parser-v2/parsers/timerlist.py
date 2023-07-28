@@ -1,6 +1,6 @@
 # Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -12,9 +12,11 @@
 # GNU General Public License for more details.
 
 import sys
+import os
 import linux_list
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
+import rb_tree
 
 @register_parser('--timer-list', 'Print all the linux timers')
 class TimerList(RamParser) :
@@ -217,9 +219,57 @@ class TimerList(RamParser) :
         self.output_file.write(tick_do_timer_cpu_val)
         self.output_file.write("=" * len(tick_do_timer_cpu_val) + "\n")
 
-    def parse(self):
-        self.output_file = self.ramdump.open_file('timerlist.txt')
-        self.get_timer_list()
+    def hrtimer_walker(self, hrtimer_base, extra):
+        if hrtimer_base == None:
+            print(" %s " % ("\n rbtree corrupted \n"), file=self.output_file)
+            return
+        node = self.ramdump.struct_field_addr(hrtimer_base , 'struct hrtimer', 'node')
+        expires = self.ramdump.read_structure_field(node, 'struct timerqueue_node', 'expires')
+        function = self.ramdump.read_structure_field(hrtimer_base, 'struct hrtimer', 'function')
+        function_name = self.ramdump.unwind_lookup(function)
+        if function_name == None:
+            function_name = 'n/a'
+        _softexpires = self.ramdump.read_structure_field(hrtimer_base, 'struct hrtimer', '_softexpires')
+        '''
+        in some case the rb tree is corrupt, the rt_node could be a valid pointer but the member value is invalid.
+        '''
+        if function != None and _softexpires != None and expires != None:
+            self.hrtimer_list.append([hrtimer_base, function, function_name,  _softexpires, expires])
 
+    def get_hrtimer(self):
+        print(" %s " % ("\nhrtimer info: \n"), file=self.output_file)
+        hrtimer_bases_addr = self.ramdump.address_of('hrtimer_bases')
+        clock_base_offset = self.ramdump.field_offset('struct hrtimer_cpu_base', 'clock_base')
+        for i in self.ramdump.iter_cpus():
+            hrtimer_bases = hrtimer_bases_addr + self.ramdump.per_cpu_offset(i)
+            clock_base = (hrtimer_bases + clock_base_offset)
+            print(" CPU %d hrtimer_bases  v.v (struct hrtimer_cpu_base)0x%x  " % (i, hrtimer_bases), file = self.output_file)
+            num_of_HRTIMER_MAX_CLOCK_BASES = self.ramdump.gdbmi.get_value_of('HRTIMER_MAX_CLOCK_BASES')
+            self.hrtimer_list = []
+            for j in range(0, num_of_HRTIMER_MAX_CLOCK_BASES):
+                hrtimer_cpu_base_index  = self.ramdump.array_index(clock_base, 'struct  hrtimer_clock_base', j)
+                if hrtimer_cpu_base_index != None and hrtimer_cpu_base_index != 0:
+                    print("     hrtimer_cpu_base 0x%x " %(hrtimer_cpu_base_index), file = self.output_file)
+                    active_offset = self.ramdump.field_offset('struct hrtimer_clock_base', 'active')
+                    active = hrtimer_cpu_base_index + active_offset
+                    rb_node = self.ramdump.read_pointer(active)
+                    rb_walker = rb_tree.RbTreeWalker(self.ramdump)
+                    rb_walker.walk(rb_node, self.hrtimer_walker)
+
+                self.hrtimer_list = sorted(self.hrtimer_list, key=lambda l: l[4])
+                print("		 hrtimer     								function    																		_softexpires					  _softexpires" , file=self.output_file)
+                for item in self.hrtimer_list:
+                    hrtimer_base = item[0]
+                    function = item[1]
+                    function_name = item[2]
+                    _softexpires = item[3]
+                    expires = item[4]
+                    print("         v.v (struct hrtimer *)0x%x  0x%-16x %-64s   %-32ld  %-32ld" % (
+                    hrtimer_base, function, function_name, _softexpires, expires), file = self.output_file)
+
+    def parse(self):
+        self.output_file= open(self.ramdump.outdir + "/timerlist.txt", "w")
+        self.get_timer_list()
+        self.get_hrtimer()
         self.output_file.close()
         print_out_str("--- Wrote the output to timerlist.txt")

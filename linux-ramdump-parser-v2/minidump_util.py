@@ -123,15 +123,15 @@ def get_strings(buf, length):
                         return nlist
         return nlist
 
-def generate_elf(outdir, vm):
+def generate_elf(autodump, outdir, vm):
         if vm == "oemvm":
             vmid = "31_"
         elif vm:
             vmid = "2d_"
         else:
             vmid = ""
-        elfhd_old = os.path.join(outdir, "md_" + vmid + "KELF_HEADER.BIN")
-        elfhd_new = os.path.join(outdir, "md_" + vmid + "KELF_HDR.BIN")
+        elfhd_old = os.path.join(autodump, "md_" + vmid + "KELF_HEADER.BIN")
+        elfhd_new = os.path.join(autodump, "md_" + vmid + "KELF_HDR.BIN")
         if os.path.exists(elfhd_old):
             elfhd = elfhd_old
             fi = open(elfhd, "rb")
@@ -150,7 +150,7 @@ def generate_elf(outdir, vm):
         buf = fi.read(hsize)
         fo.write(buf)
         nlist = get_strings(buf, len(buf))
-        files = os.listdir(outdir)
+        files = os.listdir(autodump)
         for names in nlist:
             if vm:
                 for file in files:
@@ -160,10 +160,10 @@ def generate_elf(outdir, vm):
                         break;
                 if not is_found:
                     return 1
-                ret = add_file(fo, outdir, file)
+                ret = add_file(fo, autodump, file)
             else:
                 filepath = "md_" + names + ".BIN"
-                ret = add_file(fo, outdir, filepath)
+                ret = add_file(fo, autodump, filepath)
 
             if ret == -1:
                 fo.close()
