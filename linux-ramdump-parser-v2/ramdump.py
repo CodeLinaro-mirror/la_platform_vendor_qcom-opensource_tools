@@ -86,7 +86,7 @@ class SymbolNotFound(Exception):
 
 def is_ramdump_file(val, minidump):
     if not minidump:
-        ddr = re.compile(r'(DDR|EBI)[0-9_CS]+[.]BIN', re.IGNORECASE)
+        ddr = re.compile(r'(DDR|EBI|VMDDR)[0-9_CS]+[.]BIN', re.IGNORECASE)
         imem = re.compile(r'.*IMEM.BIN', re.IGNORECASE)
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
