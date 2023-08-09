@@ -914,11 +914,11 @@ class RamDump():
             if not options.autodump:
                 file_path = options.ram_elf_addr
             else:
-                file_path = os.path.join(options.autodump, 'ap_minidump.elf')
+                file_path = os.path.join(options.outdir, 'ap_minidump.elf')
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump, self.svm):
+                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -1469,10 +1469,7 @@ class RamDump():
         launch_config.write('PBI=SIM\n')
         launch_config.write('\n')
         launch_config.write('SCREEN=\n')
-        if t32_host_system != 'Linux':
-            launch_config.write('FONT=SMALL\n')
-        else:
-            launch_config.write('FONT=LARGE\n')
+        launch_config.write('FONT=LARGE\n')
         launch_config.write('HEADER=Trace32-ScorpionSimulator\n')
         launch_config.write('\n')
         if t32_host_system != 'Linux':
