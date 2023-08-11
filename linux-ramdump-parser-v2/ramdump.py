@@ -86,7 +86,7 @@ class SymbolNotFound(Exception):
 
 def is_ramdump_file(val, minidump):
     if not minidump:
-        ddr = re.compile(r'(DDR|EBI)[0-9_CS]+[.]BIN', re.IGNORECASE)
+        ddr = re.compile(r'(DDR|EBI|VMDDR)[0-9_CS]+[.]BIN', re.IGNORECASE)
         imem = re.compile(r'.*IMEM.BIN', re.IGNORECASE)
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
@@ -249,13 +249,13 @@ class AutoDumpInfodram_cs(AutoDumpInfo):
             return
 
         filename_lst = os.listdir(self.autodumpdir)
-        regex = re.compile(r'^dram_cs|ocimem\S*(0x[A-Fa-f0-9]+)\S+(0x[A-Fa-f0-9]+)')
+        regex = re.compile(r'^(dram_cs|ocimem)\S*(0x[A-Fa-f0-9]+)\S+(0x[A-Fa-f0-9]+)')
 
         for filename in filename_lst:
             m = re.search(regex, filename)
             if m:
-                start = int(m.group(1), 16)
-                end = int(m.group(2), 16)
+                start = int(m.group(2), 16)
+                end = int(m.group(3), 16)
 
                 filesize = os.path.getsize(
                     os.path.join(self.autodumpdir, filename))
