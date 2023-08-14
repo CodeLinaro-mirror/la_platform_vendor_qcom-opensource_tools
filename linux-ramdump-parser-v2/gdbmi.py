@@ -90,6 +90,7 @@ class GdbMI(object):
             creationflags=subprocess_flags
         )
         self._flush_gdbmi()
+        self._run('set max-value-size unlimited')
 
     def close(self):
         """Close the connection to the ``gdbmi`` backend. Not needed if using
