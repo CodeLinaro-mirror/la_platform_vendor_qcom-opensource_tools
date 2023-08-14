@@ -1,6 +1,5 @@
 """
 Copyright (c) 2016, 2020 The Linux Foundation. All rights reserved.
-Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
@@ -26,6 +25,10 @@ BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
 WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Changes from Qualcomm Innovation Center are provided under the following license:
+Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+SPDX-License-Identifier: BSD-3-Clause-Clear
 """
 
 from parser_util import register_parser, RamParser
@@ -93,12 +96,14 @@ def get_pathname_by_file(self, ramdump, file):
     mnt_parent_pre = 0
     mnt_parent = mount
     mount_name = []
-    while  mnt_parent_pre !=  mnt_parent:
+    while  mnt_parent_pre != mnt_parent:
         mnt_parent_pre = mnt_parent
-        mnt_mountpoint = ramdump.read_word(mnt_parent +  mnt_mountpoint_offset)
+        mnt_mountpoint = ramdump.read_word(mnt_parent + mnt_mountpoint_offset)
         name = get_dname_of_dentry(self, mnt_mountpoint)
         mnt_parent = ramdump.read_word(mnt_parent + mnt_parent_offset)
-        if name == '/':
+        if name == None or name == '/':
+            break
+        if mnt_parent == 0:
             break
         mount_name.append(name)
 
@@ -113,9 +118,11 @@ def get_pathname_by_file(self, ramdump, file):
         d_parent_pre = d_parent
         name = get_dname_of_dentry(self, d_parent)
         d_parent = ramdump.read_word(d_parent + d_parent_offset)
-        if name == '/':
+        if name == None or name == '/':
             break
         names.append(name)
+        if d_parent == 0:
+            break
     full_name = ''
     for item in mount_name:
         names.append(item)
