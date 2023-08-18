@@ -15,6 +15,7 @@ import sys
 import string
 import maple_tree
 import re
+import time
 
 from mmu import Armv8MMU
 from mm import pfn_to_page, page_buddy, page_count, for_each_pfn, page_to_pfn, phys_to_virt
@@ -36,6 +37,12 @@ PTRS_PER_PTE_L3_4K = 512
 
 pagemask = 0xfffffffffffff000
 pageoffset = 0xfff
+
+
+
+#help -m userspace_top: 0000008000000000
+def arm64_is_uvaddr(addr):
+    return (addr < 0x8000000000)
 
 def PAGEOFFSET(x):
     return x & pageoffset
@@ -154,7 +161,7 @@ class uvtop(RamParser):
 
     def uvtop(self, mm_struct, vaddr):
         if mm_struct == 0:
-            return 0, 0
+            return 0, PAGE_SIZE
         """
                 arch/arm64/include/asm/pgtable-prot.h
         """
@@ -271,8 +278,10 @@ class uvtop(RamParser):
         self.fout.write(
             "      0x{0:x} ->  0x{1:x} 0x{2:x}  {3:8x}  {4:x} {5:48s}\n"
                 .format(vm_start, vm_end, vm_area_struct, vm_flags, vm_page_prot, mount_dir_full_name))
-        start  = vm_start
+        start = vm_start
         while start < vm_end:
+            if arm64_is_uvaddr(start) == 0:
+                break
             page, step_size = self.uvtop(mm, start)
             if page != 0:
                 flags = self.dump_page(page)
@@ -334,12 +343,17 @@ class uvtop(RamParser):
                 return
         comm = remove_non_ascii(thread_task_name)
         comm = re.sub(r'[^a-zA-Z0-9]', '', comm)
+
         if mm != 0:
+            starttime = time.time()
+            print_out_str('start {0} {1}'.format(pid, comm))
             if (self.ramdump.kernel_version) < (6, 1, 0):
                 self.dump_vma_5_15(mm, pid, comm)
             else:
                 self.dump_vma_6_1(mm, pid, comm)
-
+            endtime = time.time()
+            print_out_str('done {0} {1}'.format(pid, comm))
+            print_out_str("     Time taken to complete : {}".format(endtime - starttime))
     def parse(self):
         '''
         --print-uvtop pid=1   # dump a task by given the pid, for example 1
