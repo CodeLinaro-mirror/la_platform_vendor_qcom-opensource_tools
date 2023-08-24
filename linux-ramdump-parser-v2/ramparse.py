@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -130,17 +130,6 @@ if __name__ == '__main__':
                       dest='skip_qdss_bin', help='Skip QDSS ETF and ETR '
                       'binary data parsing from debug image (may save time '
                       'if large ETM and ETR buffers are present)')
-    parser.add_option('', '--ipc-help', dest='ipc_help',
-                      help='Help for IPC Logging', action='store_true',
-                      default=False)
-    parser.add_option('', '--ipc-test', dest='ipc_test',
-                      help='List of test files for the IPC Logging test command (name1, name2, ..., nameN, <version>)',
-                      action='append', default=[])
-    parser.add_option('', '--ipc-skip', dest='ipc_skip', action='store_true',
-                      help='Skip IPC Logging when parsing everything',
-                      default=False)
-    parser.add_option('', '--ipc-debug', dest='ipc_debug', action='store_true',
-                      help='Debug Mode for IPC Logging', default=False)
     parser.add_option('', '--eval',
                       help='Evaluate some python code directly, or from stdin if "-" is passed. The "dump" variable will be available, as it is with the --shell option.')  # noqa
     parser.add_option('', '--wlan', dest='wlan', help='wlan.ko path')
@@ -181,6 +170,14 @@ if __name__ == '__main__':
                                          ]
                           """,
                           default=[])
+    parser.add_option('--fs', '--ftrace_buffer_size_kb', type='int', dest='ftrace_max_size',
+                      help="""
+                      This option indicates that ftrace trace buffer max size in KB.
+                      It will be passed to ensure an early bailout from ftrace parser if size goes
+                      beyond this specified value.
+                      Example: --fs 4096
+                      This specifies that max size is 4096 KB.
+                      """)
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
@@ -214,6 +211,7 @@ if __name__ == '__main__':
         default_list.append("PStore")
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
+        default_list.append("ipc_logging_cn")
 
     if options.outdir:
         if not os.path.exists(options.outdir):
@@ -473,7 +471,7 @@ if __name__ == '__main__':
 
 
         print("    [%d/%d] %s ... " %
-                         (i + 1, len(parsers_to_run), p.longopt), end='')
+                         (i + 1, len(parsers_to_run), p.longopt), end='', flush=True)
         before = time.time()
         with print_out_section(p.cls.__name__):
             try:
@@ -492,7 +490,7 @@ if __name__ == '__main__':
                     print("FAILED! ")
                 else:
                     raise
-        print("%fs" % (time.time() - before))
+        print("%fs" % (time.time() - before),  flush=True)
         flush_outfile()
 
     sys.stderr.write("\n")

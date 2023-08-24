@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -49,6 +49,8 @@ class Slabinfo_summary(RamParser):
             else:
                     count = self.ramdump.read_structure_field(
                                 page, 'struct page', 'counters')
+            if not(count):
+                count = 0
             inuse = count & 0x0000FFFF
             total_objects = (count >> 16) & 0x00007FFF
             freeobj = total_objects - inuse
@@ -69,8 +71,12 @@ class Slabinfo_summary(RamParser):
             'struct kmem_cache', 'name')
         slab_node_offset = self.ramdump.field_offset(
             'struct kmem_cache', 'node')
-        cpu_cache_page_offset = self.ramdump.field_offset(
-            'struct kmem_cache_cpu', 'page')
+        if self.ramdump.kernel_version >= (5, 17):
+            cpu_cache_page_offset = self.ramdump.field_offset(
+                'struct kmem_cache_cpu', 'slab')
+        else:
+            cpu_cache_page_offset = self.ramdump.field_offset(
+                'struct kmem_cache_cpu', 'page')
         cpu_slab_offset = self.ramdump.field_offset(
             'struct kmem_cache', 'cpu_slab')
         slab_partial_offset = self.ramdump.field_offset(
@@ -150,8 +156,5 @@ class Slabinfo_summary(RamParser):
 
     def parse(self):
         slab_out = self.ramdump.open_file('slabsummary.txt')
-        if(self.ramdump.is_config_defined('CONFIG_SLUB_DEBUG_ON')):
-            self.print_slab_summary(slab_out)
-        else:
-            slab_out.write('CONFIG_SLUB_DEBUG_ON is disabled in this build')
+        self.print_slab_summary(slab_out)
         slab_out.close()

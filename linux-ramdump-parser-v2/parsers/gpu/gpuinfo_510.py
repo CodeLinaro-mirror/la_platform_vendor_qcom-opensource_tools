@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -129,6 +129,8 @@ class GpuParser_510(RamParser):
             (self.parse_open_process_mementry, "Open Process Mementries",
              'open_process_mementries.txt'),
             (self.parse_eventlog_data, "Eventlog Buffer", 'eventlog.txt'),
+            (self.parse_gpu_dcvs_data, "GPU DCVS Info",
+             'gpuinfo.txt'),
         ]
 
         self.rtw = linux_radix_tree.RadixTreeWalker(dump)
@@ -453,6 +455,10 @@ class GpuParser_510(RamParser):
         ft_policy = dump.read_structure_field(self.devp,
                                               'struct adreno_device',
                                               'ft_policy')
+        kgsl_mmu = dump.struct_field_addr(self.devp, 'struct kgsl_device',
+                                          'mmu')
+        pfpolicy = dump.read_structure_field(kgsl_mmu, 'struct kgsl_mmu',
+                                             'pfpolicy')
         long_ib_addr = dump.struct_field_addr(self.devp,
                                               'struct adreno_device',
                                               'long_ib_detect')
@@ -509,6 +515,7 @@ class GpuParser_510(RamParser):
         self.writeln('state: ' + str(state))
         self.writeln('requested_state: ' + str(requested_state))
         self.writeln('ft_policy: ' + str(ft_policy))
+        self.writeln('pfpolicy: ' + str(pfpolicy))
         self.writeln('long_ib_detect: ' + str(long_ib_detect))
         self.writeln('lm_enabled: ' + str(lm_enabled))
         self.writeln('acd_enabled: ' + str(acd_enabled))
@@ -1325,3 +1332,36 @@ class GpuParser_510(RamParser):
 
     def create_mini_snapshot(self, dump):
         create_snapshot_from_ramdump(self.devp, dump)
+
+    def parse_gpu_dcvs_data(self, dump):
+        state = dump.read_structure_field(self.devp,
+                                          'struct kgsl_device', 'state')
+
+        # Skip dumping and extraction of the DCVS data if GPU is not
+        # in active state.
+        if state == 2:
+            adreno_tz_data_addr = dump.address_of('adreno_tz_data')
+
+            bin_addr = dump.struct_field_addr(
+                adreno_tz_data_addr, 'struct devfreq_msm_adreno_tz_data',
+                'bin')
+            total_time = dump.read_s64(bin_addr)
+            busy_time = dump.read_s64(bin_addr + 8)
+
+            bus_addr = dump.struct_field_addr(
+                adreno_tz_data_addr, 'struct devfreq_msm_adreno_tz_data',
+                'bus')
+            ram_time = dump.read_u64(bus_addr + 8)
+            ram_wait = dump.read_u64(bus_addr + 16)
+
+            mod_percent = dump.read_structure_field(
+                adreno_tz_data_addr, 'struct devfreq_msm_adreno_tz_data',
+                'mod_percent')
+
+            self.writeln("total_time: " + str(total_time))
+            self.writeln("busy_time: " + str(busy_time))
+            self.writeln("ram_time: " + str(ram_time))
+            self.writeln("ram_wait: " + str(ram_wait))
+            self.writeln("mod_percent: " + str(mod_percent))
+        else:
+            self.writeln("DCVS data dump skipped if GPU state is not ACTIVE")
