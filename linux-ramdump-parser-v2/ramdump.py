@@ -748,7 +748,7 @@ class RamDump():
                 else:
                     self.kasan_shadow_size = 1 << (self.va_bits - 3)
             kimage_vaddr = self.page_end + modules_vsize
-            if self.get_kernel_version() < (5, 15, 0):
+            if self.get_kernel_version() < (5, 10, 0):
                 kimage_vaddr += bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
