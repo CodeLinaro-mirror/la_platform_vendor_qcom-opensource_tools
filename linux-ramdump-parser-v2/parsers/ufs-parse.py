@@ -815,8 +815,8 @@ class UfsIpc():
 
     def ufsipcdict(self, line2, line):
         return{
-            '<': lambda: ' [Send cmd] ' + str(line[3]) + ' tag:' + str(line[4]) + ' DBR:' + str(line[5]) + ' size=' + str(line[6]),
-            '>': lambda: ' [Done cmd] ' + str(line[3]) + ' tag:' + str(line[4]) + ' DBR:' + str(line[5]) + ' size=' + str(line[6]),
+            '<': lambda: ' [Send cmd] ' + str(line[3]) + ' tag:' + str(line[4]) + ' DBR/HWQ:' + str(line[5]) + ' size=' + str(line[6]),
+            '>': lambda: ' [Done cmd] ' + str(line[3]) + ' tag:' + str(line[4]) + ' DBR/HWQ:' + str(line[5]) + ' size=' + str(line[6]),
             '(': lambda: ' [Send uic] ' + str(line[3]) + ' arg1=' + str(line[4]) + ' arg2=' + str(line[5]) + ' arg3=' + str(line[6]),
             ')': lambda: ' [Done uic] ' +str(line[3]) + ' arg1=' + str(line[4]) + ' arg2=' + str(line[5]) + ' arg3=' + str(line[6]),
             '#': lambda: ' [CLK GATE] ' + self.phase_l[int(line[3])] + self.state_l[int(line[4])] + 'err=' + str(line[5]),
@@ -830,6 +830,7 @@ class UfsIpc():
             '-': lambda: ' [HCE] ' + self.phase_l[int(line[3])] + 'err= ' + str(line[4]),
             '*': lambda: ' [LSS] ' + self.phase_l[int(line[3])] + 'err= ' + str(line[4]),
             '_': lambda: ' [ERROR] ' + ' hba_err=' + str(line[3]) + ' uic_err=' + str(line[4]),
+            '!': lambda: ' [ESI] ' + ' irq=' + str(line[3]) + ' msi_index=' + str(line[4]),
             '0xdead': lambda: ' [SHUTDOWN] ',
         }.get(line2, None)()
 
