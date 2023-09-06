@@ -10,6 +10,7 @@ from lzo1xlib import Lzo1xParser
 from print_out import print_out_str
 import struct
 import traceback
+import linux_list as llist
 
 @register_parser('--print-zram', 'Extract data from zram')
 class Zram(RamParser):
@@ -90,6 +91,7 @@ class Zram(RamParser):
         self._PFN_BITS = (self.MAX_POSSIBLE_PHYSMEM_BITS - self.PAGE_SHIFT)
         self.OBJ_INDEX_BITS = (self.BITS_PER_LONG - self._PFN_BITS - self.OBJ_TAG_BITS) # 64-36 -1 = 27
         self.OBJ_INDEX_MASK = (1 << self.OBJ_INDEX_BITS) -1
+        self.fullness_group = ['ZS_EMPTY', 'ZS_ALMOST_EMPTY','ZS_ALMOST_FULL','ZS_FULL']
 
     def read_binary(self, addr, length):
         """Reads binary data of specified length from addr_or_name."""
@@ -185,17 +187,17 @@ class Zram(RamParser):
     def zs_map_object(self, mem_pool_addr, handle):
         pfn = handle >> (self.OBJ_TAG_BITS + self.OBJ_INDEX_BITS)
         page_addr = pfn_to_page(self.ramdump, pfn)
-        page_private_addr = self.ramdump.read_word(page_addr + self.page_private_oft)
-        magic_int = self.ramdump.read_u32(page_private_addr + self.zspage_magic_oft)
-        magic = (magic_int >> (self.HUGE_BITS + self.FULLNESS_BITS + self.CLASS_BITS + 1 + self.ISOLATED_BITS)) \
-                         & ((1 << self.MAGIC_VAL_BITS) -1)
+        if page_addr == None:
+            return
+        zspage = self.ramdump.read_word(page_addr + self.page_private_oft)
+        if zspage == None:
+            return
+        inuse, freeobj, magic, class_idx, fullness, isolated = self.get_zspage_meta(zspage)
         if magic != self.ZSPAGE_MAGIC:
             print_out_str("Zram: Page is not a zram page")
-            raise Exception("(struct page*)=0x%x (struct page*)->private=0x%x is not a zram page, \
+            raise Exception("(struct page*)=0x%x page->private (struct zspage*)0x%x is not a zram page, \
                         magic=0x%x expect magic=0x%x)" % \
                         (page_addr, page_private_addr, magic, self.ZSPAGE_MAGIC))
-
-        class_idx = (magic_int  >> (self.HUGE_BITS + self.FULLNESS_BITS)) & ((1<<(self.CLASS_BITS+1)) -1)
         size_class_addr = mem_pool_addr + self.zs_pool_size_class_oft
         class_addr = self.ramdump.read_word(self.ramdump.array_index( \
                     size_class_addr, "struct size_class *", class_idx))
@@ -244,15 +246,15 @@ class Zram(RamParser):
     def zram_exact(self, zram_addr):
         compressor = cleanupString(self.ramdump.read_cstring( \
                     zram_addr + self.zram_compressor_oft, self.CRYPTO_MAX_ALG_NAME))
+        disk_size = self.ramdump.read_word(zram_addr + self.zram_disksize_oft)
+        disk_size_pages = disk_size >> 12
+        print_out_str("zram disk_size %d Mb, compressor %s v.v (struct zram*)0x%x" % (disk_size/1024/1024, compressor, zram_addr))
+        self.zram_zs_pool_dump(zram_addr)
+        index = 0
+
         if compressor !=  self.CRYPTO_LZO and compressor != self.CRYPTO_LZO_RLE:
             print_out_str("Zram: not support compressoFr %s" % compressor)
             return
-
-        disk_size = self.ramdump.read_word(zram_addr + self.zram_disksize_oft)
-        disk_size_pages = disk_size >> 12
-        print_out_str("zram disk_size %d Mb, compressor %s" % (disk_size/1024/1024, compressor))
-
-        index = 0
         while index < disk_size_pages:
             try:
                 ret = self.process_zram(zram_addr, index * self.sizeof_zram_table_entry)
@@ -263,7 +265,101 @@ class Zram(RamParser):
                 print_out_str(traceback.format_exc())
             index += 1
 
+    def get_zspage_meta(self, zspage):
+        freeobj_offset = self.ramdump.field_offset('struct zspage', 'freeobj')
+        inuse_offset = self.ramdump.field_offset('struct zspage', 'inuse')
+        inuse = self.ramdump.read_u32(zspage + inuse_offset)
+        freeobj = self.ramdump.read_u32(zspage + freeobj_offset)
+        magic_int = self.ramdump.read_u32(zspage + self.zspage_magic_oft)
+
+        magic = (magic_int >> (self.HUGE_BITS + self.FULLNESS_BITS + self.CLASS_BITS + 1 + self.ISOLATED_BITS)) \
+                & ((1 << self.MAGIC_VAL_BITS) - 1)
+
+        class_idx = (magic_int >> (self.HUGE_BITS + self.FULLNESS_BITS)) \
+                    & ((1 << (self.CLASS_BITS + 1)) - 1)
+
+        fullness = (magic_int >> (self.HUGE_BITS)) \
+                   & ((1 << (self.FULLNESS_BITS)) - 1)
+
+        isolated = (magic_int >> (self.HUGE_BITS + self.FULLNESS_BITS + self.CLASS_BITS + 1)) \
+                   & ((1 << self.ISOLATED_BITS) - 1)
+
+        return inuse, freeobj, magic, class_idx, fullness, isolated
+
+    def list_call_back(self, list):
+        list_offset = self.ramdump.field_offset('struct zspage', 'list')
+        zspage = list - list_offset
+        inuse, freeobj, magic, class_idx, fullness, isolated = self.get_zspage_meta(zspage)
+        if magic == self.ZSPAGE_MAGIC:
+            print("                     v.v (struct zspage *)0x%x " % (zspage), file=self.fout)
+            print("                         inuse %-16d freeobj 0x%-32x magic 0x%-2x  class  %-2d fullness %-32s isolated %-8d" % (inuse, freeobj, magic, class_idx, self.fullness_group[fullness], isolated), file=self.fout)
+            if self.curret_size_class_fullness_group != fullness:
+                print("                     possible something wrong here: v.v (struct zspage *)0x%x " % (zspage), file=self.fout)
+
+    def list_head_start(self, head):
+        list_walker = llist.ListWalker(self.ramdump, head, 0)
+        list_walker.walk(head, self.list_call_back)
+
+    def print_unsigned_long_stat(self, output_file, counter_name, addr, num):
+        for i in range(0, num):
+            val = self.ramdump.read_ulong(self.ramdump.array_index(addr, 'long', i))
+            print("                 %s %d " % (counter_name[i], val), file=self.fout)
+
+    def print_obj_stats(self, size_class_value, output_file):
+        stats_offset = self.ramdump.field_offset('struct size_class', 'stats')
+        objs_address = size_class_value + stats_offset
+        max_node_stat_item = self.ramdump.gdbmi.get_value_of('NR_ZS_STAT_TYPE')
+        class_stat_type_names = self.ramdump.gdbmi.get_enum_lookup_table('class_stat_type', max_node_stat_item)
+        self.print_unsigned_long_stat(output_file, class_stat_type_names, objs_address,
+                max_node_stat_item)
+
+    def zs_pool_dump(self, zs_pool_addr):
+        mem_pool = zs_pool_addr
+        print("v.v (struct zs_pool)0x%x " %(mem_pool), file = self.fout)
+        size_class_offset = self.ramdump.field_offset('struct zs_pool', 'size_class')
+        size_class = (mem_pool + size_class_offset)
+        print("             size_class base 0x%x " % (size_class), file=self.fout)
+        size_class_list = []
+        ZS_SIZE_CLASSES = 255
+        for i in range(0, ZS_SIZE_CLASSES):
+            size_class_index = size_class +  i * 8
+            size_class_value = self.ramdump.read_pointer(size_class_index)
+            if size_class_value in size_class_list:
+                continue
+            size_class_list.append(size_class_value)
+            print("v.v (struct size_class)0x%x " % (size_class_value), file = self.fout, end=" ")
+            size = self.ramdump.read_s32(size_class_value + self.size_class_size_oft)
+            objs_per_zspage = self.ramdump.read_s32(size_class_value + self.size_class_objs_per_zspage_offset)
+            pages_per_zspage = self.ramdump.read_s32(size_class_value + self.size_class_pages_per_zspage_offset)
+            print("             size %-8d   objs_per_zspage %-8d pages_per_zspage %-8d" % (
+            size, objs_per_zspage, pages_per_zspage), file=self.fout)
+            self.print_obj_stats(size_class_value, self.fout)
+            fullness_list_offset = self.ramdump.field_offset('struct  size_class', 'fullness_list')
+            fullness_list = (size_class_value + fullness_list_offset)
+            NR_ZS_FULLNESS = 4
+            for i in range(0, NR_ZS_FULLNESS):
+                print("             fullness_group %s " % (self.fullness_group[i]), file=self.fout)
+                list_head = self.ramdump.array_index(fullness_list, 'struct list_head', i)
+                self.curret_size_class_fullness_group = i
+                self.list_head_start(list_head)
+        return 0
+
+    def zram_zs_pool_dump(self, zram_addr):
+        file_name = "zram_{0:x}.txt".format(zram_addr)
+        f_path = os.path.join(self.output_dir, file_name)
+        self.fout = open(f_path, "w")
+        mem_pool_offset = self.ramdump.field_offset('struct zram', 'mem_pool')
+        mem_pool = self.ramdump.read_pointer(zram_addr + mem_pool_offset)
+        self.zs_pool_dump(mem_pool)
+        self.fout.close()
+
     def parse(self):
+
+        self.output_dir = os.path.join(os.path.abspath(
+            self.ramdump.outdir), "zram")
+        if os.path.exists(self.output_dir) is False:
+            os.makedirs(self.output_dir)
+
         if self.ramdump.kernel_version >= (5, 4):
             zram_index_idr = self.ramdump.address_of('zram_index_idr')
             zram_dev_rtw = linux_radix_tree.RadixTreeWalker(self.ramdump)

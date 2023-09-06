@@ -10,6 +10,11 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
+# Changes from Qualcomm Innovation Center are provided under the following license:
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
+
 from parser_util import register_parser, RamParser, cleanupString
 from print_out import print_out_str
 import struct
@@ -293,7 +298,21 @@ class Logcat(RamParser):
                 store_offset = store_offset + size + meta_size
         self.generate_bin(taskinfo.mmu)
 
+    def is_LE_process(self, taskinfo):
+        for vma in taskinfo.vmalist:
+            if vma.file_name == "liblog.so.0.0.0":
+                return True
+        return False
+
     def parse(self):
+        if self.ramdump.logcat_limit_time == 0:
+            self.__parse()
+        else:
+            from func_timeout import func_timeout
+            print_out_str("Limit logcat parser running time to {}s".format(self.ramdump.logcat_limit_time))
+            func_timeout(self.ramdump.logcat_limit_time, self.__parse)
+
+    def __parse(self):
         try:
             try:
                 taskinfo = UTaskLib(self.ramdump).get_utask_info("logd")
@@ -317,11 +336,10 @@ class Logcat(RamParser):
                 logcat = Logcat_v3(self.ramdump, taskinfo)
                 try:
                     is_success = logcat.parse()
-                except:
+                except Exception as e:
                     is_success = False
-                    print_out_str("logcat_v3 parser failed")
+                    print_out_str("logcat_v3 parser failed " + str(e))
                     traceback.print_exc()
-
                 if is_success:
                     print_out_str("logcat_v3 parse logcat success")
                     return
@@ -329,16 +347,22 @@ class Logcat(RamParser):
                     from parsers.logcat_v3 import Logcat_vma
                     logcat = Logcat_vma(self.ramdump, taskinfo)
                     is_success = logcat.parse()
-                except:
+                except Exception as e:
                     is_success = False
-                    print_out_str("logcat_vma parser failed")
+                    print_out_str("logcat_vma parser failed" + str(e))
                     traceback.print_exc()
-
                 if is_success:
                     print_out_str("logcat_vma parse logcat success")
                 else:
                     # generate logcat.bin when both logcat_v3 and logcat_vma parse failed
                     self.generate_logcat_bin(taskinfo)
+
+            elif self.is_LE_process(taskinfo):
+                print_out_str("LE ramdump")
+                from parsers.logcat_m import Logcat_m
+                #parser to supprot Android M
+                logcat = Logcat_m(self.ramdump, taskinfo)
+                logcat.parse()
             else:
                 self.generate_logcat_bin(taskinfo)
         except Exception as result:
