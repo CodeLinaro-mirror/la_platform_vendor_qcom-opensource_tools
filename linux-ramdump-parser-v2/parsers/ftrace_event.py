@@ -111,21 +111,24 @@ class FtraceParser_Event(object):
             buffer_data_page = self.ramdump.read_u32(buffer + self.buffer_page_data_page_offset)
 
         if self.ramdump.arm64:
-            buffer_data_page_commit = self.ramdump.read_u64(buffer_data_page + self.buffer_data_page_commit_offset)
+            buffer_data_page_commit = self.ramdump.read_u64(
+                buffer_data_page + self.buffer_data_page_commit_offset)
         else:
-            buffer_data_page_commit = self.ramdump.read_u32(buffer_data_page + self.buffer_data_page_commit_offset)
+            buffer_data_page_commit = self.ramdump.read_u32(
+                buffer_data_page + self.buffer_data_page_commit_offset)
         commit = buffer_data_page_commit
         abs_timestamp = False
 
         if commit and commit > 0:
-            buffer_data_page_end = buffer_data_page + commit
-            timestamp = self.ramdump.read_u64(buffer_data_page + self.buffer_data_page_time_stamp_offset)
+            buffer_data_page_end = buffer_data_page + self.buffer_page_data_page_offset + commit
+            timestamp = self.ramdump.read_u64(
+                buffer_data_page + self.buffer_data_page_time_stamp_offset)
             rb_event = buffer_data_page + self.buffer_data_page_data_offset
 
-            while( rb_event < buffer_data_page_end):
+            while (rb_event < buffer_data_page_end):
                 time_delta = self.ramdump.read_u32(rb_event + self.rb_event_timedelta_offset)
                 time_delta = time_delta >> 5
-                #print_out_str("time_delta after = {0} ".format(time_delta))
+                # print_out_str("time_delta after = {0} ".format(time_delta))
                 rb_event_timestamp = rb_event_timestamp + time_delta
 
                 rb_event_length_old = self.ramdump.read_u32(rb_event + self.rb_event_typelen_offset)
