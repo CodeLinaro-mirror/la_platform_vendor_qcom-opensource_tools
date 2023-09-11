@@ -1,4 +1,5 @@
 # Copyright (c) 2012-2014, 2018 The Linux Foundation. All rights reserved.
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -160,6 +161,9 @@ class RbTreeWalker(object):
             'struct rb_node', 'rb_left')
 
     def _walk(self, node, func, seen, extra):
+        if node == None:
+            print_out_str(" rb tree possible corrupted \n")
+            return
         if node != 0:
             left_node_addr = node + self.left_offset
             left_node = self.ram_dump.read_word(left_node_addr)
