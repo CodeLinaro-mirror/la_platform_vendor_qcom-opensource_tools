@@ -804,7 +804,6 @@ class RamDump():
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
-        self.kimage_vaddr_va = None
         self.datatype_dict = {}
         self.enum_data = {}
         self.available_cores = []
@@ -1780,23 +1779,28 @@ class RamDump():
                             self.kaslr_addr = a[1] + 0x6d0
                             break
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
+                self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
+
+                try:
+                    kimage_vaddr_va = self.address_of('kimage_vaddr')
+                    kimage_vaddr = self.get_kimage_vaddr()
+                    kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
+                    kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
+                    kimage_va = struct.unpack('<Q', kimage_va_temp)
+                    kimage_va = int(kimage_va[0])
+                    if kimage_va > kimage_vaddr:
+                        self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
+                        print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
+                except:
+                    pass
+
                 if kaslr_magic != 0xdead4ead:
-                    print_out_str('!!!! Kaslr magic does not match.')
-                    self.kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    try:
-                        kimage_vaddr = self.get_kimage_vaddr()
-                        kimage_vaddr_phy = self.phys_offset + self.kimage_vaddr_va - kimage_vaddr
-                        kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
-                        kimage_va = struct.unpack('<Q', kimage_va_temp)
-                        kimage_va = int(kimage_va[0])
-                        if kimage_va > kimage_vaddr:
-                            self.kaslr_offset = kimage_va - kimage_vaddr
-                            print_out_str("kaslr_offset = %x" % self.kaslr_offset)
-                            return self.kaslr_offset
-                    except:
-                        return self.kaslr_offset
+                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                        self.kaslr_offset = self.dynamic_kaslr_offset
+                    else:
+                        print_out_str('!!!! Kaslr feature is not enabled.')
+                        self.kaslr_offset = 0x0
                 else:
-                    self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
                     print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
 
     def get_page_size(self):
