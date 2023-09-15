@@ -1,5 +1,6 @@
+# Copyright (C) 2013 Felix Fietkau <nbd@openwrt.org>
+# Copyright (C) 2013 John Crispin <blogic@openwrt.org>
 # Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause-Clear
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
