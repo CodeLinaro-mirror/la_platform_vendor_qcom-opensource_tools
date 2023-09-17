@@ -64,8 +64,7 @@ def do_dump_lsof_info(self, ramdump, lsof_info):
         lsof_info.write("\n*********************************")
 
 
-def get_dname_of_dentry(self, dentry):
-    ramdump = self.ramdump
+def get_dname_of_dentry(ramdump, dentry):
     dentry_name_offset = ramdump.field_offset(
         'struct dentry', 'd_name')
     len_offset = ramdump.field_offset(
@@ -80,18 +79,17 @@ def get_dname_of_dentry(self, dentry):
         name_address, len))
     return name
 
-def get_pathname_by_file(self, ramdump, file):
+def get_pathname_by_file(ramdump, file):
     f_pathoffset = ramdump.field_offset(
         'struct file', 'f_path')
     f_path = f_pathoffset + file
 
     mnt_offset_in_path = ramdump.field_offset('struct path', 'mnt')
     mnt = ramdump.read_word(f_path + mnt_offset_in_path)
-    mnt_offset_in_mount = self.ramdump.field_offset(
-        'struct mount', 'mnt')
+    mnt_offset_in_mount = ramdump.field_offset('struct mount', 'mnt')
     mnt_parent_offset = ramdump.field_offset('struct mount', 'mnt_parent')
     mount = mnt - mnt_offset_in_mount
-    mnt_mountpoint_offset = self.ramdump.field_offset(
+    mnt_mountpoint_offset = ramdump.field_offset(
         'struct mount', 'mnt_mountpoint')
     mnt_parent_pre = 0
     mnt_parent = mount
@@ -99,7 +97,7 @@ def get_pathname_by_file(self, ramdump, file):
     while  mnt_parent_pre != mnt_parent:
         mnt_parent_pre = mnt_parent
         mnt_mountpoint = ramdump.read_word(mnt_parent + mnt_mountpoint_offset)
-        name = get_dname_of_dentry(self, mnt_mountpoint)
+        name = get_dname_of_dentry(ramdump, mnt_mountpoint)
         mnt_parent = ramdump.read_word(mnt_parent + mnt_parent_offset)
         if name == None or name == '/':
             break
@@ -116,7 +114,7 @@ def get_pathname_by_file(self, ramdump, file):
     names = []
     while d_parent_pre != d_parent:
         d_parent_pre = d_parent
-        name = get_dname_of_dentry(self, d_parent)
+        name = get_dname_of_dentry(ramdump, d_parent)
         d_parent = ramdump.read_word(d_parent + d_parent_offset)
         if name == None or name == '/':
             break
@@ -163,7 +161,7 @@ def parse_task(self, ramdump, task, lsof_info):
                 index = index + 1
                 continue
             fop, offset = look
-            iname = get_pathname_by_file(self, self.ramdump, file)
+            iname = get_pathname_by_file(ramdump, file)
             if fop.find("ion_fops", 0, 8) != -1:
                 lsof_info.write(ion_str.format(
                         index, file, fop, iname, priv_data))
