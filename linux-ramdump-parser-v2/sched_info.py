@@ -1,5 +1,5 @@
 # Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -197,11 +197,11 @@ def dump_cpufreq_data(ramdump):
         anomaly = Anomaly()
         anomaly.setOutputDir(ramdump.outdir)
         if max_freq != cpuinfo_max_freq:
-            anomaly_str = "cpu {0} max frequency got tempered curr max limit : {1} actual max limit : {2}\n"\
+            anomaly_str = "cpu {0} max frequency got tempered. Curr max limit : {1} actual max limit : {2}\n"\
                         .format(i, max_freq, cpuinfo_max_freq)
             anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
         if min_freq != cpuinfo_min_freq:
-            anomaly_str = "cpu {0} min frequency got tempered curr max limit : {1} actual min limit : {2}\n" \
+            anomaly_str = "cpu {0} min frequency got tempered. Curr min limit : {1} actual min limit : {2}\n" \
                 .format(i, min_freq, cpuinfo_min_freq)
             anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
         try:
