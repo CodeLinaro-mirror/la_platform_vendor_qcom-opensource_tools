@@ -143,8 +143,18 @@ def create_collapsed_mapping(flat_mapping):
     add_collapsed_mapping(collapsed_mapping, start_map, prev_map)
     return collapsed_mapping
 
+def __add_flat_mapping(mappings, virt, phy_addr, map_type_str, page_size, attr_indx_str,
+                       shareability_str, execute_never_str, mapped):
 
-def add_flat_mapping(mappings, fl_idx, sl_idx, tl_idx, ll_idx, phy_addr,
+        map = FlatMapping(virt, phy_addr, map_type_str, page_size, attr_indx_str,
+                          shareability_str, execute_never_str, mapped)
+        if virt not in mappings:
+            mappings[virt] = map
+        else:
+            map.type = 'Duplicate'
+            mappings[virt] = map
+
+def add_flat_mapping(ramdump, mappings, fl_idx, sl_idx, tl_idx, ll_idx, phy_addr,
                     map_type, page_size, attr_indx, shareability,
                     xn_bit, mapped):
     virt = (fl_idx << 39) | (sl_idx << 30) | (tl_idx << 21) | (ll_idx << 12)
@@ -189,14 +199,27 @@ def add_flat_mapping(mappings, fl_idx, sl_idx, tl_idx, ll_idx, phy_addr,
     elif xn_bit == -1:
         execute_never_str = 'N/A'
 
-    map = FlatMapping(virt, phy_addr, map_type_str, page_size, attr_indx_str,
-                      shareability_str, execute_never_str, mapped)
+    """
+    for ipa to pa translations, detection of block mappings is not currently supported.
+    block mappings are stored as multiple 4kb mappings instead.
+    if the ipa is not valid, fall back to the existing behavior.
+    combining of S1 and S2 attributes is not supported; only S1 attributes are saved.
+    """
+    if (ramdump.s2_walk and ramdump.iommu_pg_table_format == "fastrpc"
+            and mapped):
+        ipa = phy_addr
+        for offset in range(0, page_size, 4096):
+            s2_mapped = True
+            phy_addr = ramdump.mmu.page_table_walkel2(ipa + offset)
+            if not phy_addr:
+                phy_addr = -1
+                s2_mapped = False
 
-    if virt not in mappings:
-        mappings[virt] = map
+            __add_flat_mapping(mappings, virt + offset, phy_addr, map_type_str, 4096,
+                               attr_indx_str, shareability_str, execute_never_str, s2_mapped)
     else:
-        map.type = 'Duplicate'
-        mappings[virt] = map
+        __add_flat_mapping(mappings, virt, phy_addr, map_type_str, page_size, attr_indx_str,
+                           shareability_str, execute_never_str, mapped)
 
     return mappings
 
@@ -324,7 +347,7 @@ def parse_2nd_level_table(ramdump, sl_pg_table_entry, fl_index,
 
         if tl_pg_table_entry == 0 or tl_pg_table_entry is None:
             tmp_mapping = add_flat_mapping(
-                          tmp_mapping, fl_index, sl_index,
+                          ramdump, tmp_mapping, fl_index, sl_index,
                           tl_index, 0, -1,
                           -1, SZ_2M, -1, -1, -1, False)
             tl_pte += 8
@@ -346,12 +369,12 @@ def parse_2nd_level_table(ramdump, sl_pg_table_entry, fl_index,
 
                 if status and phy_addr != -1:
                     tmp_mapping = add_flat_mapping(
-                        tmp_mapping, fl_index, sl_index,
+                        ramdump, tmp_mapping, fl_index, sl_index,
                         tl_index, ll_index, phy_addr, map_type,
                         page_size, attr_indx, shareability, xn_bit, True)
                 else:
                     tmp_mapping = add_flat_mapping(
-                        tmp_mapping, fl_index, sl_index,
+                        ramdump, tmp_mapping, fl_index, sl_index,
                         tl_index, ll_index, -1,
                         -1, page_size, attr_indx, shareability, xn_bit, False)
 
@@ -365,7 +388,7 @@ def parse_2nd_level_table(ramdump, sl_pg_table_entry, fl_index,
                 xn_bit) = get_section_mapping_info(ramdump, tl_pte, tl_index)
             if status and phy_addr != -1:
                 tmp_mapping = add_flat_mapping(
-                    tmp_mapping, fl_index, sl_index,
+                    ramdump, tmp_mapping, fl_index, sl_index,
                     tl_index, 0, phy_addr,
                     map_type, page_size, attr_indx, shareability, xn_bit, True)
 
@@ -393,7 +416,7 @@ def create_flat_mappings(ramdump, pg_table, level):
 
         if fl_pg_table_entry == 0:
             tmp_mapping = add_flat_mapping(
-                                        tmp_mapping, fl_index, 0, 0, 0,
+                                        ramdump, tmp_mapping, fl_index, 0, 0, 0,
                                         -1, -1, SZ_256G, -1, -1, -1, False)
             fl_pte += 8
             continue
@@ -403,7 +426,7 @@ def create_flat_mappings(ramdump, pg_table, level):
             sl_pg_table_entry = ramdump.read_u64(sl_pte)
 
             if sl_pg_table_entry == 0 or sl_pg_table_entry is None:
-                tmp_mapping = add_flat_mapping(tmp_mapping,
+                tmp_mapping = add_flat_mapping(ramdump, tmp_mapping,
                                                fl_index, sl_index, 0, 0,
                                                -1, -1, SZ_1G, -1, -1, -1, False)
                 sl_pte += 8
@@ -421,7 +444,7 @@ def create_flat_mappings(ramdump, pg_table, level):
                 if status and phy_addr != -1:
                     #TODO: Fix memory attributes for 2nd-level entry
                     tmp_mapping = add_flat_mapping(
-                        tmp_mapping, fl_index, sl_index, 0, 0,
+                        ramdump, tmp_mapping, fl_index, sl_index, 0, 0,
                         phy_addr, map_type, page_size, -1, -1, -1, True)
 
             sl_pte += 8

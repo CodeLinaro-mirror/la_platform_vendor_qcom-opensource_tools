@@ -182,6 +182,8 @@ if __name__ == '__main__':
                       This specifies that max size is 4096 KB.
                       """)
     parser.add_option('', '--skip_TLB_Cache_parse', action='store_true', help='Skip parsing TLB Cache Dumps in parse_debug_image')
+    parser.add_option('--iommu-pg-table-format', action='store', choices=['fastrpc', 'default'],
+                      default='default')
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',

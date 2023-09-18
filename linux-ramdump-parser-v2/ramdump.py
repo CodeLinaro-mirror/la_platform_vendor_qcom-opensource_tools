@@ -785,6 +785,7 @@ class RamDump():
         self.cpu_type = None
         self.tbi_mask = None
         self.svm_kaslr_offset = None
+        self.iommu_pg_table_format = options.iommu_pg_table_format
         self.hw_id = options.force_hardware or None
         self.hw_version = options.force_hardware_version or None
         self.offset_table = []
