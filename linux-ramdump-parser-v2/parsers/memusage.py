@@ -1,5 +1,5 @@
 # Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
-#
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -34,6 +34,9 @@ def get_shmem_swap_usage(ramdump, memory_file):
     for shmem_inode_info in iter:
         swap_pages = ramdump.read_structure_field(
                     shmem_inode_info, 'struct shmem_inode_info', 'swapped')
+        if swap_pages is None:
+            print_out_str("Invalid addr is found: {}".format(hex(shmem_inode_info)))
+            break
         inode = shmem_inode_info + inode_offset
         addres_space = ramdump.read_structure_field(inode, 'struct inode',
                                         'i_mapping')
@@ -41,8 +44,7 @@ def get_shmem_swap_usage(ramdump, memory_file):
             seen[addres_space] = seen[addres_space] + swap_pages
         else:
             seen[addres_space] = swap_pages
-        total += ramdump.read_structure_field(
-                    shmem_inode_info, 'struct shmem_inode_info', 'swapped')
+        total += swap_pages
 
     sortlist = sorted(seen.items(),  key=lambda kv: kv[1],
                     reverse=True)
@@ -145,7 +147,7 @@ def do_dump_process_memory(ramdump):
         if adj & 0x8000:
             adj = adj - 0x10000
         rss, swap = get_rss(ramdump, task)
-        if rss != 0:
+        if rss != 0 or swap != 0:
             task_info.append([thread_task_name, thread_task_pid, rss, swap, rss + swap, adj])
 
     task_info = sorted(task_info, key=lambda l: l[4], reverse=True)
