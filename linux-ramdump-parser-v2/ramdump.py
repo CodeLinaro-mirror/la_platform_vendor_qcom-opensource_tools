@@ -86,7 +86,7 @@ class SymbolNotFound(Exception):
 
 def is_ramdump_file(val, minidump):
     if not minidump:
-        ddr = re.compile(r'(DDR|EBI)[0-9_CS]+[.]BIN', re.IGNORECASE)
+        ddr = re.compile(r'(DDR|EBI|VMDDR)[0-9_CS]+[.]BIN', re.IGNORECASE)
         imem = re.compile(r'.*IMEM.BIN', re.IGNORECASE)
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
@@ -748,7 +748,7 @@ class RamDump():
                 else:
                     self.kasan_shadow_size = 1 << (self.va_bits - 3)
             kimage_vaddr = self.page_end + modules_vsize
-            if self.get_kernel_version() < (5, 15, 0):
+            if self.get_kernel_version() < (5, 10, 0):
                 kimage_vaddr += bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
@@ -2748,7 +2748,7 @@ class RamDump():
             return None
         return struct.unpack(format_string, s)
 
-    def hexdump(self, addr_or_name, length, virtual=True, file_object=None):
+    def hexdump(self, addr_or_name, length, virtual=True, file_object=None, little_endian=True):
         """Returns a string with a hexdump (in the format of ``xxd``).
 
         ``length`` is in bytes.
@@ -2765,15 +2765,42 @@ class RamDump():
         ffffffc000c610f8: 7273 696f 6e20 342e 392e 782d 676f 6f67  rsion 4.9.x-goog
         ffffffc000c61108: 6c65 2032 3031 3430 3832 3720 2870 7265  le 20140827 (pre
         ffffffc000c61118: 7265 6c65 6173 6529 2028 4743 4329 2029  release) (GCC) )
+
+        If little_endian = False, each 4 byte chunk will be printed in big endian form, like how
+        Trace32 displays memory. The string below looks jumbled but this format is useful when
+        decoding USB TRB rings, for instance.
+        Ex:
+
+        >>> print(dump.hexdump('linux_banner', 0x80, little_endian=False))
+        ffffffe03b562920: 756e 694c 6576 2078 6f69 7372 2e35 206e  uniLev xoisr.5 n
+        ffffffe03b562930: 372e 3531 6b71 2d38 6f63 2d69 6c6f 736e  7.51kq-8oc-ilosn
+        ffffffe03b562940: 7461 6469 6e61 2d65 696f 7264 2d33 3164  tadina-eiord-31d
+        ffffffe03b562950: 6667 2d38 3934 3035 6632 3139 2034 3731  fg-89405f219 471
+        ffffffe03b562960: 6975 6228 752d 646c 4072 6573 6c69 7562  iub(u-dl@resliub
+        ffffffe03b562970: 6f68 2d64 2029 7473 646e 4128 6469 6f72  oh-d )tsdnA(dior
+        ffffffe03b562980: 3538 2820 3036 3830 6220 2c38 6465 7361  58( 0680b ,8desa
+        ffffffe03b562990: 206e 6f20 3035 3472 6534 3837 6c63 2029   no 054re487lc )
         """
         from io import StringIO
         sio = StringIO()
         address = self.resolve_virt(addr_or_name)
-        parser_util.xxd(
-            address,
-            [self.read_byte(address + i, virtual=virtual) or 0
-             for i in range(length)],
-            file_object=sio)
+
+        if little_endian:
+            parser_util.xxd(
+                address,
+                [self.read_byte(address + i, virtual=virtual) or 0
+                 for i in range(length)],
+                file_object=sio)
+        else:
+            places = []
+            for i in range(int(length / 4)):
+                places.extend([(i + 1) * 4 - 1, (i + 1) * 4 - 2, (i + 1) * 4 - 3, i * 4])
+            parser_util.xxd(
+                address,
+                [self.read_byte(address + i, virtual=virtual) or 0
+                 for i in places],
+                file_object=sio)
+
         ret = sio.getvalue()
         sio.close()
         return ret
