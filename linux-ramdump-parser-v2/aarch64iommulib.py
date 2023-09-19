@@ -1,4 +1,5 @@
 # Copyright (c) 2016-2018, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -426,12 +427,12 @@ def create_flat_mappings(ramdump, pg_table, level):
 
 
 def parse_aarch64_tables(ramdump, d, domain_num):
-    device_name  = re.sub("[^a-zA-Z]+", "_", d.client_name.strip())
+    device_name = re.sub(r'[^a-zA-Z0-9]', '_', d.client_name.strip())
     if device_name is None:
         device_name = "xxxx"
     fname = 'arm_iommu_domain_%02d_%s_0x%12X.txt' % (domain_num, device_name,
                                                      d.pg_table)
-    with ramdump.open_file(fname) as outfile:
+    with ramdump.open_file('smmu_info/'+ fname, 'w') as outfile:
 
         redirect = 'OFF'
         if d.redirect is None:

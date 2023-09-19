@@ -344,6 +344,13 @@ class Workqueues(RamParser):
             'struct worker', 'current_work')
         work_func_offset = self.ramdump.field_offset('struct work_struct', 'func')
 
+        try:
+            last_func_offset = self.ramdump.field_offset('struct worker', 'last_func')
+            last_work = self.ramdump.read_word(worker_addr + last_func_offset)
+            last_func = self.ramdump.unwind_lookup(last_work)
+        except Exception as e:
+            last_func='(Unknown)'
+
         worker_task_addr = self.ramdump.read_word(
                                  worker_addr + worker_task_offset)
 
@@ -367,7 +374,7 @@ class Workqueues(RamParser):
             worker_name = '(None)'
 
         self.f.write(
-            '{2} Workqueue worker: {0} current_work: {1}\n'.format(taskname, worker_name, state))
+            '{2} Workqueue worker: {0} current_work: {1} last_func: {3}\n'.format(taskname, worker_name, state, last_func))
 
     def pending_list_walk(self, work):
         work_func_offset = self.ramdump.field_offset('struct work_struct', 'func')

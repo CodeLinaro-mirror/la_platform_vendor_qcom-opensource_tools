@@ -34,6 +34,9 @@ def get_shmem_swap_usage(ramdump, memory_file):
     for shmem_inode_info in iter:
         swap_pages = ramdump.read_structure_field(
                     shmem_inode_info, 'struct shmem_inode_info', 'swapped')
+        if swap_pages is None:
+            print_out_str("Invalid addr is found: {}".format(hex(shmem_inode_info)))
+            break
         inode = shmem_inode_info + inode_offset
         addres_space = ramdump.read_structure_field(inode, 'struct inode',
                                         'i_mapping')
@@ -41,8 +44,7 @@ def get_shmem_swap_usage(ramdump, memory_file):
             seen[addres_space] = seen[addres_space] + swap_pages
         else:
             seen[addres_space] = swap_pages
-        total += ramdump.read_structure_field(
-                    shmem_inode_info, 'struct shmem_inode_info', 'swapped')
+        total += swap_pages
 
     sortlist = sorted(seen.items(),  key=lambda kv: kv[1],
                     reverse=True)
