@@ -76,6 +76,9 @@ if __name__ == '__main__':
     parser = OptionParser(usage)
     parser.add_option('', '--print-watchdog-time', action='store_true',
                       dest='watchdog_time', help='Print watchdog timing information', default=False)
+    parser.add_option('', '--logcat_limit_time_sec',
+                      dest='logcat_limit_time', type='int', default=0,
+                      help='Defined the max time logcat parse running')
     parser.add_option('-e', '--ram-file', dest='ram_addr',
                       help='List of ram files (name, start, end)', action='callback', callback=parse_ram_file)
     parser.add_option('-v', '--vmlinux', dest='vmlinux', help='vmlinux path')
@@ -178,6 +181,7 @@ if __name__ == '__main__':
                       Example: --fs 4096
                       This specifies that max size is 4096 KB.
                       """)
+    parser.add_option('', '--skip_TLB_Cache_parse', action='store_true', help='Skip parsing TLB Cache Dumps in parse_debug_image')
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
