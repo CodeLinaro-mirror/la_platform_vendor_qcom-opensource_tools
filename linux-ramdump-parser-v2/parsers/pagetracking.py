@@ -51,7 +51,10 @@ class PageTracking(RamParser):
             self.page_ext_size = self.ramdump.sizeof("struct page_ext")
             if self.ramdump.kernel_version >= (4, 9, 0):
                 self.page_owner_size = self.ramdump.sizeof("struct page_owner")
-                self.page_ext_size = self.page_ext_size + self.page_owner_size
+                if self.ramdump.address_of("page_ext_size"):
+                    self.page_ext_size = self.ramdump.read("page_ext_size")
+                else:
+                    self.page_ext_size = self.page_ext_size + self.page_owner_size
                 self.page_owner_ops_offset = self.ramdump.read_structure_field(
                     'page_owner_ops', 'struct page_ext_operations', 'offset')
 
