@@ -3016,6 +3016,7 @@ class MDPinfo(RamParser):
                 self.outfile.write('\n')
                 i = i + 4
             self.outfile.close()
+            self.sde_initial_analysis()
         else:
             for blk in mdss_dbg.blk_arr:
                 if blk.is_empty():
