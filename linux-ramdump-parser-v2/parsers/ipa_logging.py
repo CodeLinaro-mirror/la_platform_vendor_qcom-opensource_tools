@@ -133,9 +133,12 @@ class ipa_logging(RamParser):
             if valid != 0:
                 curr_chan = ram_dump.read_u64(gsi_chan_hdl_offset + ep_addr_data)
                 client = ram_dump.read_u32(client_offset + ep_addr_data)
-                ipa_client_enum = self.ramdump.gdbmi.get_value_of('IPA_CLIENT_MHI_QDSS_CONS')
+                ipa_client_enum = self.ramdump.gdbmi.get_value_of('IPA_CLIENT_IPSEC_ENCAP_ERR_CONS')
+                # This means, to accomodate difference in IPA client counts from PL to PL, we are keeping an offset,
+                # so that there is no exception due to difference in the upperbound. 
+                client_count_offset=50
                 client_names = ram_dump.gdbmi.get_enum_lookup_table(
-                    'ipa_client_type', ipa_client_enum)
+                    'ipa_client_type',ipa_client_enum+client_count_offset)
                 print_out_ip("IPA Pipe:  {0}".format(ep_idx))
                 print_out_ip("Pipe Name: {0}".format(client_names[client]))
                 sys = ram_dump.read_u64(sys_offset + ep_addr_data)
