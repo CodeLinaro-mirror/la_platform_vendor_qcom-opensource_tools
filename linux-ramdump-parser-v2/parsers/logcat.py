@@ -10,10 +10,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-# Changes from Qualcomm Innovation Center are provided under the following license:
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause-Clear
-
 
 from parser_util import register_parser, RamParser, cleanupString
 from print_out import print_out_str
@@ -304,6 +300,12 @@ class Logcat(RamParser):
                 return True
         return False
 
+    def is_openwrt_process(self, taskinfo):
+        for vma in taskinfo.vmalist:
+            if "libubus.so." in vma.file_name:
+                return True
+        return False
+
     def parse(self):
         if self.ramdump.logcat_limit_time == 0:
             self.__parse()
@@ -362,6 +364,12 @@ class Logcat(RamParser):
                 from parsers.logcat_m import Logcat_m
                 #parser to supprot Android M
                 logcat = Logcat_m(self.ramdump, taskinfo)
+                logcat.parse()
+            elif self.is_openwrt_process(taskinfo):
+                print_out_str("Openwrt ramdump")
+                from parsers.logcat_openwrt import Logcat_openwrt
+                #parser to supprot openwrt platform
+                logcat = Logcat_openwrt(self.ramdump, taskinfo)
                 logcat.parse()
             else:
                 self.generate_logcat_bin(taskinfo)
