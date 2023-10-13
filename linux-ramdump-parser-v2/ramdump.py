@@ -736,7 +736,7 @@ class RamDump():
     def get_kimage_vaddr(self):
         kimage_vaddr = None
         if self.get_kernel_version() > (4, 20, 0):
-            if self.get_kernel_version() >= (6, 5, 0):
+            if self.get_kernel_version() >= (6, 4, 0):
                 modules_vsize = 0x80000000
             else:
                 modules_vsize = 0x08000000
@@ -1796,11 +1796,15 @@ class RamDump():
                         self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
                 except:
+                    self.dynamic_kaslr_offset = None
                     pass
 
                 if kaslr_magic != 0xdead4ead:
                     if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
-                        self.kaslr_offset = self.dynamic_kaslr_offset
+                        if self.dynamic_kaslr_offset is not None:
+                            self.kaslr_offset = self.dynamic_kaslr_offset
+                        else:
+                            print_out_str('!!!! Could not get the dynamic_kaslr_offset.')
                     else:
                         print_out_str('!!!! Kaslr feature is not enabled.')
                         self.kaslr_offset = 0x0
