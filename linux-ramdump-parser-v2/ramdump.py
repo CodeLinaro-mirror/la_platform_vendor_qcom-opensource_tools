@@ -736,7 +736,10 @@ class RamDump():
     def get_kimage_vaddr(self):
         kimage_vaddr = None
         if self.get_kernel_version() > (4, 20, 0):
-            modules_vsize = 0x08000000
+            if self.get_kernel_version() >= (6, 5, 0):
+                modules_vsize = 0x80000000
+            else:
+                modules_vsize = 0x08000000
             bpf_jit_vsize = 0x08000000
             self.page_end = (0xffffffffffffffff << (
                         self.va_bits - 1)) & 0xffffffffffffffff
@@ -785,6 +788,7 @@ class RamDump():
         self.cpu_type = None
         self.tbi_mask = None
         self.svm_kaslr_offset = None
+        self.iommu_pg_table_format = options.iommu_pg_table_format
         self.hw_id = options.force_hardware or None
         self.hw_version = options.force_hardware_version or None
         self.offset_table = []
