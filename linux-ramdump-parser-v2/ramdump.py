@@ -834,6 +834,8 @@ class RamDump():
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
                         0)
             self.gdbmi.open()
+            if self.arm64:
+                self.gdbmi.setup_aarch('aarch64')
         self.gdbmi.set_gdbmi_aslr_offset()
         self.page_offset = 0xc0000000
         self.thread_size = 8192
