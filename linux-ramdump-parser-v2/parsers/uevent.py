@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 import linux_list
 from print_out import print_out_str
 from parser_util import RamParser, cleanupString, register_parser
@@ -15,6 +15,7 @@ class Uevent(RamParser):
         if node != head or data_head != 0:
             data_dict['head'] = data_head
             data_len = self.ramdump.read_structure_field(node, 'struct sk_buff', 'len')
+            data_len = data_len if data_len < 1000 else 1000
             read_pos = 0
             data = ""
             while read_pos < data_len:
@@ -23,6 +24,8 @@ class Uevent(RamParser):
                 if read_len == 0:
                     read_str = " "
                     read_len = 1
+                else:
+                    read_str = read_str.strip()
                 data = "{}{}".format(data, read_str)
                 read_pos = read_pos + read_len
 
