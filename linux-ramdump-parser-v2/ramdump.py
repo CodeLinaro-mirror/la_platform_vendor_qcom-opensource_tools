@@ -3257,9 +3257,7 @@ class RamDump():
             raise InvalidDatatype
 
     def __unpack_format(self, size, ty):
-        if ty == "char":
-            return "<B"
-        elif ty == "bool" or ty == "_Bool":
+        if ty == "bool" or ty == "_Bool":
             return "<?"
         elif "float" in ty:
             return "<f"
