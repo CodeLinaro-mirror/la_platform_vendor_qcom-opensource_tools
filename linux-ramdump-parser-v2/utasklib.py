@@ -28,6 +28,8 @@ class Vma:
         self.flags = 0
         self.file = 0
         self.file_name = ""
+        self.vm_pgoff = ""
+        self.vm_addr = 0
 
     def __repr__(self):
         return "0x{0:x}-0x{1:x} flags:0x{2:x} file_name:{3}".format(self.vm_start, self.vm_end, self.flags, self.file_name)
@@ -43,46 +45,60 @@ class UTaskLib:
         self.dentry_offset = ramdump.field_offset('struct path', 'dentry')
         self.d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
         self.active_mm_offset = ramdump.field_offset('struct task_struct', 'active_mm')
+        self.pid_offset = ramdump.field_offset('struct task_struct', 'pid')
         self.ramdump = ramdump
 
     def get_utask_info(self, process_name, logging=False):
+        '''
+        support get task info by process name or process id
+
+        process_name: str --> process name
+                      int -->process id
+        '''
         for task in self.ramdump.for_each_process():
             task_name = cleanupString(self.ramdump.read_cstring(task + self.offset_comm, 16))
-            if task_name == process_name:
-                print("found process {}".format(task_name))
-                mm_addr = self.ramdump.read_word(task + self.mm_offset)
-                if process_name == "init" and mm_addr == 0:
-                    mm_addr = self.ramdump.read_word(task + self.active_mm_offset)
-                if mm_addr == 0:
-                    if logging is True:
-                        print_out_str("mm for {} is null\n".format(process_name))
-                    _utask = UTaskInfo()
-                    _utask.name = task_name
-                    _utask.task_addr = task
-                    return _utask
-                pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
-                                                   'pgd')
-                pgdp = self.ramdump.virt_to_phys(pgd)
-                if self.ramdump.arm64:
-                    mmu = Armv8MMU(self.ramdump, pgdp)
-                else:
-                    mmu = Armv7MMU(self.ramdump, pgdp)
-                if (self.ramdump.kernel_version) < (6, 1, 0):
-                    # struct vm_area_struct *mmap
-                    mmap = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
-                                                             'mmap')
-                    vmalist = self._get_vma_list_from_mmap(mmap)
-                else:
-                    m_mt = self.ramdump.struct_field_addr(mm_addr, 'struct mm_struct',
-                                                          'mm_mt')
-                    vmalist = self._get_vma_list_from_mm_mt(m_mt)
+            if isinstance(process_name, str):
+                if task_name != process_name:
+                    continue
+            else:
+                pid = self.ramdump.read_u32(task + self.pid_offset)
+                if pid != process_name:
+                    continue
 
+            print("found process {}".format(task_name))
+            mm_addr = self.ramdump.read_word(task + self.mm_offset)
+            if process_name == "init" and mm_addr == 0:
+                mm_addr = self.ramdump.read_word(task + self.active_mm_offset)
+            if mm_addr == 0:
+                if logging is True:
+                    print_out_str("mm for {} is null\n".format(process_name))
                 _utask = UTaskInfo()
                 _utask.name = task_name
-                _utask.vmalist = vmalist
                 _utask.task_addr = task
-                _utask.mmu = mmu
                 return _utask
+            pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
+                                                'pgd')
+            pgdp = self.ramdump.virt_to_phys(pgd)
+            if self.ramdump.arm64:
+                mmu = Armv8MMU(self.ramdump, pgdp)
+            else:
+                mmu = Armv7MMU(self.ramdump, pgdp)
+            if (self.ramdump.kernel_version) < (6, 1, 0):
+                # struct vm_area_struct *mmap
+                mmap = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
+                                                            'mmap')
+                vmalist = self._get_vma_list_from_mmap(mmap)
+            else:
+                m_mt = self.ramdump.struct_field_addr(mm_addr, 'struct mm_struct',
+                                                        'mm_mt')
+                vmalist = self._get_vma_list_from_mm_mt(m_mt)
+
+            _utask = UTaskInfo()
+            _utask.name = task_name
+            _utask.vmalist = vmalist
+            _utask.task_addr = task
+            _utask.mmu = mmu
+            return _utask
         raise ProcessNotFoundExcetion("Process:{} was not found!".format(process_name))
 
     @staticmethod
@@ -175,6 +191,8 @@ class UTaskLib:
             vma_addr, 'struct vm_area_struct', 'vm_flags')
         file = self.ramdump.read_structure_field(
             vma_addr, 'struct vm_area_struct', 'vm_file')
+        vm_pgoff = self.ramdump.read_structure_field(
+            vma_addr, 'struct vm_area_struct', 'vm_pgoff')
 
         file_name = ""
         if file:
@@ -188,7 +206,8 @@ class UTaskLib:
         vma_obj.flags = flags
         vma_obj.file = file
         vma_obj.file_name = file_name
-
+        vma_obj.vm_pgoff = vm_pgoff
+        vma_obj.vm_addr = vma_addr
         return vma_obj
 
     def _save_vma_list(self, node, vmalist):
