@@ -1192,7 +1192,11 @@ class TZRegDump_v2():
         else:
             lr = self.core_regs.regs['r14_svc']
             bt = self.core_regs.regs['r13_svc']
-            fp = self.core_regs.regs['r11']
+            cpsr = self.core_regs.regs['cpsr']
+            if (cpsr & 0x20):
+                fp = self.core_regs.regs['r7']
+            else:
+                fp = self.core_regs.regs['r11']
 
         pc = ram_dump.pac_ignore(pc)
         a = ram_dump.unwind_lookup(pc)
@@ -1237,7 +1241,11 @@ class TZRegDump_v2():
         else:
             lr = self.core_regs.regs['r14_svc']
             bt = self.core_regs.regs['r13_svc']
-            fp = self.core_regs.regs['r11']
+            cpsr = self.core_regs.regs['cpsr']
+            if (cpsr & 0x20):
+                fp = self.core_regs.regs['r7']
+            else:
+                fp = self.core_regs.regs['r11']
 
         pc = ram_dump.pac_ignore(pc)
         a = ram_dump.unwind_lookup(pc)
