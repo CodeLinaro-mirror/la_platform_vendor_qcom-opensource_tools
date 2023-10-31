@@ -3033,54 +3033,43 @@ class RamDump():
             if (next == init_task):
                 break
 
+    '''
+    task_struct->signal->thread_head
+                struct list_head {
+                    struct list_head *next; -->task_struct->thread_node
+                    struct list_head *prev; -->task_struct->thread_node
+                } thread_head;
+    '''
     def for_each_thread(self, task_addr):
-        thread_group_offset = self.field_offset(
-                            'struct task_struct', 'thread_group')
-        thread_group_pointer = self.read_word(
-                                task_addr + thread_group_offset, True)
-        prev_offset = self.field_offset('struct list_head', 'prev')
-
-        thread_group_pointer = thread_group_pointer - thread_group_offset
-
-        next = thread_group_pointer
-        seen_thread = []
-
-        while(1):
-            task_offset = next + thread_group_offset
-            task_pointer = self.read_word(task_offset, True)
-            if not task_pointer:
-                break
-
-            task_struct = task_pointer - thread_group_offset
-            if (self.validate_task_struct(task_struct) == -1) or (
-                    self.validate_sched_class(task_struct) == -1):
-                    next = thread_group_pointer
-                    while (1):
-                        task_pointer = self.read_word(next +
-                                                      thread_group_offset +
-                                                      prev_offset)
-
-                        if not task_pointer:
-                            break
-                        task_struct = task_pointer - thread_group_offset
-                        if (self.validate_task_struct(task_struct) == -1) or (
-                                self.validate_sched_class(task_struct) == -1):
-                                break
-
-                        yield task_struct
-                        seen_thread.append(task_struct)
-                        next = task_struct
-                        if (next == thread_group_pointer):
-                            break
+        offset_thread_node =self.field_offset(
+            'struct task_struct', 'thread_node')
+        offset_signal = self.field_offset(
+            'struct task_struct', 'signal')
+        offset_thread_head = self.field_offset(
+            'struct signal_struct', 'thread_head')
+        signal_addr = self.read_word(task_addr + offset_signal)
+        thread_head_addr = self.read_word(signal_addr + offset_thread_head)
+        next_thread_head = thread_head_addr
+        seen_threads = []
+        while True:
+            task_addr = next_thread_head - offset_thread_node
+            if (self.validate_task_struct(task_addr) == -1) or (
+                    self.validate_sched_class(task_addr) == -1):
                     break
 
-            if task_struct in seen_thread:
+            yield task_addr
+
+            next_thr = self.read_word(next_thread_head)
+            if (next_thr == next_thread_head) and (next_thr != thread_head_addr):
+                print_out_str('!!!! Cycle in thread group! The list is corrupt!\n')
                 break
 
-            yield task_struct
-            seen_thread.append(task_struct)
-            next = task_struct
-            if (next == thread_group_pointer):
+            if (next_thr in seen_threads):
+                break
+
+            seen_threads.append(next_thr)
+            next_thread_head = next_thr
+            if next_thread_head == thread_head_addr:
                 break
 
     def validate_task_struct(self, task):
