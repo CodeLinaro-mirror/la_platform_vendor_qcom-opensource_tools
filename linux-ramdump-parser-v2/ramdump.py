@@ -37,6 +37,7 @@ import ramreduction_util as elfutil
 from importlib import import_module
 import module_table
 from mm import mm_init
+from register import Register
 
 SP = 13
 LR = 14
@@ -666,11 +667,9 @@ class RamDump():
            i = i +1
 
        return r;
+
     def pac_ignore(self,data):
-        if self.va_bits == 48:
-            pac_check = 0xffff000000000000
-        else:
-            pac_check = 0xffffff0000000000
+        pac_check = self.createMask(self.va_bits, 63)
         top_bit_ignore = 0xff00000000000000
         if data is None or not self.arm64:
             return data
@@ -680,10 +679,7 @@ class RamDump():
         # The PAC field is Xn[54:bottom_PAC_bit].
         # In the PAC field definitions, bottom_PAC_bit == 64-TCR_ELx.TnSZ,
         # TCR_ELx.TnSZ is set to 25. so 64-25=39
-        if self.va_bits == 48:
-            pac_mack = self.createMask(48,54)
-        else:
-            pac_mack = self.createMask(39,54)
+        pac_mack = self.createMask(self.va_bits, 54)
         result = pac_mack | data
         result = result | top_bit_ignore
         return result
@@ -1022,6 +1018,14 @@ class RamDump():
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
             self.va_bits = 39
+        try:
+            self.page_shift = int(self.get_config_val("CONFIG_ARM64_PAGE_SHIFT"))
+        except:
+            self.page_shift = 12
+        try:
+            self.pgtable_levels = int(self.get_config_val("CONFIG_PGTABLE_LEVELS"))
+        except:
+            self.pgtable_levels = 3
 
         if self.kaslr_offset is None:
             self.determine_kaslr_offset()
@@ -1550,9 +1554,9 @@ class RamDump():
                 else:
                     startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
                         self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
-
+                    tcr_el1 = self.get_tcr_el1(is_cortexa=is_cortex_a53)
                     if is_cortex_a53:
-                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x00000012B5193519\n')
+                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
                         startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000034D5D91D\n')
@@ -1561,7 +1565,7 @@ class RamDump():
                             startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:x}\n'.format(
                             self.hlos_tcr_el1))
                         else:
-                            startup_script.write('Data.Set SPR:0x30202 %Quad 0x00000032B5193519\n')
+                            startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
                         startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         if self.hlos_sctlr_el1:
@@ -1573,7 +1577,7 @@ class RamDump():
                         if os.path.exists(corevcpu_path):
                             startup_script.write('do ' + corevcpu_path + '\n')
                     else:
-                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x00000032B5193519\n')
+                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
                         startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
@@ -1772,6 +1776,36 @@ class RamDump():
         print_out_str(
             '--- Created a T32 Simulator launcher (run {})'.format(launch_file))
 
+    def get_tcr_el1(self, is_cortexa=False):
+        if not is_cortexa:
+            tcr_el1 = Register(
+                0x00000032B5193519,
+                TG1=(31, 30),
+                T1SZ=(21, 16),
+                TG0=(15, 14),
+                T0SZ=(5, 0)
+            )
+            tg1_granule_size = {
+                4096  : 0b10,
+                16384 : 0b01,
+                65536 : 0b11
+            }
+            tg0_granule_size = {
+                4096  : 0b00,
+                16384 : 0b10,
+                65536 : 0b01
+            }
+            tcr_el1.TG1 = tg1_granule_size.get(self.get_page_size(), 0b10)
+            tcr_el1.TG0 = tg0_granule_size.get(self.get_page_size(), 0b00)
+            tcr_el1.T1SZ = tcr_el1.T0SZ = 64 - self.va_bits
+        else:
+            tcr_el1 = Register(
+                0x00000012B5193519,
+                RES0=(63, 39),
+                RES1=(38, 0)
+            )
+        return tcr_el1.value
+
     def read_tz_offset(self):
         if self.tz_addr == 0:
             print_out_str(
@@ -1832,11 +1866,7 @@ class RamDump():
                     print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
 
     def get_page_size(self):
-        if self.is_config_defined('CONFIG_ARM64_PAGE_SHIFT'):
-            PAGE_SHIFT = int(self.get_config_val('CONFIG_ARM64_PAGE_SHIFT'))
-        else:
-            PAGE_SHIFT = 12
-        return 1 << PAGE_SHIFT
+        return 1 << self.page_shift
 
     def get_hw_id(self, add_offset=True):
         socinfo_format = -1
@@ -3359,7 +3389,7 @@ class RamDump():
         :return: The data read from the dumps.
         """
         bin_data = b""
-        PAGE_SIZE = 1 << 12
+        PAGE_SIZE = self.get_page_size()
         length  = PAGE_SIZE - (addr & (PAGE_SIZE-1))
         while(size > length):
             bin_data += self.read_physical(self.virt_to_phys(addr), length)

@@ -1,4 +1,5 @@
 # Copyright (c) 2012,2014-2015,2017-2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -114,8 +115,8 @@ class FileTracking(RamParser):
                 g_optimization = True
                 k, ranges = arg.split("=")
                 start, end = ranges.split('-')
-                start_pfn = int(start, 16) >> 12
-                end_pfn = int(end, 16) >> 12
+                start_pfn = int(start, 16) >> self.ramdump.page_shift
+                end_pfn = int(end, 16) >> self.ramdump.page_shift
                 break
             elif "page=" in arg:
                 g_optimization = True
