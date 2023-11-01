@@ -1507,7 +1507,10 @@ class RamDump():
             startup_script.write('sys.cpu CORTEXA53\n')
         else:
             startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
-            startup_script.write('SYStem.Option MMUSPACES ON\n')
+            if self.minidump:
+                startup_script.write('SYStem.Option MMUSPACES OFF\n')
+            else:
+                startup_script.write('SYStem.Option MMUSPACES ON\n')
             startup_script.write('SYStem.Option ZONESPACES OFF\n')
 
         startup_script.write('sys.up\n')
@@ -1604,7 +1607,7 @@ class RamDump():
         dloadelf = 'data.load.elf {} /nocode\n'.format(where)
         startup_script.write(dloadelf)
 
-        if self.arm64:
+        if self.arm64 and not self.minidump:
             startup_script.write('TRANSlation.COMMON NS:0xF000000000000000--0xffffffffffffffff\n')
             startup_script.write('trans.tablewalk on\n')
             startup_script.write('trans.on\n')
@@ -1613,6 +1616,12 @@ class RamDump():
                 startup_script.write('MMU.SCAN PT 0xFFFFFF8000000000--0xFFFFFFFFFFFFFFFF\n')
                 startup_script.write('mmu.on\n')
                 startup_script.write('mmu.pt.list 0xffffff8000000000\n')
+
+        if self.minidump:
+            startup_script.write('y.pointer x29\n')
+            startup_script.write('frame.config.eabi on\n')
+            if self.arm64:
+                startup_script.write('Register.Set CPSR 0x1C5\n')
 
         if t32_host_system != 'Linux':
             if self.arm64:
