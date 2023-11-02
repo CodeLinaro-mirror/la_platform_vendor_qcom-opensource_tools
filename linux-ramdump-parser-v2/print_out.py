@@ -1,4 +1,5 @@
 # Copyright (c) 2012-2014, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -13,6 +14,11 @@ import traceback
 from contextlib import contextmanager
 
 out_file = sys.stdout
+
+LEVEL_DEBUG = 1
+LEVEL_INFO = 2
+LEVEL_WARN = 3
+LEVEL_ERROR = 4
 
 def flush_outfile():
     if out_file is None:
@@ -29,6 +35,24 @@ def set_outfile(path):
         print_out_str("Do you have write/read permissions on the path?")
         sys.exit(1)
 
+def printd(_class, *msg):
+    __print_out(_class, LEVEL_DEBUG, *msg)
+
+def printi(_class, *msg):
+    __print_out(_class, LEVEL_INFO, *msg)
+
+def printw(_class, *msg):
+    __print_out(_class, LEVEL_WARN, *msg)
+
+def printe(_class, *msg):
+    __print_out(_class, LEVEL_ERROR, *msg)
+
+def __print_out(_class, level, *msg):
+    message = ",".join([str(m) for m in msg])
+    if hasattr(_class, "log_level") and level >= _class.log_level:
+        print_out_str(_class.__class__.__name__+": " + message)
+    elif level >= LEVEL_WARN:
+        print_out_str(_class.__class__.__name__+": " + message)
 
 def print_out_str(string):
     if out_file is None:
