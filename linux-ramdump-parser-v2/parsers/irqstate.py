@@ -127,6 +127,11 @@ class IrqParse(RamParser):
         radix_tree_map_shift = 6
         radix_tree_map_mask = 0x3f
 
+        # if CONFIG_BASE_SMALL=1: radix_tree_map_shift = 4
+        if self.ramdump.is_config_defined("CONFIG_BASE_SMALL"):
+            radix_tree_map_shift = 4
+            radix_tree_map_mask = 0xf
+
         rnode_addr = ram_dump.read_word(root_addr + rnode_offset)
         if self.is_internal_node(rnode_addr):
             node_addr = self.entry_to_node(rnode_addr)
