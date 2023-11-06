@@ -105,6 +105,20 @@ def remove_non_ascii(a_str):
 PTE_VALID = 1 << 0
 PTE_PROT_NONE = 58 << 1
 
+
+def do_get_task_info(ramdump, task):
+    offset_comm = ramdump.field_offset('struct task_struct', 'comm')
+    offset_pid = ramdump.field_offset('struct task_struct', 'pid')
+    tgid_offset = ramdump.field_offset('struct task_struct', 'tgid')
+    tgid = ramdump.read_int(task + tgid_offset)
+    thread_task_name = cleanupString(
+        ramdump.read_cstring(task + offset_comm, 16))
+    if thread_task_name is None or thread_task_name == "":
+        return thread_task_pid, None, None
+    thread_task_pid = ramdump.read_int(task + offset_pid)
+    mm = ramdump.read_structure_field(task, 'struct task_struct', 'mm')
+    return thread_task_pid, thread_task_name, mm
+
 @register_parser('--print-uvtop', 'Print task virtual memory to page info', optional=True)
 class uvtop(RamParser):
     def __init__(self, *args):
@@ -144,20 +158,6 @@ class uvtop(RamParser):
             'PG_double_map    ':0x004000 ,
             'PG_isolated      ':0x040000 ,
         }
-
-    def do_get_task_info(self, task):
-        ramdump = self.ramdump
-        offset_comm = ramdump.field_offset('struct task_struct', 'comm')
-        offset_pid = ramdump.field_offset('struct task_struct', 'pid')
-        tgid_offset = ramdump.field_offset('struct task_struct', 'tgid')
-        tgid = ramdump.read_int(task + tgid_offset)
-        thread_task_name = cleanupString(
-            ramdump.read_cstring(task+offset_comm, 16))
-        if thread_task_name is None or thread_task_name == "":
-            return thread_task_pid, None, None
-        thread_task_pid = ramdump.read_int(task+offset_pid)
-        mm = ramdump.read_structure_field(task, 'struct task_struct', 'mm')
-        return thread_task_pid, thread_task_name, mm
 
     def uvtop(self, mm_struct, vaddr):
         if mm_struct == 0:
@@ -337,7 +337,7 @@ class uvtop(RamParser):
         self.fout.close()
 
     def do_one_task(self, task, given_pid = -1):
-        pid, thread_task_name, mm = self.do_get_task_info(task)
+        pid, thread_task_name, mm = do_get_task_info(self.ramdump, task)
         if given_pid != -1:
             if pid != given_pid:
                 return
