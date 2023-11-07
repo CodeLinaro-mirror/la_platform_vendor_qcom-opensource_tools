@@ -419,7 +419,10 @@ class Sparsemem:
 
         memsection_struct_size = ramdump.sizeof('struct mem_section')
         pointer_size = ramdump.sizeof('struct mem_section *')
-        sections_per_root = 4096 // memsection_struct_size
+        if ramdump.is_config_defined('CONFIG_SPARSEMEM_EXTREME'):
+            sections_per_root = ramdump.get_page_size() // memsection_struct_size
+        else:
+            sections_per_root = 1
         root_nr = section_nr // sections_per_root
         section_nr = section_nr % sections_per_root
 
