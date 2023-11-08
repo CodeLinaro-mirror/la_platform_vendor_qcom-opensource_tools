@@ -1148,15 +1148,16 @@ class GpuParser_510(RamParser):
             preall_addr = dump.struct_field_addr(gmu_dev_addr,
                                                  gmu_device, 'preallocations')
             preallocations = dump.read_bool(preall_addr)
-            log_stream_addr = dump.struct_field_addr(gmu_dev_addr,
-                                                     gmu_device,
-                                                     'log_stream_enable')
-            log_stream_enable = dump.read_bool(log_stream_addr)
         else:
             gmu_device = 'struct gen7_gmu_device'
             gmu_dev_addr = dump.sibling_field_addr(self.devp,
                                                    'struct gen7_device',
                                                    'adreno_dev', 'gmu')
+
+        log_stream_addr = dump.struct_field_addr(gmu_dev_addr,
+                                                 gmu_device,
+                                                 'log_stream_enable')
+        log_stream_enable = dump.read_bool(log_stream_addr)
 
         gmu_fw_ver = dump.read_u32(gmu_dev_addr)
         pwr_fw_ver = dump.read_u32(gmu_dev_addr + 8)
@@ -1176,7 +1177,7 @@ class GpuParser_510(RamParser):
         self.writeln('global_entries: ' + str(global_entries))
         if gpurev < 0x70000:
             self.writeln('preallocations: ' + str(preallocations))
-            self.writeln('log_stream_enable: ' + str(log_stream_enable))
+        self.writeln('log_stream_enable: ' + str(log_stream_enable))
         self.writeln('cm3_fault: ' + str(cm3_fault))
 
         domain = dump.read_structure_field(gmu_dev_addr, gmu_device, 'domain')
