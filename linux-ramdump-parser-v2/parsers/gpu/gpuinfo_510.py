@@ -1136,9 +1136,11 @@ class GpuParser_510(RamParser):
             self.writeln('GMU not enabled.')
             return
 
-        chip_id = dump.read_structure_field(self.devp,
-                                            'struct adreno_device', 'chipid')
-        if chip_id < 0x7000000:
+        gpucore = dump.read_structure_field(self.devp,
+                                        'struct adreno_device', 'gpucore')
+        gpurev = dump.read_structure_field(gpucore,
+                                       'struct adreno_gpu_core', 'gpurev')
+        if gpurev < 0x70000:
             gmu_device = 'struct a6xx_gmu_device'
             gmu_dev_addr = dump.sibling_field_addr(self.devp,
                                                    'struct a6xx_device',
@@ -1172,7 +1174,7 @@ class GpuParser_510(RamParser):
         self.writeln('idle_level: ' + str(idle_level))
         self.writeln('internal gmu flags: ' + strhex(flags))
         self.writeln('global_entries: ' + str(global_entries))
-        if chip_id < 0x7000000:
+        if gpurev < 0x70000:
             self.writeln('preallocations: ' + str(preallocations))
             self.writeln('log_stream_enable: ' + str(log_stream_enable))
         self.writeln('cm3_fault: ' + str(cm3_fault))
