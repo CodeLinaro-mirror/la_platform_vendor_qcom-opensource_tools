@@ -1140,7 +1140,17 @@ class GpuParser_510(RamParser):
                                         'struct adreno_device', 'gpucore')
         gpurev = dump.read_structure_field(gpucore,
                                        'struct adreno_gpu_core', 'gpurev')
-        if gpurev < 0x70000:
+        if gpurev >= 0x80000:
+            gmu_device = 'struct gen8_gmu_device'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen8_device',
+                                                   'adreno_dev', 'gmu')
+        elif gpurev >= 0x70000:
+            gmu_device = 'struct gen7_gmu_device'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen7_device',
+                                                   'adreno_dev', 'gmu')
+        else:
             gmu_device = 'struct a6xx_gmu_device'
             gmu_dev_addr = dump.sibling_field_addr(self.devp,
                                                    'struct a6xx_device',
@@ -1148,11 +1158,6 @@ class GpuParser_510(RamParser):
             preall_addr = dump.struct_field_addr(gmu_dev_addr,
                                                  gmu_device, 'preallocations')
             preallocations = dump.read_bool(preall_addr)
-        else:
-            gmu_device = 'struct gen7_gmu_device'
-            gmu_dev_addr = dump.sibling_field_addr(self.devp,
-                                                   'struct gen7_device',
-                                                   'adreno_dev', 'gmu')
 
         log_stream_addr = dump.struct_field_addr(gmu_dev_addr,
                                                  gmu_device,
