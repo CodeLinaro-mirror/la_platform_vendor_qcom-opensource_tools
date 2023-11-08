@@ -4,7 +4,7 @@
 from print_out import print_out_str
 from parser_util import cleanupString
 import maple_tree
-from mmu import Armv8MMU
+from mmu import Armv8MMU, Armv7MMU
 import struct
 
 class UTaskInfo:
@@ -63,7 +63,10 @@ class UTaskLib:
                 pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                    'pgd')
                 pgdp = self.ramdump.virt_to_phys(pgd)
-                mmu = Armv8MMU(self.ramdump, pgdp)
+                if self.ramdump.arm64:
+                    mmu = Armv8MMU(self.ramdump, pgdp)
+                else:
+                    mmu = Armv7MMU(self.ramdump, pgdp)
                 if (self.ramdump.kernel_version) < (6, 1, 0):
                     # struct vm_area_struct *mmap
                     mmap = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',

@@ -38,7 +38,6 @@ from importlib import import_module
 import module_table
 from mm import mm_init
 
-FP = 11
 SP = 13
 LR = 14
 PC = 15
@@ -86,7 +85,7 @@ class SymbolNotFound(Exception):
 
 def is_ramdump_file(val, minidump):
     if not minidump:
-        ddr = re.compile(r'(DDR|EBI)[0-9_CS]+[.]BIN', re.IGNORECASE)
+        ddr = re.compile(r'(DDR|EBI|VMDDR)[0-9_CS]+[.]BIN', re.IGNORECASE)
         imem = re.compile(r'.*IMEM.BIN', re.IGNORECASE)
         if ddr.match(val) or imem.match(val) and not ("md_" in val):
             return True
@@ -249,13 +248,13 @@ class AutoDumpInfodram_cs(AutoDumpInfo):
             return
 
         filename_lst = os.listdir(self.autodumpdir)
-        regex = re.compile(r'^dram_cs|ocimem\S*(0x[A-Fa-f0-9]+)\S+(0x[A-Fa-f0-9]+)')
+        regex = re.compile(r'^(dram_cs|ocimem)\S*(0x[A-Fa-f0-9]+)\S+(0x[A-Fa-f0-9]+)')
 
         for filename in filename_lst:
             m = re.search(regex, filename)
             if m:
-                start = int(m.group(1), 16)
-                end = int(m.group(2), 16)
+                start = int(m.group(2), 16)
+                end = int(m.group(3), 16)
 
                 filesize = os.path.getsize(
                     os.path.join(self.autodumpdir, filename))
@@ -332,7 +331,7 @@ class RamDump():
                     stop = mid
             return stop
 
-        def unwind_frame_generic64(self, frame):
+        def unwind_frame_generic64(self, frame, cpu_work_state=''):
             fp = frame.fp
             try:
                 frame.sp = fp + 0x10
@@ -345,7 +344,7 @@ class RamDump():
                 return -1
             return 0
 
-        def unwind_frame_generic(self, frame):
+        def unwind_frame_generic(self, frame, cpu_work_state=''):
             high = 0
             fp = frame.fp
 
@@ -541,7 +540,7 @@ class RamDump():
             temp = addr + offset
             return (temp & 0xffffffff) + ((temp >> 32) & 0xffffffff)
 
-        def unwind_frame_tables(self, frame):
+        def unwind_frame_tables(self, frame, cpu_work_state):
             low = frame.sp
             high = ((low + (self.ramdump.thread_size - 1)) & \
                 ~(self.ramdump.thread_size - 1)) + self.ramdump.thread_size
@@ -549,6 +548,11 @@ class RamDump():
 
             if (idx is None):
                 return -1
+
+            if cpu_work_state == "thumb":
+                FP = 7
+            else:
+                FP = 11
 
             ctrl = self.UnwindCtrlBlock()
             ctrl.vrs[FP] = frame.fp
@@ -617,6 +621,11 @@ class RamDump():
             frame.pc = pc
             self.pac_frame_update(frame)
             backtrace = '\n'
+
+            cpu_work_state = ''
+            if (pc & 0x1) or (lr & 0x1):
+                cpu_work_state = 'thumb'
+
             while True:
                 where = frame.pc
                 offset = 0
@@ -638,7 +647,7 @@ class RamDump():
                     print_out_str(pstring)
                 backtrace += pstring + '\n'
 
-                urc = self.unwind_frame(frame)
+                urc = self.unwind_frame(frame, cpu_work_state)
                 self.pac_frame_update(frame)
                 if urc < 0:
                     break
@@ -736,7 +745,10 @@ class RamDump():
     def get_kimage_vaddr(self):
         kimage_vaddr = None
         if self.get_kernel_version() > (4, 20, 0):
-            modules_vsize = 0x08000000
+            if self.get_kernel_version() >= (6, 4, 0):
+                modules_vsize = 0x80000000
+            else:
+                modules_vsize = 0x08000000
             bpf_jit_vsize = 0x08000000
             self.page_end = (0xffffffffffffffff << (
                         self.va_bits - 1)) & 0xffffffffffffffff
@@ -748,7 +760,7 @@ class RamDump():
                 else:
                     self.kasan_shadow_size = 1 << (self.va_bits - 3)
             kimage_vaddr = self.page_end + modules_vsize
-            if self.get_kernel_version() < (5, 15, 0):
+            if self.get_kernel_version() < (5, 10, 0):
                 kimage_vaddr += bpf_jit_vsize
 
             # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
@@ -785,6 +797,7 @@ class RamDump():
         self.cpu_type = None
         self.tbi_mask = None
         self.svm_kaslr_offset = None
+        self.iommu_pg_table_format = options.iommu_pg_table_format
         self.hw_id = options.force_hardware or None
         self.hw_version = options.force_hardware_version or None
         self.offset_table = []
@@ -800,13 +813,14 @@ class RamDump():
         self.gdbmi = None
         self.gdbmi_hyp = None
         self.arm64 = options.arm64
+        self.logcat_limit_time = options.logcat_limit_time
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
-        self.kimage_vaddr_va = None
         self.datatype_dict = {}
         self.enum_data = {}
         self.available_cores = []
+        self.skip_TLB_Cache_parse = options.skip_TLB_Cache_parse
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -829,6 +843,8 @@ class RamDump():
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
                         0)
             self.gdbmi.open()
+            if self.arm64:
+                self.gdbmi.setup_aarch('aarch64')
         self.gdbmi.set_gdbmi_aslr_offset()
         self.page_offset = 0xc0000000
         self.thread_size = 8192
@@ -913,11 +929,11 @@ class RamDump():
             if not options.autodump:
                 file_path = options.ram_elf_addr
             else:
-                file_path = os.path.join(options.autodump, 'ap_minidump.elf')
+                file_path = os.path.join(options.outdir, 'ap_minidump.elf')
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump, self.svm):
+                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -1468,10 +1484,7 @@ class RamDump():
         launch_config.write('PBI=SIM\n')
         launch_config.write('\n')
         launch_config.write('SCREEN=\n')
-        if t32_host_system != 'Linux':
-            launch_config.write('FONT=SMALL\n')
-        else:
-            launch_config.write('FONT=LARGE\n')
+        launch_config.write('FONT=LARGE\n')
         launch_config.write('HEADER=Trace32-ScorpionSimulator\n')
         launch_config.write('\n')
         if t32_host_system != 'Linux':
@@ -1781,23 +1794,32 @@ class RamDump():
                             self.kaslr_addr = a[1] + 0x6d0
                             break
                 kaslr_magic = self.read_u32(self.kaslr_addr, False)
+                self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
+
+                try:
+                    kimage_vaddr_va = self.address_of('kimage_vaddr')
+                    kimage_vaddr = self.get_kimage_vaddr()
+                    kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
+                    kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
+                    kimage_va = struct.unpack('<Q', kimage_va_temp)
+                    kimage_va = int(kimage_va[0])
+                    if kimage_va > kimage_vaddr:
+                        self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
+                        print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
+                except:
+                    self.dynamic_kaslr_offset = None
+                    pass
+
                 if kaslr_magic != 0xdead4ead:
-                    print_out_str('!!!! Kaslr magic does not match.')
-                    self.kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    try:
-                        kimage_vaddr = self.get_kimage_vaddr()
-                        kimage_vaddr_phy = self.phys_offset + self.kimage_vaddr_va - kimage_vaddr
-                        kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
-                        kimage_va = struct.unpack('<Q', kimage_va_temp)
-                        kimage_va = int(kimage_va[0])
-                        if kimage_va > kimage_vaddr:
-                            self.kaslr_offset = kimage_va - kimage_vaddr
-                            print_out_str("kaslr_offset = %x" % self.kaslr_offset)
-                            return self.kaslr_offset
-                    except:
-                        return self.kaslr_offset
+                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                        if self.dynamic_kaslr_offset is not None:
+                            self.kaslr_offset = self.dynamic_kaslr_offset
+                        else:
+                            print_out_str('!!!! Could not get the dynamic_kaslr_offset.')
+                    else:
+                        print_out_str('!!!! Kaslr feature is not enabled.')
+                        self.kaslr_offset = 0x0
                 else:
-                    self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
                     print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
 
     def get_page_size(self):
@@ -2016,8 +2038,13 @@ class RamDump():
         next_offset = self.field_offset('struct list_head', 'next')
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
+        if self.is_config_defined('CONFIG_SMP'):
+            percpu_offset = self.field_offset('struct module', 'percpu')
+            percpu_size_offset = self.field_offset('struct module', 'percpu_size')
 
-        if self.kernel_version > (4, 9, 0):
+        if self.kernel_version >= (6, 4, 0):
+            module_core_offset = self.field_offset('struct module', 'mem[0].base')
+        elif self.kernel_version > (4, 9, 0):
             module_core_offset = self.field_offset('struct module', 'core_layout.base')
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
@@ -2079,6 +2106,11 @@ class RamDump():
                                      '.text', '.text.bss', '.text.hot', '.text.unlikely']:
                     continue
                 mod_tbl_ent.section_offsets[sect_name] = sect_addr
+            if self.is_config_defined('CONFIG_SMP'):
+                percpu_size = self.read_u32(module + percpu_size_offset)
+                if percpu_size is not 0:
+                    percpu_pointer = self.read_pointer(module + percpu_offset)
+                    mod_tbl_ent.section_offsets['.data..percpu'] = percpu_pointer
             self.module_table.add_entry(mod_tbl_ent)
 
             next_list_ent = self.read_pointer(next_list_ent + next_offset)
@@ -2741,7 +2773,7 @@ class RamDump():
             return None
         return struct.unpack(format_string, s)
 
-    def hexdump(self, addr_or_name, length, virtual=True, file_object=None):
+    def hexdump(self, addr_or_name, length, virtual=True, file_object=None, little_endian=True):
         """Returns a string with a hexdump (in the format of ``xxd``).
 
         ``length`` is in bytes.
@@ -2758,15 +2790,42 @@ class RamDump():
         ffffffc000c610f8: 7273 696f 6e20 342e 392e 782d 676f 6f67  rsion 4.9.x-goog
         ffffffc000c61108: 6c65 2032 3031 3430 3832 3720 2870 7265  le 20140827 (pre
         ffffffc000c61118: 7265 6c65 6173 6529 2028 4743 4329 2029  release) (GCC) )
+
+        If little_endian = False, each 4 byte chunk will be printed in big endian form, like how
+        Trace32 displays memory. The string below looks jumbled but this format is useful when
+        decoding USB TRB rings, for instance.
+        Ex:
+
+        >>> print(dump.hexdump('linux_banner', 0x80, little_endian=False))
+        ffffffe03b562920: 756e 694c 6576 2078 6f69 7372 2e35 206e  uniLev xoisr.5 n
+        ffffffe03b562930: 372e 3531 6b71 2d38 6f63 2d69 6c6f 736e  7.51kq-8oc-ilosn
+        ffffffe03b562940: 7461 6469 6e61 2d65 696f 7264 2d33 3164  tadina-eiord-31d
+        ffffffe03b562950: 6667 2d38 3934 3035 6632 3139 2034 3731  fg-89405f219 471
+        ffffffe03b562960: 6975 6228 752d 646c 4072 6573 6c69 7562  iub(u-dl@resliub
+        ffffffe03b562970: 6f68 2d64 2029 7473 646e 4128 6469 6f72  oh-d )tsdnA(dior
+        ffffffe03b562980: 3538 2820 3036 3830 6220 2c38 6465 7361  58( 0680b ,8desa
+        ffffffe03b562990: 206e 6f20 3035 3472 6534 3837 6c63 2029   no 054re487lc )
         """
         from io import StringIO
         sio = StringIO()
         address = self.resolve_virt(addr_or_name)
-        parser_util.xxd(
-            address,
-            [self.read_byte(address + i, virtual=virtual) or 0
-             for i in range(length)],
-            file_object=sio)
+
+        if little_endian:
+            parser_util.xxd(
+                address,
+                [self.read_byte(address + i, virtual=virtual) or 0
+                 for i in range(length)],
+                file_object=sio)
+        else:
+            places = []
+            for i in range(int(length / 4)):
+                places.extend([(i + 1) * 4 - 1, (i + 1) * 4 - 2, (i + 1) * 4 - 3, i * 4])
+            parser_util.xxd(
+                address,
+                [self.read_byte(address + i, virtual=virtual) or 0
+                 for i in places],
+                file_object=sio)
+
         ret = sio.getvalue()
         sio.close()
         return ret
@@ -2883,6 +2942,10 @@ class RamDump():
         if self.arm64:
             return self.thread_saved_field_common_64(task, self.field_offset('struct cpu_context', 'fp'))
         else:
+            pc  = self.thread_saved_pc(task)
+            # PC value last bit is 1 for Thumb and 0 for ARM
+            if (pc & 0x1):
+                return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'r7'))
             return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'fp'))
 
     def for_each_process(self):
