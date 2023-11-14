@@ -182,6 +182,8 @@ if __name__ == '__main__':
                       This specifies that max size is 4096 KB.
                       """)
     parser.add_option('', '--skip_TLB_Cache_parse', action='store_true', help='Skip parsing TLB Cache Dumps in parse_debug_image')
+    parser.add_option('--iommu-pg-table-format', action='store', choices=['fastrpc', 'default'],
+                      default='default')
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
@@ -430,6 +432,14 @@ if __name__ == '__main__':
     else:
         if not dump.print_socinfo():
             print_out_str('!!! No serial number information available.')
+
+    try:
+        epoch_ns = dump.read_u64('cd.read_data[0].epoch_ns')
+        epoch_cyc = dump.read_u64('cd.read_data[0].epoch_cyc')
+        print_out_str('\nepoch_ns: {0}ns  epoch_cyc: {1}\n'.format(epoch_ns,epoch_cyc))
+    except Exception as e:
+        print_out_str(str(e))
+        pass
 
     if options.qdss:
         print_out_str('!!! --parse-qdss is now deprecated')
