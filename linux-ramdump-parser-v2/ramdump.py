@@ -738,9 +738,13 @@ class RamDump():
 
         return 0
 
-    def get_kimage_vaddr(self):
+    def get_kimage_vaddr(self, need_aslr=True):
         kimage_vaddr = None
-        if self.get_kernel_version() > (4, 20, 0):
+        if self.get_kernel_version() >= (6, 1, 0):
+            kimage_vaddr = self.address_of('_text')
+            if need_aslr:
+                kimage_vaddr -= self.kaslr_offset
+        elif self.get_kernel_version() > (4, 20, 0):
             if self.get_kernel_version() >= (6, 4, 0):
                 modules_vsize = 0x80000000
             else:
@@ -1840,13 +1844,14 @@ class RamDump():
                 self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
 
                 try:
+                    self.dynamic_kaslr_offset = None
                     kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    kimage_vaddr = self.get_kimage_vaddr()
+                    kimage_vaddr = self.get_kimage_vaddr(need_aslr=False)
                     kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
                     kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
                     kimage_va = struct.unpack('<Q', kimage_va_temp)
                     kimage_va = int(kimage_va[0])
-                    if kimage_va > kimage_vaddr:
+                    if kimage_va >= kimage_vaddr:
                         self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
                 except:
