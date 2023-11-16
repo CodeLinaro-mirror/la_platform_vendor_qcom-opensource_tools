@@ -38,7 +38,6 @@ from importlib import import_module
 import module_table
 from mm import mm_init
 
-FP = 11
 SP = 13
 LR = 14
 PC = 15
@@ -332,7 +331,7 @@ class RamDump():
                     stop = mid
             return stop
 
-        def unwind_frame_generic64(self, frame):
+        def unwind_frame_generic64(self, frame, cpu_work_state=''):
             fp = frame.fp
             try:
                 frame.sp = fp + 0x10
@@ -345,7 +344,7 @@ class RamDump():
                 return -1
             return 0
 
-        def unwind_frame_generic(self, frame):
+        def unwind_frame_generic(self, frame, cpu_work_state=''):
             high = 0
             fp = frame.fp
 
@@ -541,7 +540,7 @@ class RamDump():
             temp = addr + offset
             return (temp & 0xffffffff) + ((temp >> 32) & 0xffffffff)
 
-        def unwind_frame_tables(self, frame):
+        def unwind_frame_tables(self, frame, cpu_work_state):
             low = frame.sp
             high = ((low + (self.ramdump.thread_size - 1)) & \
                 ~(self.ramdump.thread_size - 1)) + self.ramdump.thread_size
@@ -549,6 +548,11 @@ class RamDump():
 
             if (idx is None):
                 return -1
+
+            if cpu_work_state == "thumb":
+                FP = 7
+            else:
+                FP = 11
 
             ctrl = self.UnwindCtrlBlock()
             ctrl.vrs[FP] = frame.fp
@@ -617,6 +621,11 @@ class RamDump():
             frame.pc = pc
             self.pac_frame_update(frame)
             backtrace = '\n'
+
+            cpu_work_state = ''
+            if (pc & 0x1) or (lr & 0x1):
+                cpu_work_state = 'thumb'
+
             while True:
                 where = frame.pc
                 offset = 0
@@ -638,7 +647,7 @@ class RamDump():
                     print_out_str(pstring)
                 backtrace += pstring + '\n'
 
-                urc = self.unwind_frame(frame)
+                urc = self.unwind_frame(frame, cpu_work_state)
                 self.pac_frame_update(frame)
                 if urc < 0:
                     break
@@ -834,6 +843,8 @@ class RamDump():
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
                         0)
             self.gdbmi.open()
+            if self.arm64:
+                self.gdbmi.setup_aarch('aarch64')
         self.gdbmi.set_gdbmi_aslr_offset()
         self.page_offset = 0xc0000000
         self.thread_size = 8192
@@ -2031,7 +2042,9 @@ class RamDump():
             percpu_offset = self.field_offset('struct module', 'percpu')
             percpu_size_offset = self.field_offset('struct module', 'percpu_size')
 
-        if self.kernel_version > (4, 9, 0):
+        if self.kernel_version >= (6, 4, 0):
+            module_core_offset = self.field_offset('struct module', 'mem[0].base')
+        elif self.kernel_version > (4, 9, 0):
             module_core_offset = self.field_offset('struct module', 'core_layout.base')
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
@@ -2929,6 +2942,10 @@ class RamDump():
         if self.arm64:
             return self.thread_saved_field_common_64(task, self.field_offset('struct cpu_context', 'fp'))
         else:
+            pc  = self.thread_saved_pc(task)
+            # PC value last bit is 1 for Thumb and 0 for ARM
+            if (pc & 0x1):
+                return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'r7'))
             return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'fp'))
 
     def for_each_process(self):
