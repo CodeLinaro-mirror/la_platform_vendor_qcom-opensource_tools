@@ -250,7 +250,7 @@ class IrqParse(RamParser):
             return
 
         major, minor, patch = ram_dump.kernel_version
-        if (major, minor) >= (6, 5):
+        if (major, minor) >= (6, 4):
             irq_desc = []
             mt_walk = maple_tree.MapleTreeWalker(ram_dump)
             sparse_irqs_addr = ram_dump.address_of('sparse_irqs')
