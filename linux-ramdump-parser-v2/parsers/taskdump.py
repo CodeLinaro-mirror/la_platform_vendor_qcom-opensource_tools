@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2013, 2015, 2017-2020,2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -387,7 +387,6 @@ def do_dump_task_timestamps(ramdump):
                                     init_thread_group)
                     if ret is False:
                         count = 1
-
                     init_next_task = init_next_task + prev_offset
                     orig_init_next_task = init_next_task
                     next_task = ramdump.read_word(init_next_task)
@@ -461,8 +460,13 @@ def dump_thread_group_timestamps(ramdump, thread_group):
     offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
     offset_last_pcount = offset_schedinfo + ramdump.field_offset('struct sched_info', 'pcount')
     offset_last_rundelay = offset_schedinfo + ramdump.field_offset('struct sched_info', 'run_delay')
-    offset_state = ramdump.field_offset('struct task_struct', 'state')
-    offset_esit_state = ramdump.field_offset('struct task_struct', 'exit_state')
+
+    if ramdump.kernel_version >= (5, 14, 0):
+        offset_state = ramdump.field_offset('struct task_struct', '__state')
+    else:
+        offset_state = ramdump.field_offset('struct task_struct', 'state')
+
+    offset_exit_state = ramdump.field_offset('struct task_struct', 'exit_state')
     offset_last_enqueued_ts = ramdump.field_offset('struct task_struct', 'last_enqueued_ts')
     offset_last_sleep_ts = ramdump.field_offset('struct task_struct', 'last_sleep_ts')
     orig_thread_group = thread_group
@@ -487,12 +491,13 @@ def dump_thread_group_timestamps(ramdump, thread_group):
 
         if offset_last_enqueued_ts is None:
             thread_last_enqueued_ts = 0
-            offset_last_enqueued_ts = ramdump.field_offset('struct walt_task_struct', 'last_enqueued_ts')
-            if (ramdump.kernel_version >= (5, 10, 0)):
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
-            else:
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
-            offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
+            if ramdump.is_config_defined('CONFIG_SCHED_WALT') or 'sched_walt' in ramdump.ko_file_names:
+                offset_last_enqueued_ts = ramdump.field_offset('struct walt_task_struct', 'last_enqueued_ts')
+                if (ramdump.kernel_version >= (5, 10, 0)):
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
+                else:
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
+                offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
         if offset_last_enqueued_ts is not None:
             next_thread_last_enqueued_ts = next_thread_start + offset_last_enqueued_ts
             thread_last_enqueued_ts = ramdump.read_u64(next_thread_last_enqueued_ts)
@@ -501,12 +506,13 @@ def dump_thread_group_timestamps(ramdump, thread_group):
 
         if offset_last_sleep_ts is None:
             thread_last_sleep_ts = 0
-            offset_last_sleep_ts = ramdump.field_offset('struct walt_task_struct', 'last_sleep_ts ')
-            if (ramdump.kernel_version >= (5, 10, 0)):
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
-            else:
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
-            offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
+            if ramdump.is_config_defined('CONFIG_SCHED_WALT') or 'sched_walt' in ramdump.ko_file_names:
+                offset_last_sleep_ts = ramdump.field_offset('struct walt_task_struct', 'last_sleep_ts ')
+                if (ramdump.kernel_version >= (5, 10, 0)):
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
+                else:
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
+                offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
         if offset_last_sleep_ts:
             next_thread_last_sleep_ts = next_thread_start + offset_last_sleep_ts
             thread_last_sleep_ts = ramdump.read_u64(next_thread_last_sleep_ts)
@@ -532,6 +538,8 @@ def dump_thread_group_timestamps(ramdump, thread_group):
             return False
         thread_task_state_str = task_state_to_char(thread_task_state,thread_exit_state,ramdump.version)
         cpu_no = ramdump.get_task_cpu(next_thread_start, threadinfo)
+        if cpu_no is None:
+            return False
         if cpu_no >= ramdump.get_num_cpus():
             return False
         if not ramdump.is_thread_info_in_task():
