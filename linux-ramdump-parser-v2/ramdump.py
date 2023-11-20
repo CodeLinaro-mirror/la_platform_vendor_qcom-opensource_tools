@@ -834,6 +834,8 @@ class RamDump():
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
                         0)
             self.gdbmi.open()
+            if self.arm64:
+                self.gdbmi.setup_aarch('aarch64')
         self.gdbmi.set_gdbmi_aslr_offset()
         self.page_offset = 0xc0000000
         self.thread_size = 8192
@@ -2031,7 +2033,9 @@ class RamDump():
             percpu_offset = self.field_offset('struct module', 'percpu')
             percpu_size_offset = self.field_offset('struct module', 'percpu_size')
 
-        if self.kernel_version > (4, 9, 0):
+        if self.kernel_version >= (6, 4, 0):
+            module_core_offset = self.field_offset('struct module', 'mem[0].base')
+        elif self.kernel_version > (4, 9, 0):
             module_core_offset = self.field_offset('struct module', 'core_layout.base')
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
