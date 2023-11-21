@@ -736,7 +736,7 @@ class RamDump():
     def get_kimage_vaddr(self):
         kimage_vaddr = None
         if self.get_kernel_version() > (4, 20, 0):
-            if self.get_kernel_version() >= (6, 5, 0):
+            if self.get_kernel_version() >= (6, 4, 0):
                 modules_vsize = 0x80000000
             else:
                 modules_vsize = 0x08000000
@@ -834,6 +834,8 @@ class RamDump():
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
                         0)
             self.gdbmi.open()
+            if self.arm64:
+                self.gdbmi.setup_aarch('aarch64')
         self.gdbmi.set_gdbmi_aslr_offset()
         self.page_offset = 0xc0000000
         self.thread_size = 8192
@@ -1796,11 +1798,15 @@ class RamDump():
                         self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
                 except:
+                    self.dynamic_kaslr_offset = None
                     pass
 
                 if kaslr_magic != 0xdead4ead:
                     if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
-                        self.kaslr_offset = self.dynamic_kaslr_offset
+                        if self.dynamic_kaslr_offset is not None:
+                            self.kaslr_offset = self.dynamic_kaslr_offset
+                        else:
+                            print_out_str('!!!! Could not get the dynamic_kaslr_offset.')
                     else:
                         print_out_str('!!!! Kaslr feature is not enabled.')
                         self.kaslr_offset = 0x0
@@ -2027,7 +2033,9 @@ class RamDump():
             percpu_offset = self.field_offset('struct module', 'percpu')
             percpu_size_offset = self.field_offset('struct module', 'percpu_size')
 
-        if self.kernel_version > (4, 9, 0):
+        if self.kernel_version >= (6, 4, 0):
+            module_core_offset = self.field_offset('struct module', 'mem[0].base')
+        elif self.kernel_version > (4, 9, 0):
             module_core_offset = self.field_offset('struct module', 'core_layout.base')
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
