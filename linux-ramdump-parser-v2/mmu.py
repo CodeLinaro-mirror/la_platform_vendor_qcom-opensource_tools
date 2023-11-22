@@ -1,4 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -51,7 +52,9 @@ class MMU(object):
             else:
                 self.ttbr = self.ramdump.kernel_virt_to_phys(
                         self.ramdump.swapper_pg_dir_addr)
+        self.get_pgtable_index()
         self.load_page_tables()
+        return
 
     def virt_to_phys(self, addr, skip_tlb=False, save_in_tlb=True):
         """Do a virtual to physical address lookup and possibly cache the
@@ -61,8 +64,8 @@ class MMU(object):
         if addr is None:
             return None
 
-        page_addr = (addr >> 12) << 12
-        page_offset = addr & 0xFFF
+        page_addr = (addr >> self.ramdump.page_shift) << self.ramdump.page_shift
+        page_offset = addr & ((1 << self.ramdump.page_shift) - 1)
 
         if not skip_tlb:
             if page_addr in self._tlb:
@@ -87,6 +90,13 @@ class MMU(object):
                 self._tlb[page_addr] = phys_addr
             return phys_addr + page_offset
 
+    def get_swap_pte(self, addr):
+        if addr is None:
+            return None
+        page_addr = (addr >> self.ramdump.page_shift) << self.ramdump.page_shift
+        pte = self.page_table_walk_to_get_swap_pte(page_addr)
+        return pte
+
     def load_page_tables(self):
         raise NotImplementedError
 
@@ -96,6 +106,11 @@ class MMU(object):
     def dump_page_tables(self, f):
         raise NotImplementedError
 
+    def page_table_walk_to_get_swap_pte(self, virt):
+        raise NotImplementedError
+
+    def get_pgtable_index(self):
+        return None
 
 class Armv7MMU(MMU):
 
@@ -166,6 +181,9 @@ class Armv7MMU(MMU):
         f.write(
             'Dumping page tables is not currently supported for Armv7MMU\n')
         f.flush()
+
+    def page_table_walk_to_get_swap_pte(self, virt):
+        return None
 
 
 class Armv7LPAEMMU(MMU):
@@ -502,6 +520,9 @@ class Armv7LPAEMMU(MMU):
             'Dumping page tables is not currently supported for Armv7LPAEMMU\n')
         f.flush()
 
+    def page_table_walk_to_get_swap_pte(self, virt):
+        return None
+
 class Armv8MMU(MMU):
 
     """An MMU for ARMv8 VMSA"""
@@ -519,11 +540,9 @@ class Armv8MMU(MMU):
             table_base_address, table_index,
             input_addr_split)
         if descriptor.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
-            descriptor.add_field('output_address', (47, block_split))
+            descriptor.add_field('output_address', (self.ramdump.va_bits-1, block_split))
         elif descriptor.dtype == Armv8MMU.DESCRIPTOR_TABLE:
-            # we have bits 39:12 of the next-level table in
-            # next_level_base_addr_upper
-            descriptor.add_field('next_level_base_addr_upper', (47, 12))
+            descriptor.add_field('next_level_base_addr_upper', (self.ramdump.va_bits-1, self.l3_index))
         else:
             raise Exception(
                 'Invalid stage 1 first- or second-level translation\ndescriptor: (%s)\naddr: (%s)'
@@ -680,8 +699,8 @@ class Armv8MMU(MMU):
             ttbr_phy = self.virt_to_physel2(table_base_address)
             table_base_address = ttbr_phy
         # these Registers are overkill but nice documentation:).
-        table_base = Register(table_base_address, base=(47, n))
-        descriptor_addr = Register(table_base_address, base=(47, n),
+        table_base = Register(table_base_address, base=(self.ramdump.va_bits-1, n))
+        descriptor_addr = Register(table_base_address, base=(self.ramdump.va_bits-1, n),
                                    offset=(n - 1, 3))
         descriptor_addr.offset = table_index
         descriptor_val = self.read_phys_dword(descriptor_addr.value)
@@ -736,21 +755,34 @@ class Armv8MMU(MMU):
 
     def page_table_walk(self, virt):
         virt_r = Register(virt,
-            zl_index=(47,39),
-            fl_index=(38,30),
-            sl_index=(29,21),
-            tl_index=(20,12),
-            page_index=(11,0))
+            zl_index=(self.ramdump.va_bits-1,self.l0_index),
+            fl_index=(self.l0_index-1,self.l1_index),
+            sl_index=(self.l1_index-1,self.l2_index),
+            tl_index=(self.l2_index-1,self.l3_index),
+            page_index=(self.l3_index-1,0))
+
+        base = Register(base=(self.ramdump.va_bits-1, self.l3_index))
+        base.value = self.ttbr
+
+        if self.ramdump.pgtable_levels >= 4:
+            try:
+              zl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.zl_index, self.l3_index, self.l0_index)
+            except:
+              return None
+
+            if zl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
+                return None
+
+            base.base = zl_desc.next_level_base_addr_upper
 
         try:
-          fl_desc = self.do_fl_sl_level_lookup(self.ttbr, virt_r.fl_index, 12, 30)
+          fl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.fl_index, self.l3_index, self.l1_index)
         except:
           return None
 
         if fl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
             return self.fl_block_desc_2_phys(fl_desc, virt_r)
 
-        base = Register(base=(47, 12))
         base.base = fl_desc.next_level_base_addr_upper
         try:
             sl_desc = self.do_sl_level_lookup(
@@ -770,6 +802,55 @@ class Armv8MMU(MMU):
 
         r = self.tl_page_desc_2_phys(tl_desc, virt_r)
         return r
+
+    def page_table_walk_to_get_swap_pte(self, virt):
+        virt_r = Register(virt,
+            zl_index=(self.ramdump.va_bits-1,self.l0_index),
+            fl_index=(self.l0_index-1,self.l1_index),
+            sl_index=(self.l1_index-1,self.l2_index),
+            tl_index=(self.l2_index-1,self.l3_index),
+            page_index=(self.l3_index-1,0))
+
+        base = Register(base=(self.ramdump.va_bits-1, self.l3_index))
+        base.value = self.ttbr
+
+        if self.ramdump.pgtable_levels >= 4:
+            try:
+              zl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.zl_index, self.l3_index, self.l0_index)
+            except:
+              return None
+            if zl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
+                return None
+            base.base = zl_desc.next_level_base_addr_upper
+
+        try:
+          fl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.fl_index, self.l3_index, self.l1_index)
+        except:
+          return None
+
+        if fl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
+            return self.fl_block_desc_2_phys(fl_desc, virt_r)
+
+        base.base = fl_desc.next_level_base_addr_upper
+        try:
+            sl_desc = self.do_sl_level_lookup(
+                base.value, virt_r.sl_index)
+        except:
+            return None
+
+        if sl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
+            r = self.sl_block_desc_2_phys(sl_desc, virt_r)
+            return r
+
+        base.base = sl_desc.next_level_base_addr_upper
+
+        descriptor, addr = self.do_level_lookup(
+            base.value, virt_r.tl_index, 12)
+        if descriptor.dtype == Armv8MMU.DESCRIPTOR_INVALID and descriptor.value != 0:
+            return descriptor.value
+
+        return None
+
     def page_table_walkel2(self, virt):
         #print "page_table_walkel2 virt address = {0}".format(hex(virt))
         virt_r = Register(virt,
@@ -855,3 +936,19 @@ class Armv8MMU(MMU):
         f.write(
             'Dumping page tables is not currently supported for Armv8MMU\n')
         f.flush()
+
+    def get_pgtable_index(self):
+        self.l3_index = self.ramdump.page_shift
+        self.l2_index = self.pmd_shift = self.pgtable_level_shift(2)
+        self.pud_shift = self.pgtable_level_shift(1)
+        self.pgdir_shift = self.pgtable_level_shift(4 - self.ramdump.pgtable_levels)
+        if self.ramdump.pgtable_levels >= 4:
+            self.l1_index = self.pud_shift
+            self.l0_index = self.pgdir_shift
+        else:
+            self.l1_index = self.pgdir_shift
+            self.l0_index = self.ramdump.va_bits
+        return
+
+    def pgtable_level_shift(self, n):
+        return ((self.ramdump.page_shift - 3) * (4 - (n)) + 3)

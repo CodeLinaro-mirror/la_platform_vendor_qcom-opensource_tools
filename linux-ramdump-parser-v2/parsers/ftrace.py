@@ -1,5 +1,5 @@
 # Copyright (c) 2017-2022, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -40,10 +40,16 @@ class FtraceParser(RamParser):
         self.event_class = 'struct trace_event_class'
         self.trace_names = ["binder", "bootreceiver", "clock_reg", "kgsl-fence",
                             "memory", "mmc", "rproc_qcom", "suspend", "ufs",
-                            "usb", "wifi"]
+                            "usb", "wifi", "rwmmio"]
         self.whitelisted_trace_names =[]
+        self.ftrace_buffer_size_kb = None
+        self.per_cpu_buffer_pages = None
+
         if len(self.ramdump.ftrace_args):
             self.whitelisted_trace_names = self.ramdump.ftrace_args
+
+        if self.ramdump.ftrace_max_size:
+            self.per_cpu_buffer_pages = self.ramdump.ftrace_max_size / 4
 
     def ftrace_field_func(self, common_list, ram_dump):
         name_offset = ram_dump.field_offset('struct ftrace_event_field', 'name')
@@ -212,7 +218,10 @@ class FtraceParser(RamParser):
             global_trace_data = global_trace_data_next
 
             trace_buffer_name = self.ramdump.read_word(global_trace_data + trace_buffer_name_offset)
-            trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
+            if not (trace_buffer_name):
+                trace_name = None
+            else:
+                trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
 
             if self.ramdump.arm64:
                 trace_buffer_ptr_data = self.ramdump.read_u64(
@@ -256,7 +265,7 @@ class FtraceParser(RamParser):
                               "#              | |       |   ||||       |         |\n"
                 ftrace_out.write(header_data)
             else:
-                if trace_name in self.whitelisted_trace_names:
+                if trace_name in self.whitelisted_trace_names or self.whitelisted_trace_names == ["all"]:
                     #ftrace_out = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
                     fout = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
                     ftrace_out = BufferedWrite(fout)
@@ -291,13 +300,17 @@ class FtraceParser(RamParser):
                         b + ring_trace_buffer_nr_pages)
                 if nr_pages is None:
                     continue
+                if self.per_cpu_buffer_pages and self.per_cpu_buffer_pages < nr_pages:
+                    nr_pages = self.per_cpu_buffer_pages
+
                 nr_total_buffer_pages = nr_total_buffer_pages +  nr_pages
 
                 nr_pages_per_buffer.append(nr_pages)
                 rb_per_cpu.append(b)
                 #print "ring_trace_buffer_cpus nr_pages = %d" % nr_pages
                 #print "cpu_buffer = {0}".format(hex(b))
-            #print "nr_total_buffer_pages = %d" % nr_total_buffer_pages
+
+            print("\nTotal pages across cpu trace buffers = {}".format(round(nr_total_buffer_pages)))
 
             #start = time.time()
             for cpu_idx in range(0,len(rb_per_cpu)):
@@ -331,7 +344,7 @@ class FtraceParser(RamParser):
                 ftrace_core6_fd = self.ramdump.open_file('ftrace_core6.txt', 'w')
                 ftrace_core7_fd = self.ramdump.open_file('ftrace_core7.txt', 'w')
             else:
-                if trace_name in self.whitelisted_trace_names:
+                if trace_name in self.whitelisted_trace_names or self.whitelisted_trace_names == ["all"]:
                     ftrace_core0_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core0.txt','w')
                     ftrace_core1_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core1.txt','w')
                     ftrace_core2_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core2.txt','w')
@@ -462,7 +475,7 @@ class FtraceParser(RamParser):
         for (f, start, end, filename) in self.ramdump.ebi_files:
                 if "DDR" in filename or "dram" in filename:
                     dumps += '{0}@0x{1:x},'.format(filename, start)
-        pagesize = "-p 4096"
+        pagesize = "-p {}".format(self.ramdump.get_page_size())
 
         commandsfile = NamedTemporaryFile(mode='w', delete=False,
                               dir=self.ramdump.outdir)
