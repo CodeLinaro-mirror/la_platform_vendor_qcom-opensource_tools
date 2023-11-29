@@ -60,11 +60,6 @@ class Zram(RamParser):
         self.init_config()
 
     def init_config(self):
-        if self.ramdump.is_config_defined('CONFIG_ARM64_PAGE_SHIFT'):
-            self.PAGE_SHIFT = int(self.ramdump.get_config_val('CONFIG_ARM64_PAGE_SHIFT'))
-        else:
-            self.PAGE_SHIFT = 12
-
         if (self.ramdump.kernel_version) < (6, 1, 0):
             self.__SWP_TYPE_SHIFT = 2
             self.__SWP_TYPE_BITS = 6
@@ -73,7 +68,7 @@ class Zram(RamParser):
         else:
             self.__SWP_TYPE_SHIFT = 3
             self.__SWP_TYPE_BITS = 5
-            self.ZRAM_FLAG_SHIFT = self.PAGE_SHIFT + 1
+            self.ZRAM_FLAG_SHIFT = self.ramdump.page_shift + 1
             self.HUGE_BITS = 1
 
         self.__SWP_OFFSET_BITS = 50
@@ -87,8 +82,8 @@ class Zram(RamParser):
         self.sizeof_long = self.ramdump.sizeof("unsigned long")
         self.ZS_HANDLE_SIZE = self.sizeof_long
 
-        self.PAGE_SIZE = 1 << self.PAGE_SHIFT
-        self._PFN_BITS = (self.MAX_POSSIBLE_PHYSMEM_BITS - self.PAGE_SHIFT)
+        self.PAGE_SIZE = 1 << self.ramdump.page_shift
+        self._PFN_BITS = (self.MAX_POSSIBLE_PHYSMEM_BITS - self.ramdump.page_shift)
         self.OBJ_INDEX_BITS = (self.BITS_PER_LONG - self._PFN_BITS - self.OBJ_TAG_BITS) # 64-36 -1 = 27
         self.OBJ_INDEX_MASK = (1 << self.OBJ_INDEX_BITS) -1
         self.fullness_group = ['ZS_EMPTY', 'ZS_ALMOST_EMPTY','ZS_ALMOST_FULL','ZS_FULL']
