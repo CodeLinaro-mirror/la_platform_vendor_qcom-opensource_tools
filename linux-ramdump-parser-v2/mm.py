@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -12,6 +12,7 @@
 
 import bitops
 from ctypes import *
+import math
 
 
 def page_buddy(ramdump, page):
@@ -143,21 +144,12 @@ def get_vmemmap(ramdump):
     # arch/arm64/include/asm/pgtable-hwdef.h,
     # arch/arm64/include/asm/pgtable.h
     # kernel/arch/arm64/include/asm/memory.h
-    if (ramdump.kernel_version < (3, 18, 0)):
-        nlevels = int(ramdump.get_config_val("CONFIG_ARM64_PGTABLE_LEVELS"))
-    else:
-        nlevels = int(ramdump.get_config_val("CONFIG_PGTABLE_LEVELS"))
-
-    if ramdump.is_config_defined("CONFIG_ARM64_64K_PAGES"):
-        page_shift = 16
-    elif ramdump.is_config_defined("CONFIG_ARM64_16K_PAGES"):
-        page_shift = 14
-    else:
-        page_shift = 12
-    pgdir_shift = ((page_shift - 3) * nlevels) + 3
+    nlevels = ramdump.pgtable_levels
+    page_shift = ramdump.page_shift
+    va_bits = ramdump.va_bits
+    pgdir_shift = ramdump.mmu.pgdir_shift
     pud_shift = pgdir_shift
     pud_size = 1 << pud_shift
-    va_bits = int(ramdump.get_config_val("CONFIG_ARM64_VA_BITS"))
     spsize = ramdump.sizeof('struct page')
     vmemmap_size = bitops.align((1 << (va_bits - page_shift)) * spsize,
                                 pud_size)
@@ -177,13 +169,13 @@ def get_vmemmap(ramdump):
                    memstart_offset)
 
     elif ramdump.kernel_version >= (5, 15):
-        struct_page_max_shift = 6
+        struct_page_max_shift = int(math.log2(spsize))
         vmemmap_shift = page_shift - struct_page_max_shift
         vmemstart = -(1 << (va_bits - vmemmap_shift)) % (1 << 64)
         vmemmap = vmemstart - (memstart_addr >> page_shift)*spsize
 
     elif ramdump.kernel_version >= (5, 10):
-        struct_page_max_shift = 6
+        struct_page_max_shift = int(math.log2(spsize))
         SZ_2M = 0x00200000
         page_end = -(1 << (va_bits - 1)) % (1 << 64)
         vmemsize = ((page_end - ramdump.page_offset) >> (page_shift - struct_page_max_shift))
@@ -194,7 +186,7 @@ def get_vmemmap(ramdump):
     else:
         # for version >= 4.9.0,
         # vmemmap_size = ( 1 << (39 - 12 - 1 + 6))
-        struct_page_max_shift = 6
+        struct_page_max_shift = int(math.log2(spsize))
         vmemmap_size = ( 1 << (va_bits - page_shift - 1 + struct_page_max_shift))
         vmemmap = ramdump.page_offset - vmemmap_size - memstart_offset
     return vmemmap
@@ -219,7 +211,7 @@ def page_to_pfn_flat(ramdump, page):
     mem_map = ramdump.read_word(mem_map_addr)
     page_size = ramdump.sizeof('struct page')
     # XXX Needs to change for LPAE
-    pfn_offset = ramdump.phys_offset >> 12
+    pfn_offset = ramdump.phys_offset >> ramdump.page_shift
     return ((page - mem_map) // page_size) + pfn_offset
 
 
@@ -228,7 +220,7 @@ def pfn_to_page_flat(ramdump, pfn):
     mem_map = ramdump.read_word(mem_map_addr)
     page_size = ramdump.sizeof('struct page')
     # XXX Needs to change for LPAE
-    pfn_offset = ramdump.phys_offset >> 12
+    pfn_offset = ramdump.phys_offset >> ramdump.page_shift
     return mem_map + ((pfn - pfn_offset) * page_size)
 
 
@@ -258,7 +250,7 @@ def sparsemem_lowmem_page_address(ramdump, page):
     membank0_page_offset = ramdump.page_offset
     membank1_phys_offset = membank1_start
     membank1_page_offset = membank0_page_offset + membank0_size
-    phys = page_to_pfn(ramdump, page) << 12
+    phys = page_to_pfn(ramdump, page) << ramdump.page_shift
     if phys >= membank1_start:
         return phys - membank1_phys_offset + membank1_page_offset
     else:
@@ -266,7 +258,7 @@ def sparsemem_lowmem_page_address(ramdump, page):
 
 
 def dont_map_hole_lowmem_page_address(ramdump, page):
-    phys = page_to_pfn(ramdump, page) << 12
+    phys = page_to_pfn(ramdump, page) << ramdump.page_shift
     hole_end_addr = ramdump.address_of('memory_hole_end')
     if hole_end_addr is None:
         hole_end_addr = ramdump.address_of('membank1_start')
@@ -282,7 +274,7 @@ def dont_map_hole_lowmem_page_address(ramdump, page):
 
 
 def normal_lowmem_page_address(ramdump, page, vmemmap=None):
-    phys = page_to_pfn(ramdump, page, vmemmap) << 12
+    phys = page_to_pfn(ramdump, page, vmemmap) << ramdump.page_shift
     if ramdump.arm64:
         if ramdump.kernel_version >= (5, 10):
             memstart_addr = ramdump.read_s64('memstart_addr')
@@ -368,7 +360,7 @@ def for_each_pfn(ramdump):
     for i in for_each_pfn(ramdump):
         page = pfn_to_page(i)
     """
-    page_size = (1 << 12)
+    page_size = ramdump.get_page_size()
     cnt = ramdump.read_structure_field('memblock', 'struct memblock',
                                        'memory.cnt')
     region = ramdump.read_structure_field('memblock', 'struct memblock',
@@ -421,13 +413,16 @@ class Sparsemem:
 
     def pfn_to_section(self, pfn):
         ramdump = self.rd
-        section_nr = pfn >> (self.rd.mm.SECTION_SIZE_BITS - 12)
+        section_nr = pfn >> (self.rd.mm.SECTION_SIZE_BITS - self.rd.page_shift)
         if section_nr in self.memsection_cache:
             return self.memsection_cache[section_nr]
 
         memsection_struct_size = ramdump.sizeof('struct mem_section')
         pointer_size = ramdump.sizeof('struct mem_section *')
-        sections_per_root = 4096 // memsection_struct_size
+        if ramdump.is_config_defined('CONFIG_SPARSEMEM_EXTREME'):
+            sections_per_root = ramdump.get_page_size() // memsection_struct_size
+        else:
+            sections_per_root = 1
         root_nr = section_nr // sections_per_root
         section_nr = section_nr % sections_per_root
 

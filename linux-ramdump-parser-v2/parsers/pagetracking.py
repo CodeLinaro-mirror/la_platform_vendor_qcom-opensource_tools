@@ -18,11 +18,76 @@ import sys
 import os
 from collections import defaultdict
 
-@register_parser('--print-pagetracking', 'print page tracking information (if available)')
-class PageTracking(RamParser):
+class StackDepot(object):
+    def __init__(self, ramdump):
+        self.ramdump = ramdump
 
-    def __init__(self, *args):
-        super(PageTracking, self).__init__(*args)
+        if self.ramdump.field_offset('union handle_parts', 'pool_index') is not None:
+            self.stack_slabs = self.ramdump.address_of('stack_pools')
+        else:
+            self.stack_slabs = self.ramdump.address_of('stack_slabs')
+        self.stack_slabs_size = self.ramdump.sizeof('void *')
+        self.stack_trace_entry_size = self.ramdump.sizeof('unsigned long')
+        self.stack_trace_entries_offset = self.ramdump.field_offset(
+                'struct stack_record', 'entries')
+        depot_stack_bits = self.ramdump.sizeof('depot_stack_handle_t') * 8
+        stack_alloc_null_protection_bits = 1
+        stack_alloc_order = 2
+        self.stack_alloc_align = 4
+        self.stack_alloc_offset_bits = stack_alloc_order + self.ramdump.page_shift - self.stack_alloc_align
+        self.stack_alloc_index_bits = depot_stack_bits - stack_alloc_null_protection_bits - self.stack_alloc_offset_bits
+        if self.ramdump.field_offset('union handle_parts', 'extra') is not None:
+            self.stack_alloc_index_bits -= 5
+
+    def stack_depot_fetch(self, handle, symbol=True):
+        if handle == 0 or handle == None:
+            return -1, None, None
+
+        slabindex = handle & ((1 << self.stack_alloc_index_bits) - 1)
+        handle_offset = (handle >> self.stack_alloc_index_bits) & \
+                            ((1 << self.stack_alloc_offset_bits) - 1)
+        handle_offset = handle_offset << self.stack_alloc_align
+
+        slab = self.ramdump.read_word(
+            self.stack_slabs + (self.stack_slabs_size * slabindex))
+        if slab is None:
+            return -1, None, None
+        stack = slab + handle_offset
+
+        stack_nr_entries = self.ramdump.read_structure_field(
+            stack, 'struct stack_record', 'size')
+
+        if stack_nr_entries is None:
+            return -1, None, None
+        if stack_nr_entries <= 0 or stack_nr_entries > 16:
+            return -1, None, None
+
+        stack_addr = []
+        stack_str = ''
+        for i in range(0, stack_nr_entries):
+            addr = self.ramdump.read_word(
+                    stack + self.stack_trace_entries_offset + i *
+                    self.stack_trace_entry_size)
+
+            if not addr:
+                break
+            stack_addr.append(addr)
+            if symbol:
+                look = self.ramdump.unwind_lookup(addr)
+                if look is None:
+                    break
+                symname, offset = look
+                unwind_dat = '      [<{0:x}>] {1}+0x{2:x}\n'.format(
+                    addr, symname, offset)
+                stack_str = stack_str + unwind_dat
+            else:
+                stack_str += str(addr)
+        return stack_nr_entries, stack_addr, stack_str
+
+class PageTrace(object):
+    def __init__(self, ramdump):
+        self.ramdump = ramdump
+
         self.trace_entry_size = self.ramdump.sizeof('unsigned long')
         self.trace_offset = 0
         self.nr_entries_offset = 0
@@ -39,8 +104,7 @@ class PageTracking(RamParser):
             self.trace_offset = self.ramdump.field_offset(
                             'struct page_ext', 'trace')
             if self.ramdump.is_config_defined('CONFIG_STACKDEPOT'):
-                self.trace_entries_offset = self.ramdump.field_offset(
-                        'struct stack_record', 'entries')
+                self.stackdepot = StackDepot(self.ramdump)
             else:
                 self.trace_entries_offset = self.ramdump.field_offset(
                             'struct page_ext', 'trace_entries')
@@ -72,9 +136,6 @@ class PageTracking(RamParser):
                                 "CONFIG_FORCE_MAX_ZONEORDER"))
         except:
             self.max_order = 11
-
-        self.stack_slabs = self.ramdump.address_of('stack_slabs')
-        self.stack_slabs_size = self.ramdump.sizeof('void *')
         self.offset_comm = self.ramdump.field_offset('struct page_owner', 'comm')
 
     def page_trace(self, pfn, alloc):
@@ -96,7 +157,7 @@ class PageTracking(RamParser):
             order = self.ramdump.read_structure_field(
                 page, 'struct page', 'order')
         else:
-            phys = pfn << 12
+            phys = pfn << self.ramdump.page_shift
             if phys is None or phys == 0:
                 return -1, -1, -1, -1, -1, -1
             page_ext = self.ramdump.mm.lookup_page_ext(pfn)
@@ -106,11 +167,11 @@ class PageTracking(RamParser):
             """
             if not page_ext:
                 return -1, -1, -1, -1, -1, -1
- 
+
             if self.ramdump.arm64:
                 temp_page_ext = page_ext + (pfn * self.page_ext_size)
             else:
-                pfn_index = pfn - (self.ramdump.phys_offset >> 12)
+                pfn_index = pfn - (self.ramdump.phys_offset >> self.ramdump.page_shift)
                 temp_page_ext = page_ext + (pfn_index * self.page_ext_size)
 
             if self.ramdump.kernel_version >= (4, 9, 0):
@@ -138,10 +199,27 @@ class PageTracking(RamParser):
                 order = self.ramdump.read_structure_field(
                             temp_page_ext, 'struct page_ext', 'order')
 
+            alloc_str = ''
             if not self.ramdump.is_config_defined('CONFIG_STACKDEPOT'):
                 nr_trace_entries = self.ramdump.read_int(
                     temp_page_ext + self.nr_entries_offset)
                 struct_holding_trace_entries = temp_page_ext
+
+                if nr_trace_entries is not None:
+                    if  nr_trace_entries > 0 and nr_trace_entries <= 16:
+                        for i in range(0, nr_trace_entries):
+                            addr = self.ramdump.read_word(
+                                    struct_holding_trace_entries + self.trace_entries_offset + i *
+                                    self.trace_entry_size)
+                            if not addr:
+                                break
+                            look = self.ramdump.unwind_lookup(addr)
+                            if look is None:
+                                break
+                            symname, offset = look
+                            unwind_dat = '      [<{0:x}>] {1}+0x{2:x}\n'.format(
+                                addr, symname, offset)
+                            alloc_str = alloc_str + unwind_dat
             else:
                 if self.ramdump.kernel_version >= (4, 9, 0):
                     if not alloc:
@@ -156,24 +234,9 @@ class PageTracking(RamParser):
 
                 if handle == 0 or handle == None:
                     return -1, -1, -1, -1, -1, -1
-                if self.ramdump.kernel_version >= (6, 1, 0):
-                    slabindex = handle & 0xffff
-                    handle_offset = (handle >> 0x10) & 0x3ff
-                else:
-                    slabindex = handle & 0x1fffff
-                    handle_offset = (handle >> 0x15) & 0x3ff
-                handle_offset = handle_offset << 4
 
-                slab = self.ramdump.read_word(
-                    self.stack_slabs + (self.stack_slabs_size * slabindex))
-                if slab is None:
-                    return -1, -1, -1, -1, -1, -1
-                stack = slab + handle_offset
+                nr_trace_entries, stack_addrs, alloc_str = self.stackdepot.stack_depot_fetch(handle)
 
-                nr_trace_entries = self.ramdump.read_structure_field(
-                    stack, 'struct stack_record', 'size')
-
-                struct_holding_trace_entries = stack
         if nr_trace_entries is None:
             return -1, -1, -1, -1, -1, -1
         if nr_trace_entries <= 0 or nr_trace_entries > 16:
@@ -181,23 +244,30 @@ class PageTracking(RamParser):
         if order >= self.max_order:
             return -1, -1, -1, -1, -1, -1
 
-        alloc_str = ''
-        for i in range(0, nr_trace_entries):
-            addr = self.ramdump.read_word(
-                    struct_holding_trace_entries + self.trace_entries_offset + i *
-                    self.trace_entry_size)
-
-            if not addr:
-                break
-            look = self.ramdump.unwind_lookup(addr)
-            if look is None:
-                break
-            symname, offset = look
-            unwind_dat = '      [<{0:x}>] {1}+0x{2:x}\n'.format(
-                addr, symname, offset)
-            alloc_str = alloc_str + unwind_dat
-
         return alloc_str, order, pid, ts_nsec, gfp, comm
+
+@register_parser('--print-pagetracking', 'print page tracking information (if available)')
+class PageTracking(RamParser):
+
+    def __init__(self, *args):
+        super(PageTracking, self).__init__(*args)
+        '''
+        Following based upon definition in include/linux/mmzone.h
+
+        #ifndef CONFIG_FORCE_MAX_ZONEORDER
+        #define MAX_ORDER 11
+        #else
+        #define MAX_ORDER CONFIG_FORCE_MAX_ZONEORDER
+        #endif
+        '''
+        try:
+            self.max_order = int(self.ramdump.get_config_val(
+                                "CONFIG_FORCE_MAX_ZONEORDER"))
+        except:
+            self.max_order = 11
+
+        self.pagetrace = PageTrace(self.ramdump)
+        return
 
     def parse_output(self, pfn, out_tracking, out_tracking_freed,
                      page_size, sorted_pages):
@@ -207,7 +277,7 @@ class PageTracking(RamParser):
         order = 0
         if (page_buddy(self.ramdump, page) or
             page_count(self.ramdump, page) == 0):
-            function_list, order, pid, ts_nsec, gfp, comm = self.page_trace(pfn, False)
+            function_list, order, pid, ts_nsec, gfp, comm = self.pagetrace.page_trace(pfn, False)
             if function_list == -1:
                 return
             out_tracking_freed.write(str_f.format(pfn, pfn + (1 << order) - 1,
@@ -216,7 +286,7 @@ class PageTracking(RamParser):
                                                   ts_nsec, gfp, function_list))
             return
 
-        function_list, order, pid, ts_nsec, gfp, comm = self.page_trace(pfn, True)
+        function_list, order, pid, ts_nsec, gfp, comm = self.pagetrace.page_trace(pfn, True)
         if function_list == -1:
             return
         if order >= self.max_order:
@@ -312,8 +382,8 @@ class PageTracking(RamParser):
                 g_optimization = True
                 k, ranges = arg.split("=")
                 start, end = ranges.split('-')
-                start_pfn = int(start, 16) >> 12
-                end_pfn = int(end, 16) >> 12
+                start_pfn = int(start, 16) >> self.ramdump.page_shift
+                end_pfn = int(end, 16) >> self.ramdump.page_shift
                 break
             elif "page=" in arg:
                 g_optimization = True
@@ -343,7 +413,7 @@ class PageTracking(RamParser):
         out_frequency = self.ramdump.open_file('page_frequency.txt')
         out_tracking_freed = self.ramdump.open_file('page_tracking_freed.txt')
         sorted_pages = {}
-        page_size = 4
+        page_size = self.ramdump.get_page_size() >> 10 #KB
 
         if g_optimization is True:
             for pfn in range(start_pfn, end_pfn):
