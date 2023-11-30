@@ -127,6 +127,11 @@ class IrqParse(RamParser):
         radix_tree_map_shift = 6
         radix_tree_map_mask = 0x3f
 
+        # if CONFIG_BASE_SMALL=1: radix_tree_map_shift = 4
+        if self.ramdump.is_config_defined("CONFIG_BASE_SMALL"):
+            radix_tree_map_shift = 4
+            radix_tree_map_mask = 0xf
+
         rnode_addr = ram_dump.read_word(root_addr + rnode_offset)
         if self.is_internal_node(rnode_addr):
             node_addr = self.entry_to_node(rnode_addr)
@@ -219,8 +224,11 @@ class IrqParse(RamParser):
             irq_stats_str = irq_stats_str + \
                 '{0:10} '.format('{0}'.format(irq_statsn))
 
-        chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
-        chip_name = self.ramdump.read_cstring(chip.name, 48)
+        try:
+            chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
+            chip_name = self.ramdump.read_cstring(chip.name, 48)
+        except:
+            chip_name = "None"
 
         if irq_desc.action != 0:
             irqaction = self.ramdump.read_datatype(irq_desc.action, 'struct irqaction', attr_list=['name'])
@@ -250,7 +258,7 @@ class IrqParse(RamParser):
             return
 
         major, minor, patch = ram_dump.kernel_version
-        if (major, minor) >= (6, 5):
+        if (major, minor) >= (6, 4):
             irq_desc = []
             mt_walk = maple_tree.MapleTreeWalker(ram_dump)
             sparse_irqs_addr = ram_dump.address_of('sparse_irqs')

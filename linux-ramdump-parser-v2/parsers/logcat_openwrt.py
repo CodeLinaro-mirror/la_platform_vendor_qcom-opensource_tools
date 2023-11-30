@@ -15,6 +15,8 @@ from parser_util import RamParser
 from print_out import print_out_str
 from utasklib import UTaskLib
 import datetime
+import logging
+import os
 
 class Logcat_openwrt(RamParser):
     '''
@@ -114,6 +116,12 @@ class Logcat_openwrt(RamParser):
             self.addr_length = 4
         self.SIZEOF_LOG_HEAD = 32
 
+        # logger init
+        self.logger = logging.getLogger(__name__)
+        path = os.path.join(self.ramdump.outdir, 'logcat_debug_log.txt')
+        self.logger.addHandler(logging.FileHandler(path, mode='w'))
+        self.logger.setLevel(logging.INFO)
+
     def LOG_PRI(self, p):
         return (p) & self.LOG_PRIMASK
 
@@ -138,7 +146,7 @@ class Logcat_openwrt(RamParser):
         while h != self.log_newest_addr and h <= self.log_end_addr and h >= self.log_start_addr:
             size = self.read_bytes(h, 4)
             if size > 1024:
-                print_out_str("invalid size(%x), expected <= 1024" % size)
+                self.logger.warning("invalid size(%x), expected <= 1024" % size)
                 break
             yield h
 
@@ -183,6 +191,39 @@ class Logcat_openwrt(RamParser):
         timestamp = date.strftime("%m-%d %H:%M:%S") + '.' + tv_nsec
         return timestamp
 
+    def is_valid_logd_addr(self, addr):
+        try:
+
+            self.log_start_addr = self.read_bytes(addr + self.addr_length, self.addr_length)
+            self.log_end_addr = self.read_bytes(addr, self.addr_length)
+            self.log_oldest_addr = self.read_bytes(addr + 11 * self.addr_length, self.addr_length)
+            self.log_newest_addr = self.read_bytes(addr + 10 * self.addr_length, self.addr_length)
+
+            if not self.log_start_addr or not self.log_end_addr \
+                    or not self.log_oldest_addr or not self.log_newest_addr:
+                self.logger.debug("Can't find log/log_end/oldest/newest address, LogBuffer address was not found on addr=0x%x" % addr)
+                return False
+
+            if self.log_start_addr < self.log_end_addr and \
+                    self.log_start_addr <= self.log_oldest_addr <= self.log_end_addr and \
+                    self.log_start_addr <= self.log_newest_addr <= self.log_end_addr:
+
+                self.logger.debug("log_start 0x%x log_end 0x%x log_oldest 0x%x log_newest 0x%x" % (
+                self.log_start_addr, self.log_end_addr, self.log_oldest_addr, self.log_newest_addr))
+
+                ## check buffer size is valid
+                buffer_size = int((self.log_end_addr - self.log_start_addr)/1024)
+                if buffer_size > 1024:
+                    return False
+                print_out_str("log buffer size %d k" % buffer_size)
+                return True
+            else:
+                self.logger.debug("invalid address--> log_start 0x%x log_end 0x%x log_oldest 0x%x log_newest 0x%x" % (
+                self.log_start_addr, self.log_end_addr, self.log_oldest_addr, self.log_newest_addr))
+                return False
+        except:
+            return False
+
     def parse(self):
         startTime = datetime.datetime.now()
 
@@ -197,32 +238,24 @@ class Logcat_openwrt(RamParser):
             return
 
         if self.ramdump.arm64:
-            log_end_offset = 0x330
+            log_end_offset = 0x328
+            addr_length = 8
         else:
-            log_end_offset = 0x1ec
+            log_end_offset = 0x1e0
+            addr_length = 4
 
-        addr= data_start + log_end_offset
-        self.log_start_addr = self.read_bytes(addr + self.addr_length, self.addr_length)
-        self.log_end_addr = self.read_bytes(addr, self.addr_length)
-        self.log_oldest_addr = self.read_bytes(addr + 11 * self.addr_length, self.addr_length)
-        self.log_newest_addr = self.read_bytes(addr + 10 * self.addr_length, self.addr_length)
+        valid = self.is_valid_logd_addr(vma.vm_start + log_end_offset)
+        if not valid:
+            ## continue to search
+            print_out_str("log address was not found with offset 0x%x, go through whole vma" % log_end_offset)
+            addr = vma.vm_start
+            while addr < (vma.vm_end):
+                valid = self.is_valid_logd_addr(addr)
+                if valid:
+                    print_out_str("found logd addr offset is 0x%x" % (addr - vma.vm_start))
+                    break
+                addr += addr_length
 
-        if not self.log_start_addr or not self.log_end_addr \
-                or not self.log_oldest_addr or not self.log_newest_addr:
-            print_out_str("Can't find log/log_end/oldest/newest address, LogBuffer address was not found")
-            return
-
-        # valid address
-        if self.log_start_addr < self.log_end_addr and \
-                self.log_start_addr <= self.log_oldest_addr <= self.log_end_addr and \
-                self.log_start_addr <= self.log_newest_addr <= self.log_end_addr:
-
-            print_out_str("log_start 0x%x log_end 0x%x log_oldest 0x%x log_newest 0x%x" % (
-            self.log_start_addr, self.log_end_addr, self.log_oldest_addr, self.log_newest_addr))
-            print_out_str("log buffer size %d k" % int((self.log_end_addr - self.log_start_addr)/1024))
-
+        if valid:
             self.process_logbuf_and_save()
-            print_out_str("Logcat parse cost " + str((datetime.datetime.now() - startTime).total_seconds()) + " s")
-        else:
-            print_out_str("invalid address--> log_start 0x%x log_end 0x%x log_oldest 0x%x log_newest 0x%x" % (
-            self.log_start_addr, self.log_end_addr, self.log_oldest_addr, self.log_newest_addr))
+        print_out_str("Logcat parse cost " + str((datetime.datetime.now() - startTime).total_seconds()) + " s")

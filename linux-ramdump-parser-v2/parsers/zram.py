@@ -60,23 +60,26 @@ class Zram(RamParser):
         self.init_config()
 
     def init_config(self):
-        if self.ramdump.is_config_defined('CONFIG_ARM64_PAGE_SHIFT'):
-            self.PAGE_SHIFT = int(self.ramdump.get_config_val('CONFIG_ARM64_PAGE_SHIFT'))
-        else:
-            self.PAGE_SHIFT = 12
-
         if (self.ramdump.kernel_version) < (6, 1, 0):
             self.__SWP_TYPE_SHIFT = 2
             self.__SWP_TYPE_BITS = 6
+
+            if self.ramdump.is_config_defined('CONFIG_ARM'):
+                self.__SWP_TYPE_BITS = 5
+
             self.ZRAM_FLAG_SHIFT = 24
             self.HUGE_BITS = 0
         else:
             self.__SWP_TYPE_SHIFT = 3
             self.__SWP_TYPE_BITS = 5
-            self.ZRAM_FLAG_SHIFT = self.PAGE_SHIFT + 1
+            self.ZRAM_FLAG_SHIFT = self.ramdump.page_shift + 1
             self.HUGE_BITS = 1
 
         self.__SWP_OFFSET_BITS = 50
+
+        if self.ramdump.is_config_defined('CONFIG_ARM'):
+            self.__SWP_OFFSET_BITS = 0
+
         self.__SWP_TYPE_MASK = ((1 << self.__SWP_TYPE_BITS) - 1)
         self.__SWP_OFFSET_SHIFT = (self.__SWP_TYPE_BITS + self.__SWP_TYPE_SHIFT)
         self.__SWP_OFFSET_MASK = ((1 << self.__SWP_OFFSET_BITS) - 1)
@@ -87,9 +90,26 @@ class Zram(RamParser):
         self.sizeof_long = self.ramdump.sizeof("unsigned long")
         self.ZS_HANDLE_SIZE = self.sizeof_long
 
-        self.PAGE_SIZE = 1 << self.PAGE_SHIFT
-        self._PFN_BITS = (self.MAX_POSSIBLE_PHYSMEM_BITS - self.PAGE_SHIFT)
-        self.OBJ_INDEX_BITS = (self.BITS_PER_LONG - self._PFN_BITS - self.OBJ_TAG_BITS) # 64-36 -1 = 27
+        self.PAGE_SIZE = 1 << self.ramdump.page_shift
+
+        try:
+            self.pgtable_levels = int(self.ramdump.get_config_val("CONFIG_PGTABLE_LEVELS"))
+        except:
+            self.pgtable_levels = 3
+
+        if self.pgtable_levels == 2 and self.ramdump.is_config_defined('CONFIG_ARM'):
+            self.MAX_POSSIBLE_PHYSMEM_BITS = 32
+
+        if self.pgtable_levels == 3 and self.ramdump.is_config_defined('CONFIG_ARM'):
+            self.MAX_POSSIBLE_PHYSMEM_BITS = 40
+
+        self._PFN_BITS = (self.MAX_POSSIBLE_PHYSMEM_BITS - self.ramdump.page_shift)
+
+        if not self.ramdump.is_config_defined('CONFIG_64BIT'):
+            self.BITS_PER_LONG = 32
+
+        # 64-36-1 = 27 for 64bit and 32-20-1 = 11 for 32bit(pgtable_levels = 2)
+        self.OBJ_INDEX_BITS = (self.BITS_PER_LONG - self._PFN_BITS - self.OBJ_TAG_BITS)
         self.OBJ_INDEX_MASK = (1 << self.OBJ_INDEX_BITS) -1
         self.fullness_group = ['ZS_EMPTY', 'ZS_ALMOST_EMPTY','ZS_ALMOST_FULL','ZS_FULL']
 
@@ -309,7 +329,11 @@ class Zram(RamParser):
         stats_offset = self.ramdump.field_offset('struct size_class', 'stats')
         objs_address = size_class_value + stats_offset
         max_node_stat_item = self.ramdump.gdbmi.get_value_of('NR_ZS_STAT_TYPE')
-        class_stat_type_names = self.ramdump.gdbmi.get_enum_lookup_table('class_stat_type', max_node_stat_item)
+        try:
+            class_stat_type_names = self.ramdump.gdbmi.get_enum_lookup_table('class_stat_type', max_node_stat_item)
+        except:
+            class_stat_type_names = self.ramdump.gdbmi.get_enum_lookup_table('zs_stat_type', max_node_stat_item)
+
         self.print_unsigned_long_stat(output_file, class_stat_type_names, objs_address,
                 max_node_stat_item)
 
@@ -321,8 +345,12 @@ class Zram(RamParser):
         print("             size_class base 0x%x " % (size_class), file=self.fout)
         size_class_list = []
         ZS_SIZE_CLASSES = 255
+        # pointer array member offset for struct size_class *size_class[ZS_SIZE_CLASSES]
+        offset_size = 8
+        if not self.ramdump.is_config_defined('CONFIG_64BIT'):
+            offset_size = 4
         for i in range(0, ZS_SIZE_CLASSES):
-            size_class_index = size_class +  i * 8
+            size_class_index = size_class +  i * offset_size
             size_class_value = self.ramdump.read_pointer(size_class_index)
             if size_class_value in size_class_list:
                 continue
@@ -359,6 +387,13 @@ class Zram(RamParser):
             self.ramdump.outdir), "zram")
         if os.path.exists(self.output_dir) is False:
             os.makedirs(self.output_dir)
+
+        if self.ramdump.get_config_val("CONFIG_ZRAM") == 'm' and 'zram' not in self.ramdump.ko_file_names:
+            print_out_str("zram is not set")
+            return
+        if not self.ramdump.is_config_defined('CONFIG_ZRAM'):
+            print_out_str("zram is not set")
+            return
 
         if self.ramdump.kernel_version >= (5, 4):
             zram_index_idr = self.ramdump.address_of('zram_index_idr')
