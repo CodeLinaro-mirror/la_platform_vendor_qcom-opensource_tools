@@ -22,7 +22,10 @@ class StackDepot(object):
     def __init__(self, ramdump):
         self.ramdump = ramdump
 
-        self.stack_slabs = self.ramdump.address_of('stack_slabs')
+        if self.ramdump.field_offset('union handle_parts', 'pool_index') is not None:
+            self.stack_slabs = self.ramdump.address_of('stack_pools')
+        else:
+            self.stack_slabs = self.ramdump.address_of('stack_slabs')
         self.stack_slabs_size = self.ramdump.sizeof('void *')
         self.stack_trace_entry_size = self.ramdump.sizeof('unsigned long')
         self.stack_trace_entries_offset = self.ramdump.field_offset(
