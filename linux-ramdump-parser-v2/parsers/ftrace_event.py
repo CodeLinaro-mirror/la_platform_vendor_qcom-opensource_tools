@@ -587,13 +587,15 @@ class FtraceParser_Event(object):
                     e for floating-point in an exponent format
                 """
 
-                regex = re.compile('%[\*]*[a-z]+')
+                regex = re.compile('%[\*]*[a-zA-Z]+')
                 length = 0
                 print_buffer = []
                 print_buffer_offset = ftrace_raw_entry + print_entry_buf_offset
 
 
                 if print_entry_fmt_data:
+                    prev_match = None
+                    unaligned_print_buffer_offset = None
                     for match in regex.finditer(print_entry_fmt_data):
                         replacement = match.group()
                         if 'c' in match.group():
@@ -653,7 +655,30 @@ class FtraceParser_Event(object):
                                 print_buffer.append(addr)
                                 print_buffer_offset += 4
 
-                        elif '%p' in match.group() and '%ps' not in match.group():
+                        elif '%pS' in match.group():
+                            replacement = "%s(%x)"
+                            if self.ramdump.arm64:
+                                addr = self.ramdump.read_u64(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                else:
+                                    wname = '{}+{}'.format(wname[0], hex(wname[1]))
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 8
+                            else:
+                                addr = self.ramdump.read_u32(print_buffer_offset)
+                                wname = self.ramdump.unwind_lookup(addr)
+                                if wname is None:
+                                    wname = 'na'
+                                else:
+                                    wname = '{}+{}'.format(wname[0], hex(wname[1]))
+                                print_buffer.append(wname)
+                                print_buffer.append(addr)
+                                print_buffer_offset += 4
+
+                        elif '%p' in match.group() and '%ps' not in match.group() and '%pS' not in match.group():
                             replacement = "%x"
                             if self.ramdump.arm64:
                                 print_buffer.append(self.ramdump.read_u64(print_buffer_offset))
@@ -673,6 +698,8 @@ class FtraceParser_Event(object):
 
                         elif 's' in match.group():
                             replacement = "%s"
+                            if prev_match is not None and '%s' in prev_match:
+                                print_buffer_offset = unaligned_print_buffer_offset
                             sdata = self.ramdump.read_cstring(print_buffer_offset)
                             print_buffer.append(sdata)
                             print_buffer_offset = print_buffer_offset + len(sdata) + 1
@@ -718,6 +745,8 @@ class FtraceParser_Event(object):
                             print_entry_fmt_data = print_entry_fmt_data.replace(match.group(), replacement)
 
                         length += 1
+                        prev_match = match.group()
+                        unaligned_print_buffer_offset = print_buffer_offset
                         align = self.ramdump.sizeof("int") - 1
                         print_buffer_offset = (print_buffer_offset + (align)) & (~align)
 
