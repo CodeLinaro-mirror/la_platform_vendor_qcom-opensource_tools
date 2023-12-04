@@ -1,5 +1,5 @@
 # Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -182,10 +182,14 @@ def dump_cpufreq_data(ramdump):
 
         cap_orig = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity_orig')
         curr_cap = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity')
+        # thermal_pressure is architecture(ARM/ARM64) and kconfig(CONFIG_ARM_CPU_TOPOLOGY) related
         if (ramdump.kernel_version >= (5, 10, 0)):
-            max_thermal_cap = (1 << SCHED_CAPACITY_SHIFT)
-            thermal_pressure = ramdump.read_u64(ramdump.address_of('thermal_pressure') + ramdump.per_cpu_offset(i))
-            thermal_cap = max_thermal_cap - thermal_pressure
+            try:
+                max_thermal_cap = (1 << SCHED_CAPACITY_SHIFT)
+                thermal_pressure = ramdump.read_u64(ramdump.address_of('thermal_pressure') + ramdump.per_cpu_offset(i))
+                thermal_cap = max_thermal_cap - thermal_pressure
+            except Exception as err:
+                print(err)
         else:
             try:
                 thermal_cap = ramdump.read_word(ramdump.array_index(ramdump.address_of('thermal_cap_cpu'), 'unsigned long', i))
@@ -197,11 +201,11 @@ def dump_cpufreq_data(ramdump):
         anomaly = Anomaly()
         anomaly.setOutputDir(ramdump.outdir)
         if max_freq != cpuinfo_max_freq:
-            anomaly_str = "cpu {0} max frequency got tempered curr max limit : {1} actual max limit : {2}\n"\
+            anomaly_str = "cpu {0} max frequency got tempered. Curr max limit : {1} actual max limit : {2}\n"\
                         .format(i, max_freq, cpuinfo_max_freq)
             anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
         if min_freq != cpuinfo_min_freq:
-            anomaly_str = "cpu {0} min frequency got tempered curr max limit : {1} actual min limit : {2}\n" \
+            anomaly_str = "cpu {0} min frequency got tempered. Curr min limit : {1} actual min limit : {2}\n" \
                 .format(i, min_freq, cpuinfo_min_freq)
             anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
         try:
