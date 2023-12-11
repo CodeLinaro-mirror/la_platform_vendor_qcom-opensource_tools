@@ -738,9 +738,13 @@ class RamDump():
 
         return 0
 
-    def get_kimage_vaddr(self):
+    def get_kimage_vaddr(self, need_aslr=True):
         kimage_vaddr = None
-        if self.get_kernel_version() > (4, 20, 0):
+        if self.get_kernel_version() >= (6, 1, 0):
+            kimage_vaddr = self.address_of('_text')
+            if need_aslr:
+                kimage_vaddr -= self.kaslr_offset
+        elif self.get_kernel_version() > (4, 20, 0):
             if self.get_kernel_version() >= (6, 4, 0):
                 modules_vsize = 0x80000000
             else:
@@ -1037,9 +1041,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
+                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
             else:
                 self.page_offset = 0xffffffc000000000
-            self.thread_size = 16384
+                self.thread_size = 16384
         if options.page_offset is not None:
             print_out_str(
                 '[!!!] Page offset was set to {0:x}'.format(page_offset))
@@ -1840,13 +1845,14 @@ class RamDump():
                 self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
 
                 try:
+                    self.dynamic_kaslr_offset = None
                     kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    kimage_vaddr = self.get_kimage_vaddr()
+                    kimage_vaddr = self.get_kimage_vaddr(need_aslr=False)
                     kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
                     kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
                     kimage_va = struct.unpack('<Q', kimage_va_temp)
                     kimage_va = int(kimage_va[0])
-                    if kimage_va > kimage_vaddr:
+                    if kimage_va >= kimage_vaddr:
                         self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
                 except:
@@ -3082,6 +3088,8 @@ class RamDump():
             task_struct = self.read_word(task_address, True)
 
         cpu_number = self.get_task_cpu(task_struct, thread_info_address)
+        if cpu_number is None:
+            return -1
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
