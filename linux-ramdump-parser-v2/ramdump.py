@@ -3088,6 +3088,8 @@ class RamDump():
             task_struct = self.read_word(task_address, True)
 
         cpu_number = self.get_task_cpu(task_struct, thread_info_address)
+        if cpu_number is None:
+            return -1
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
@@ -3263,9 +3265,7 @@ class RamDump():
             raise InvalidDatatype
 
     def __unpack_format(self, size, ty):
-        if ty == "char":
-            return "<B"
-        elif ty == "bool" or ty == "_Bool":
+        if ty == "bool" or ty == "_Bool":
             return "<?"
         elif "float" in ty:
             return "<f"

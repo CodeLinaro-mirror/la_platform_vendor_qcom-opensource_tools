@@ -573,8 +573,6 @@ class FtraceParser_Event(object):
                 print_entry_fmt_data = self.ramdump.read_cstring(print_entry_fmt, MAX_LEN)
                 #print_ip_func = self.ramdump.read_cstring(print_ip)
 
-                function = self.ramdump.get_symbol_info1(print_ip)
-
                 """
                 ['%px', '%llx', '%ps', '%p']
                 Supported :
@@ -592,8 +590,8 @@ class FtraceParser_Event(object):
                 print_buffer = []
                 print_buffer_offset = ftrace_raw_entry + print_entry_buf_offset
 
-
                 if print_entry_fmt_data:
+                    function = self.ramdump.get_symbol_info1(print_ip)
                     prev_match = None
                     unaligned_print_buffer_offset = None
                     for match in regex.finditer(print_entry_fmt_data):
@@ -750,16 +748,16 @@ class FtraceParser_Event(object):
                         align = self.ramdump.sizeof("int") - 1
                         print_buffer_offset = (print_buffer_offset + (align)) & (~align)
 
-                try:
-                    temp_data = "                {4}    {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
-                                                                                                        local_timestamp / 1000000000.0,
-                                                                                                        function,print_entry_fmt_data% (
-                                                                                                        tuple(print_buffer)),
-                                                                                                        curr_com)
-                    self.ftrace_time_data[t].append(temp_data)
-                except Exception as err:
-                    temp_data = "Error parsing bprint event entry"
-                    return
+                    try:
+                        temp_data = "                {4}    {0}  {1:.6f}:   bprint:        {2} {3}\n".format(self.cpu,
+                                                                                                            local_timestamp / 1000000000.0,
+                                                                                                            function,print_entry_fmt_data% (
+                                                                                                            tuple(print_buffer)),
+                                                                                                            curr_com)
+                        self.ftrace_time_data[t].append(temp_data)
+                    except Exception as err:
+                        temp_data = "Error parsing bprint event entry"
+                        return
 
         elif event_name == "print":
                 #print "ftrace_raw_entry = {0}".format(hex(ftrace_raw_entry))
