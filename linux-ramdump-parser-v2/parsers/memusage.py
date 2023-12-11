@@ -146,20 +146,20 @@ def do_dump_process_memory(ramdump):
         adj = ramdump.read_u16(signal_struct + offset_adj)
         if adj & 0x8000:
             adj = adj - 0x10000
-        rss, swap = get_rss(ramdump, task)
+        rss, swap, anon_rss, file_rss, shmem_rss = get_rss(ramdump, task)
         if rss != 0 or swap != 0:
-            task_info.append([thread_task_name, thread_task_pid, rss, swap, rss + swap, adj])
+            task_info.append([thread_task_name, thread_task_pid, rss, swap, rss + swap, adj, anon_rss, file_rss, shmem_rss])
 
     task_info = sorted(task_info, key=lambda l: l[4], reverse=True)
-    str = '{0:<17s}{1:>8s}{2:>19s}{3:>19s}{4:>6}\n'.format(
-        'Task name', 'PID', 'RSS in kB', 'SWAP in kB', 'ADJ')
+    str = '{0:<17s}{1:>8s}{2:>19s}{3:>19s}{4:>6}{5:>16}{6:>16}{7:>16}\n'.format(
+        'Task name', 'PID', 'RSS in kB', 'SWAP in kB', 'ADJ', "anon_rss in kB", "file_rss in kB", "shmem_rss in kB")
     memory_file.write(str)
     for item in task_info:
-        str = '{taskname:<17s}{pid:8d}{rss:13,d}({rss_pct:2.1f}%){swap:13,d}({swap_pct:2.1f}%){adj:6}\n'.format(
+        str = '{taskname:<17s}{pid:8d}{rss:13,d}({rss_pct:4.1f}%){swap:13,d}({swap_pct:2.1f}%){adj:6} {anon_rss:>16,d} {file_rss:>16,d} {shmem_rss:>10,d}\n'.format(
             taskname = item[0], pid = item[1],
             rss = item[2], rss_pct = (100.0 * item[2]) / total_mem,
             swap = item[3], swap_pct = (100.0 * item[3]) / total_mem,
-            adj = item[5])
+            adj = item[5], anon_rss=item[6], file_rss=item[7], shmem_rss=item[8])
         memory_file.write(str)
     memory_file.close()
     print_out_str('---wrote meminfo to memory.txt')
@@ -175,7 +175,7 @@ def get_rss(ramdump, task_struct):
     offset_rss_stat = ramdump.field_offset('struct mm_struct', 'rss_stat')
     mm_struct = ramdump.read_word(task_struct + offset_mm)
     if mm_struct == 0:
-        return 0, 0
+        return 0, 0, 0, 0, 0
     if ramdump.kernel_version >= (6, 2):
         # /* 6.2: struct percpu_counter rss_stat[NR_MM_COUNTERS] */
         mm = ramdump.read_datatype(mm_struct, 'struct mm_struct')
@@ -208,7 +208,7 @@ def get_rss(ramdump, task_struct):
     if shmem_rss > 0x80000000:
         shmem_rss = 0
     total_rss = anon_rss + file_rss + shmem_rss
-    return total_rss * 4, swap_rss * 4
+    return total_rss * 4 , swap_rss * 4 , anon_rss * 4 , file_rss * 4,  shmem_rss * 4
 
 
 @register_parser('--print-memory-info', 'Print memory usage info')
