@@ -224,8 +224,11 @@ class IrqParse(RamParser):
             irq_stats_str = irq_stats_str + \
                 '{0:10} '.format('{0}'.format(irq_statsn))
 
-        chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
-        chip_name = self.ramdump.read_cstring(chip.name, 48)
+        try:
+            chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
+            chip_name = self.ramdump.read_cstring(chip.name, 48)
+        except:
+            chip_name = "None"
 
         if irq_desc.action != 0:
             irqaction = self.ramdump.read_datatype(irq_desc.action, 'struct irqaction', attr_list=['name'])
