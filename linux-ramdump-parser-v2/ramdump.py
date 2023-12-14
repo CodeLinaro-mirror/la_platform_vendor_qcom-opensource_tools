@@ -738,9 +738,13 @@ class RamDump():
 
         return 0
 
-    def get_kimage_vaddr(self):
+    def get_kimage_vaddr(self, need_aslr=True):
         kimage_vaddr = None
-        if self.get_kernel_version() > (4, 20, 0):
+        if self.get_kernel_version() >= (6, 1, 0):
+            kimage_vaddr = self.address_of('_text')
+            if need_aslr:
+                kimage_vaddr -= self.kaslr_offset
+        elif self.get_kernel_version() > (4, 20, 0):
             if self.get_kernel_version() >= (6, 4, 0):
                 modules_vsize = 0x80000000
             else:
@@ -1037,9 +1041,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
+                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
             else:
                 self.page_offset = 0xffffffc000000000
-            self.thread_size = 16384
+                self.thread_size = 16384
         if options.page_offset is not None:
             print_out_str(
                 '[!!!] Page offset was set to {0:x}'.format(page_offset))
@@ -1840,13 +1845,14 @@ class RamDump():
                 self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
 
                 try:
+                    self.dynamic_kaslr_offset = None
                     kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    kimage_vaddr = self.get_kimage_vaddr()
+                    kimage_vaddr = self.get_kimage_vaddr(need_aslr=False)
                     kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
                     kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
                     kimage_va = struct.unpack('<Q', kimage_va_temp)
                     kimage_va = int(kimage_va[0])
-                    if kimage_va > kimage_vaddr:
+                    if kimage_va >= kimage_vaddr:
                         self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
                 except:
@@ -3033,54 +3039,43 @@ class RamDump():
             if (next == init_task):
                 break
 
+    '''
+    task_struct->signal->thread_head
+                struct list_head {
+                    struct list_head *next; -->task_struct->thread_node
+                    struct list_head *prev; -->task_struct->thread_node
+                } thread_head;
+    '''
     def for_each_thread(self, task_addr):
-        thread_group_offset = self.field_offset(
-                            'struct task_struct', 'thread_group')
-        thread_group_pointer = self.read_word(
-                                task_addr + thread_group_offset, True)
-        prev_offset = self.field_offset('struct list_head', 'prev')
-
-        thread_group_pointer = thread_group_pointer - thread_group_offset
-
-        next = thread_group_pointer
-        seen_thread = []
-
-        while(1):
-            task_offset = next + thread_group_offset
-            task_pointer = self.read_word(task_offset, True)
-            if not task_pointer:
-                break
-
-            task_struct = task_pointer - thread_group_offset
-            if (self.validate_task_struct(task_struct) == -1) or (
-                    self.validate_sched_class(task_struct) == -1):
-                    next = thread_group_pointer
-                    while (1):
-                        task_pointer = self.read_word(next +
-                                                      thread_group_offset +
-                                                      prev_offset)
-
-                        if not task_pointer:
-                            break
-                        task_struct = task_pointer - thread_group_offset
-                        if (self.validate_task_struct(task_struct) == -1) or (
-                                self.validate_sched_class(task_struct) == -1):
-                                break
-
-                        yield task_struct
-                        seen_thread.append(task_struct)
-                        next = task_struct
-                        if (next == thread_group_pointer):
-                            break
+        offset_thread_node =self.field_offset(
+            'struct task_struct', 'thread_node')
+        offset_signal = self.field_offset(
+            'struct task_struct', 'signal')
+        offset_thread_head = self.field_offset(
+            'struct signal_struct', 'thread_head')
+        signal_addr = self.read_word(task_addr + offset_signal)
+        thread_head_addr = self.read_word(signal_addr + offset_thread_head)
+        next_thread_head = thread_head_addr
+        seen_threads = []
+        while True:
+            task_addr = next_thread_head - offset_thread_node
+            if (self.validate_task_struct(task_addr) == -1) or (
+                    self.validate_sched_class(task_addr) == -1):
                     break
 
-            if task_struct in seen_thread:
+            yield task_addr
+
+            next_thr = self.read_word(next_thread_head)
+            if (next_thr == next_thread_head) and (next_thr != thread_head_addr):
+                print_out_str('!!!! Cycle in thread group! The list is corrupt!\n')
                 break
 
-            yield task_struct
-            seen_thread.append(task_struct)
-            next = task_struct
-            if (next == thread_group_pointer):
+            if (next_thr in seen_threads):
+                break
+
+            seen_threads.append(next_thr)
+            next_thread_head = next_thr
+            if next_thread_head == thread_head_addr:
                 break
 
     def validate_task_struct(self, task):
@@ -3093,6 +3088,8 @@ class RamDump():
             task_struct = self.read_word(task_address, True)
 
         cpu_number = self.get_task_cpu(task_struct, thread_info_address)
+        if cpu_number is None:
+            return -1
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
@@ -3268,9 +3265,7 @@ class RamDump():
             raise InvalidDatatype
 
     def __unpack_format(self, size, ty):
-        if ty == "char":
-            return "<B"
-        elif ty == "bool" or ty == "_Bool":
+        if ty == "bool" or ty == "_Bool":
             return "<?"
         elif "float" in ty:
             return "<f"
