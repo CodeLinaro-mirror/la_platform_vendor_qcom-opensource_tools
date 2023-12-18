@@ -177,13 +177,15 @@ class ipa_logging(RamParser):
                 pros = props_offset + chan_idx_addr
                 prot = ram_dump.read_u32(prot_offset + pros)
                 prot_enum = ram_dump.gdbmi.get_value_of('GSI_CHAN_PROT_11AD')
+                prot_offset=15 # 15 additional values in the array. When new channels come up, they will be populated here.
                 prot_names = ram_dump.gdbmi.get_enum_lookup_table(
-                    'gsi_chan_prot', prot_enum)
+                    'gsi_chan_prot', prot_enum+prot_offset)
                 ch_id = ram_dump.read_u16(ch_id_offset + chan_idx_addr)
                 state = ram_dump.read_u16(state_offset + chan_idx_addr)
+                gsi_state_offset=5 #5 additional values in the array. When new states come up, they will be populated here.
                 state_enum = ram_dump.gdbmi.get_value_of('GSI_CHAN_STATE_ERROR')
                 state_names = ram_dump.gdbmi.get_enum_lookup_table(
-                    'gsi_chan_state', state_enum)
+                    'gsi_chan_state', state_enum+gsi_state_offset)
 
                 poll_mode = ram_dump.read_u32(poll_mode_offset + chan_idx_addr)
                 ring = ring_offset + chan_idx_addr
