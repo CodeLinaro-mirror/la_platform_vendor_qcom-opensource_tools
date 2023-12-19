@@ -694,7 +694,7 @@ class RamDump():
         vmalloc_start = self.modules_end - self.kaslr_offset
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
 
-            phys_base = 0x1ffffffff
+            phys_base = 0x27fffffff
             phys_end = 0
 
             if self.reduceddump:
@@ -712,8 +712,8 @@ class RamDump():
                     if end > phys_end:
                         phys_end = end
 
-            if phys_end > 0x1ffffffff:
-                phys_end = 0x1ffffffff
+            #if phys_end > 0x27fffffff:
+            #    phys_end = 0x27fffffff
             #mask phys_base lower address for alignment
             phys_base = phys_base & 0xfffff0000
 
