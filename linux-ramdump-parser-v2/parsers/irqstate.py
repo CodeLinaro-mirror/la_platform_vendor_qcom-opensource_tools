@@ -93,6 +93,10 @@ class IrqParse(RamParser):
 
     def shift_to_maxindex(self, shift):
         radix_tree_map_shift = 6
+
+        if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
+            radix_tree_map_shift = 4
+
         radix_tree_map_size = 1 << radix_tree_map_shift
         return (radix_tree_map_size << shift) - 1
 
@@ -126,6 +130,11 @@ class IrqParse(RamParser):
         maxindex = 0
         radix_tree_map_shift = 6
         radix_tree_map_mask = 0x3f
+
+        # if CONFIG_BASE_SMALL=1: radix_tree_map_shift = 4
+        if int(ram_dump.get_config_val("CONFIG_BASE_SMALL")) == 1:
+            radix_tree_map_shift = 4
+            radix_tree_map_mask = 0xf
 
         rnode_addr = ram_dump.read_word(root_addr + rnode_offset)
         if self.is_internal_node(rnode_addr):
@@ -219,8 +228,11 @@ class IrqParse(RamParser):
             irq_stats_str = irq_stats_str + \
                 '{0:10} '.format('{0}'.format(irq_statsn))
 
-        chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
-        chip_name = self.ramdump.read_cstring(chip.name, 48)
+        try:
+            chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
+            chip_name = self.ramdump.read_cstring(chip.name, 48)
+        except:
+            chip_name = "None"
 
         if irq_desc.action != 0:
             irqaction = self.ramdump.read_datatype(irq_desc.action, 'struct irqaction', attr_list=['name'])
@@ -234,32 +246,18 @@ class IrqParse(RamParser):
                 str.format(irqnum, hex(hwirq), hex(affinity),
                     irq_stats_str, name, chip_name, irq_desc_addr))
 
-
-    def print_irq_state_sparse_irq(self, ram_dump):
+    def get_all_irqs_desc(self, ram_dump):
         irq_desc_tree = ram_dump.address_of('irq_desc_tree')
         nr_irqs = ram_dump.read_int(ram_dump.address_of('nr_irqs'))
-        cpu_str = ''
-        for i in ram_dump.iter_cpus():
-            cpu_str = cpu_str + '{0:10} '.format('CPU{0}'.format(i))
-
-        print_out_str('{0:4} {1:12} {2:10} {3} {4:30} {5:15} {6:20}'\
-            .format('IRQ', 'HWIRQ', 'affinity', cpu_str, 
-                'Name', 'Chip', 'IRQ Structure'))
-
-        if nr_irqs > 50000:
-            return
-
         major, minor, patch = ram_dump.kernel_version
-        if (major, minor) >= (6, 5):
-            irq_desc = []
+        irq_descs = []
+
+        if (major, minor) >= (6, 4):
             mt_walk = maple_tree.MapleTreeWalker(ram_dump)
             sparse_irqs_addr = ram_dump.address_of('sparse_irqs')
-            mt_walk.walk(sparse_irqs_addr, self.save_irq_desc, irq_desc)
-            for i in range(len(irq_desc)):
-                self.dump_sparse_irq_state(irq_desc[i])
+            mt_walk.walk(sparse_irqs_addr, self.save_irq_desc, irq_descs)
         else:
             for i in range(0, nr_irqs):
-
                 if (major, minor) >= (4, 9):
                     irq_desc = self.radix_tree_lookup_element_v2(
                         ram_dump, irq_desc_tree, i)
@@ -269,7 +267,26 @@ class IrqParse(RamParser):
 
                 if irq_desc is None:
                     continue
-                self.dump_sparse_irq_state(irq_desc)
+                irq_descs.append(irq_desc)
+        return irq_descs
+
+    def print_irq_state_sparse_irq(self, ram_dump):
+        irq_descs = []
+        nr_irqs = ram_dump.read_int(ram_dump.address_of('nr_irqs'))
+        cpu_str = ''
+        for i in ram_dump.iter_cpus():
+            cpu_str = cpu_str + '{0:10} '.format('CPU{0}'.format(i))
+
+        print_out_str('{0:4} {1:12} {2:10} {3} {4:30} {5:15} {6:20}'\
+            .format('IRQ', 'HWIRQ', 'affinity', cpu_str,
+                'Name', 'Chip', 'IRQ Structure'))
+
+        if nr_irqs > 50000:
+            return
+
+        irq_descs = self.get_all_irqs_desc(ram_dump)
+        for i in range(len(irq_descs)):
+            self.dump_sparse_irq_state(irq_descs[i])
 
     def parse(self):
         irq_desc = self.ramdump.address_of('irq_desc')
