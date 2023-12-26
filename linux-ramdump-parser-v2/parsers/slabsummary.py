@@ -16,8 +16,6 @@ from mm import pfn_to_page
 from parser_util import register_parser, RamParser
 # /kernel/msm-4.4/mm/slub.c
 OO_SHIFT = 16
-PAGE_SHIFT = 12
-
 
 @register_parser('--slabsummary', 'print summary of slab', optional=True)
 class Slabinfo_summary(RamParser):
@@ -143,7 +141,7 @@ class Slabinfo_summary(RamParser):
 
             total_allocated = nr_total_objects - total_freeobjects
             page_order = oo >> OO_SHIFT
-            slab_size = int(math.pow(2, page_order + PAGE_SHIFT))
+            slab_size = int(math.pow(2, page_order + self.ramdump.page_shift))
             slab_size = slab_size // 1024
             slab = self.ramdump.read_word(slab + slab_list_offset)
             slab_summary[nCounter] = [
