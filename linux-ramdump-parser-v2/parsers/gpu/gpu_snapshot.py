@@ -108,8 +108,14 @@ class kgsl_snapshot_gmu_mem_header(Structure):
                 ('gpuaddr_upper', c_uint)]
 
 
-def gmu_log(devp, dump, chipid):
-    if chipid >= 0x7000000:
+def gmu_log(devp, dump, gpurev):
+    if gpurev >= 0x80000:
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen8_device',
+                                          'adreno_dev', 'gmu')
+        gmu_logs = dump.read_structure_field(gmu_dev,
+                                             'struct gen8_gmu_device',
+                                             'gmu_log')
+    elif gpurev >= 0x70000:
         gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
         gmu_logs = dump.read_structure_field(gmu_dev,
@@ -145,8 +151,15 @@ def gmu_log(devp, dump, chipid):
     return (gmu_log_hostptr, gmu_log_size, gmu_log_gmuaddr, gmu_log_gpuaddr)
 
 
-def hfi_mem(devp, dump, chipid):
-    if chipid >= 0x7000000:
+def hfi_mem(devp, dump, gpurev):
+    if gpurev >= 0x80000:
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen8_device',
+                                          'adreno_dev', 'gmu')
+        hfi = dump.struct_field_addr(gmu_dev, 'struct gen8_gmu_device',
+                                     'hfi')
+        hfi_mem = dump.read_structure_field(hfi, 'struct gen8_hfi',
+                                            'hfi_mem')
+    elif gpurev >= 0x70000:
         gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
         hfi = dump.struct_field_addr(gmu_dev, 'struct gen7_gmu_device',
@@ -184,13 +197,13 @@ def hfi_mem(devp, dump, chipid):
     return (hfi_mem_hostptr, hfi_mem_size, hfi_mem_gmuaddr, hfi_mem_gpuaddr)
 
 
-def snapshot_gmu_mem_section(devp, dump, chipid, file, hdr_type):
+def snapshot_gmu_mem_section(devp, dump, gpurev, file, hdr_type):
     if hdr_type == SNAPSHOT_GMU_MEM_HFI:
         (gmu_mem_hostptr, gmu_mem_size, gmu_mem_gmuaddr, gmu_mem_gpuaddr) = \
-            hfi_mem(devp, dump, chipid)
+            hfi_mem(devp, dump, gpurev)
     elif hdr_type == SNAPSHOT_GMU_MEM_LOG:
         (gmu_mem_hostptr, gmu_mem_size, gmu_mem_gmuaddr, gmu_mem_gpuaddr) = \
-            gmu_log(devp, dump, chipid)
+            gmu_log(devp, dump, gpurev)
     else:
         return
 
@@ -314,9 +327,9 @@ def create_snapshot_from_ramdump(devp, dump):
                                        'struct gmu_core_device', 'flags')
     if ((gmu_on >> 4) & 1):
         snapshot_gmu_mem_section(devp,
-                                 dump, chipid, file, SNAPSHOT_GMU_MEM_HFI)
+                                 dump, gpurev, file, SNAPSHOT_GMU_MEM_HFI)
         snapshot_gmu_mem_section(devp,
-                                 dump, chipid, file, SNAPSHOT_GMU_MEM_LOG)
+                                 dump, gpurev, file, SNAPSHOT_GMU_MEM_LOG)
 
     # Dump last section
     last_section = kgsl_snapshot_section_header()
