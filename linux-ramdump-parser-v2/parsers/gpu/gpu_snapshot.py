@@ -109,7 +109,13 @@ class kgsl_snapshot_gmu_mem_header(Structure):
 
 
 def gmu_log(devp, dump, gpurev):
-    if gpurev >= 0x70000:
+    if gpurev >= 0x80000:
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen8_device',
+                                          'adreno_dev', 'gmu')
+        gmu_logs = dump.read_structure_field(gmu_dev,
+                                             'struct gen8_gmu_device',
+                                             'gmu_log')
+    elif gpurev >= 0x70000:
         gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
         gmu_logs = dump.read_structure_field(gmu_dev,
@@ -146,7 +152,14 @@ def gmu_log(devp, dump, gpurev):
 
 
 def hfi_mem(devp, dump, gpurev):
-    if gpurev >= 0x70000:
+    if gpurev >= 0x80000:
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen8_device',
+                                          'adreno_dev', 'gmu')
+        hfi = dump.struct_field_addr(gmu_dev, 'struct gen8_gmu_device',
+                                     'hfi')
+        hfi_mem = dump.read_structure_field(hfi, 'struct gen8_hfi',
+                                            'hfi_mem')
+    elif gpurev >= 0x70000:
         gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
         hfi = dump.struct_field_addr(gmu_dev, 'struct gen7_gmu_device',
