@@ -182,10 +182,14 @@ def dump_cpufreq_data(ramdump):
 
         cap_orig = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity_orig')
         curr_cap = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity')
+        # thermal_pressure is architecture(ARM/ARM64) and kconfig(CONFIG_ARM_CPU_TOPOLOGY) related
         if (ramdump.kernel_version >= (5, 10, 0)):
-            max_thermal_cap = (1 << SCHED_CAPACITY_SHIFT)
-            thermal_pressure = ramdump.read_u64(ramdump.address_of('thermal_pressure') + ramdump.per_cpu_offset(i))
-            thermal_cap = max_thermal_cap - thermal_pressure
+            try:
+                max_thermal_cap = (1 << SCHED_CAPACITY_SHIFT)
+                thermal_pressure = ramdump.read_u64(ramdump.address_of('thermal_pressure') + ramdump.per_cpu_offset(i))
+                thermal_cap = max_thermal_cap - thermal_pressure
+            except Exception as err:
+                print(err)
         else:
             try:
                 thermal_cap = ramdump.read_word(ramdump.array_index(ramdump.address_of('thermal_cap_cpu'), 'unsigned long', i))
