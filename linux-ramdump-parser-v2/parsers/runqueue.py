@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -124,10 +124,12 @@ class RunQueues(RamParser):
         self.print_cgroup_state('curr', curr_se)
         next_se = self.ramdump.read_word(cfs_rq_addr + next_offset)
         self.print_cgroup_state('next', next_se)
-        last_se = self.ramdump.read_word(cfs_rq_addr + last_offset)
-        self.print_cgroup_state('last', last_se)
-        skip_se = self.ramdump.read_word(cfs_rq_addr + skip_offset)
-        self.print_cgroup_state('skip', skip_se)
+        if last_offset:
+            last_se = self.ramdump.read_word(cfs_rq_addr + last_offset)
+            self.print_cgroup_state('last', last_se)
+        if skip_offset:
+            skip_se = self.ramdump.read_word(cfs_rq_addr + skip_offset)
+            self.print_cgroup_state('skip', skip_se)
 
         rb_walker = rb_tree.RbTreeWalker(self.ramdump)
         rb_walker.walk(tasks_timeline_addr, self.cfs_node_func)

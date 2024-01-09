@@ -245,6 +245,20 @@ class DebugImage_v2():
 
         return
 
+    def get_vcpu_index(self, ram_dump, affinity):
+        vcpu_index = 0
+        if affinity:
+            if hasattr(ram_dump.board, 'aff_shift'):
+                aff_shift = ram_dump.board.aff_shift
+            else:
+                aff_shift = [0,0,0,0]
+            tmp_vcpu_index = affinity
+            for i in range(0, len(aff_shift)):
+                vcpu_index |= ((tmp_vcpu_index >> (i * 8)) & 0xff) << aff_shift[i]
+        else:
+            vcpu_index = affinity
+        return vcpu_index
+
     def parse_cpu_ctx(self, version, start, end, client_id, ram_dump,dump_data_name=None):
         core = client_id - client.MSM_DUMP_DATA_CPU_CTX
 
@@ -286,9 +300,10 @@ class DebugImage_v2():
                                 'struct msm_dump_cpu_register_entry', 'regset_addr')
                 if regset_addr_offset is None:
                     regset_addr_offset = 0x8
-                cpu_index = ram_dump.read_u32(start + cpu_index_offset,False)
+                affinity = ram_dump.read_u32(start + cpu_index_offset,False)
+                cpu_index = self.get_vcpu_index(ram_dump, affinity)
                 print_out_str(
-                    'Parsing CPU{2:x} context start {0:x} end {1:x} version {3} client_id-> {4:x}'.format(start, end, cpu_index,version,client_id))
+                    'Parsing CPU{2:d} affinity {5:x} context start {0:x} end {1:x} version {3} client_id-> {4:x}'.format(start, end, cpu_index, version, client_id, affinity))
                 cpu_type = ram_dump.read_u32(start + cpu_type_offset,False)
                 print_out_str("cpu_type = {0}".format(msm_dump_cpu_type[cpu_type]))
                 ctx_type = ram_dump.read_u32(start + ctx_type_offset,False)
@@ -314,8 +329,7 @@ class DebugImage_v2():
                     regset_end = regset_addr + regset_size
                     regset_name_addr[regset_name] = [regset_addr,regset_end]
                 regs = TZRegDump_v2()
-                cpu_index_num = "{0:x}".format(cpu_index >> 8)
-                print("dump_data_name = {0}".format(dump_data_name))
+                cpu_index_num = "{0:d}".format(cpu_index)
                 if dump_data_name and "vm_3" not in dump_data_name:
                     core = "vcpu" + str(cpu_index_num) + "_" + dump_data_name.split('_vcpu_')[0]
                 else:
