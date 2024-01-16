@@ -91,6 +91,8 @@ def get_pathname_by_file(ramdump, file):
     mount = mnt - mnt_offset_in_mount
     mnt_mountpoint_offset = ramdump.field_offset(
         'struct mount', 'mnt_mountpoint')
+    d_parent_offset = ramdump.field_offset(
+        'struct dentry', 'd_parent')
     mnt_parent_pre = 0
     mnt_parent = mount
     mount_name = []
@@ -105,10 +107,21 @@ def get_pathname_by_file(ramdump, file):
             break
         mount_name.append(name)
 
+        # walk to get the fullname of mountpoint
+        d_parent = ramdump.read_word(mnt_mountpoint + d_parent_offset)
+        d_parent_pre = 0
+        while d_parent_pre != d_parent:
+            d_parent_pre = d_parent
+            name = get_dname_of_dentry(ramdump, d_parent)
+            d_parent = ramdump.read_word(d_parent + d_parent_offset)
+            if name == None or name == '/':
+                break
+            mount_name.append(name)
+            if d_parent == 0:
+                break
+
     dentry = ramdump.read_structure_field(
         f_path, 'struct path', 'dentry')
-    d_parent_offset = ramdump.field_offset(
-        'struct dentry', 'd_parent')
     d_parent = dentry
     d_parent_pre = 0
     names = []
@@ -121,6 +134,7 @@ def get_pathname_by_file(ramdump, file):
         names.append(name)
         if d_parent == 0:
             break
+
     full_name = ''
     for item in mount_name:
         names.append(item)
