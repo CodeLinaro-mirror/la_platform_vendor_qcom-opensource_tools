@@ -260,6 +260,15 @@ class GdbMI(object):
         result = self._run_for_one(cmd)
         return result.split("*)")[0].split("= (")[1]
 
+    def print_type(self, type_or_var):
+        cmd = 'ptype {0}'.format(type_or_var)
+        result = self._run(cmd)
+        result = '\n'.join(result.lines)
+        if len(result) > 0:
+            ptype = result.split("=")[1].strip()
+            return ptype
+        return None
+
     def field_offset(self, the_type, field):
         """Returns the offset of a field in a struct or type.
 
