@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2022 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -862,8 +862,11 @@ class FtraceParser_Event(object):
                         if length:
                             length = int(length.group(1))
                         else:
-                            print_out_str("ftrace: unknown length for {} ({})".format(item,))
-                            length = 12  # Chosen arbitrarily
+                            if "[TASK_COMM_LEN]" in type_str:
+                                length = 16
+                            else:
+                                print_out_str("ftrace: unknown length for {} ({})".format(item, type_str))
+                                length = 12  # Chosen arbitrarily
                         v = self.ramdump.read_cstring(ftrace_raw_entry + offset, max_length=length)
                         fmt_name_value_map[item] = v
                     elif 'char' in type_str:
