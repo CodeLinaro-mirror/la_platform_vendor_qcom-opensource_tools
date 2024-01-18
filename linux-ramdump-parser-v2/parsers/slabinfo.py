@@ -672,6 +672,7 @@ class Slabpoison(Slabinfo):
 
     def print_trailer(self, s, page, p, out_file):
         addr = page_address(self.ramdump, page)
+        page_size = self.ramdump.get_page_size()
 
         if self.ramdump.is_config_defined('CONFIG_SLUB_DEBUG_ON'):
             self.print_track(self.ramdump, s.addr, p, 0, out_file)
@@ -683,7 +684,7 @@ class Slabpoison(Slabinfo):
         if (p > addr + 16):
             self.print_section('Bytes b4 ', p - 16, 16, out_file)
 
-        self.print_section('Object ', p, min(s.object_size, 4096), out_file)
+        self.print_section('Object ', p, min(s.object_size, page_size), out_file)
         if (s.flags & SLAB_RED_ZONE):
             self.print_section('Redzone ', p + s.object_size,
                 s.inuse - s.object_size, out_file)
@@ -779,7 +780,7 @@ class Slabpoison(Slabinfo):
             return self.cache[idx:idx + size]
         # accessing only one page
         elif page_addr == end_page_addr:
-            fmtstr = '<{}B'.format(4096)
+            fmtstr = '<{}B'.format(self.ramdump.get_page_size())
             self.cache = self.ramdump.read_string(page_addr, fmtstr)
             self.cache_addr = page_addr
             idx = addr - self.cache_addr

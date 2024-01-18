@@ -20,6 +20,13 @@ LEVEL_INFO = 2
 LEVEL_WARN = 3
 LEVEL_ERROR = 4
 
+LEVEL_MAP = {
+    "DEBUG": LEVEL_DEBUG,
+    "INFO": LEVEL_INFO,
+    "WARN": LEVEL_WARN,
+    "ERROR": LEVEL_ERROR,
+}
+
 def flush_outfile():
     if out_file is None:
         sys.stdout.flush()
@@ -79,3 +86,18 @@ def print_out_section(header):
     print_out_str('\n' + begin_header_string)
     yield
     print_out_str(end_header_string + '\n')
+
+def get_req_loglevel():
+    '''
+    return log level by log_level=[DEBUG|INFO|WARN|ERROR] in command arguments
+    '''
+    level = None
+    for arg in sys.argv:
+        if "log_level=" in arg:
+            _, val = arg.split('=')
+            if val.isdigit():
+                level = int(val)
+            else:
+                level = LEVEL_MAP[val.strip()]
+            break
+    return level if level else LEVEL_ERROR
