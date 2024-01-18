@@ -24,10 +24,9 @@ import stat
 import subprocess
 import enum
 import copy
-
+import threading
 from boards import get_supported_boards, get_supported_ids
 from tempfile import NamedTemporaryFile
-
 import gdbmi
 from print_out import print_out_str
 from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
@@ -37,8 +36,8 @@ import ramreduction_util as elfutil
 from importlib import import_module
 import module_table
 from mm import mm_init
+from register import Register
 
-FP = 11
 SP = 13
 LR = 14
 PC = 15
@@ -332,7 +331,7 @@ class RamDump():
                     stop = mid
             return stop
 
-        def unwind_frame_generic64(self, frame):
+        def unwind_frame_generic64(self, frame, cpu_work_state=''):
             fp = frame.fp
             try:
                 frame.sp = fp + 0x10
@@ -345,7 +344,7 @@ class RamDump():
                 return -1
             return 0
 
-        def unwind_frame_generic(self, frame):
+        def unwind_frame_generic(self, frame, cpu_work_state=''):
             high = 0
             fp = frame.fp
 
@@ -541,7 +540,7 @@ class RamDump():
             temp = addr + offset
             return (temp & 0xffffffff) + ((temp >> 32) & 0xffffffff)
 
-        def unwind_frame_tables(self, frame):
+        def unwind_frame_tables(self, frame, cpu_work_state):
             low = frame.sp
             high = ((low + (self.ramdump.thread_size - 1)) & \
                 ~(self.ramdump.thread_size - 1)) + self.ramdump.thread_size
@@ -549,6 +548,11 @@ class RamDump():
 
             if (idx is None):
                 return -1
+
+            if cpu_work_state == "thumb":
+                FP = 7
+            else:
+                FP = 11
 
             ctrl = self.UnwindCtrlBlock()
             ctrl.vrs[FP] = frame.fp
@@ -617,6 +621,11 @@ class RamDump():
             frame.pc = pc
             self.pac_frame_update(frame)
             backtrace = '\n'
+
+            cpu_work_state = ''
+            if (pc & 0x1) or (lr & 0x1):
+                cpu_work_state = 'thumb'
+
             while True:
                 where = frame.pc
                 offset = 0
@@ -638,7 +647,7 @@ class RamDump():
                     print_out_str(pstring)
                 backtrace += pstring + '\n'
 
-                urc = self.unwind_frame(frame)
+                urc = self.unwind_frame(frame, cpu_work_state)
                 self.pac_frame_update(frame)
                 if urc < 0:
                     break
@@ -657,11 +666,9 @@ class RamDump():
            i = i +1
 
        return r;
+
     def pac_ignore(self,data):
-        if self.va_bits == 48:
-            pac_check = 0xffff000000000000
-        else:
-            pac_check = 0xffffff0000000000
+        pac_check = self.createMask(self.va_bits, 63)
         top_bit_ignore = 0xff00000000000000
         if data is None or not self.arm64:
             return data
@@ -671,10 +678,7 @@ class RamDump():
         # The PAC field is Xn[54:bottom_PAC_bit].
         # In the PAC field definitions, bottom_PAC_bit == 64-TCR_ELx.TnSZ,
         # TCR_ELx.TnSZ is set to 25. so 64-25=39
-        if self.va_bits == 48:
-            pac_mack = self.createMask(48,54)
-        else:
-            pac_mack = self.createMask(39,54)
+        pac_mack = self.createMask(self.va_bits, 54)
         result = pac_mack | data
         result = result | top_bit_ignore
         return result
@@ -689,7 +693,7 @@ class RamDump():
         vmalloc_start = self.modules_end - self.kaslr_offset
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
 
-            phys_base = 0x1ffffffff
+            phys_base = 0x27fffffff
             phys_end = 0
 
             if self.reduceddump:
@@ -707,8 +711,8 @@ class RamDump():
                     if end > phys_end:
                         phys_end = end
 
-            if phys_end > 0x1ffffffff:
-                phys_end = 0x1ffffffff
+            #if phys_end > 0x27fffffff:
+            #    phys_end = 0x27fffffff
             #mask phys_base lower address for alignment
             phys_base = phys_base & 0xfffff0000
 
@@ -733,10 +737,14 @@ class RamDump():
 
         return 0
 
-    def get_kimage_vaddr(self):
+    def get_kimage_vaddr(self, need_aslr=True):
         kimage_vaddr = None
-        if self.get_kernel_version() > (4, 20, 0):
-            if self.get_kernel_version() >= (6, 5, 0):
+        if self.get_kernel_version() >= (6, 1, 0):
+            kimage_vaddr = self.address_of('_text')
+            if need_aslr:
+                kimage_vaddr -= self.kaslr_offset
+        elif self.get_kernel_version() > (4, 20, 0):
+            if self.get_kernel_version() >= (6, 4, 0):
                 modules_vsize = 0x80000000
             else:
                 modules_vsize = 0x08000000
@@ -776,6 +784,11 @@ class RamDump():
 
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
+        ## used for read_physical in multi-thread mode
+        self.use_multithread = False
+        self.ebi_files_mappings = {}
+        self.thread_name_prefix = "ThreadPoolExecutor-0"
+        ##
         self.ebi_files_minidump = []
         self.ebi_pa_name_map = {}
         self.md_dict = {}
@@ -834,6 +847,8 @@ class RamDump():
             self.gdbmi = gdbmi.GdbMI(self.gdb_path, self.vmlinux,
                         0)
             self.gdbmi.open()
+            if self.arm64:
+                self.gdbmi.setup_aarch('aarch64')
         self.gdbmi.set_gdbmi_aslr_offset()
         self.page_offset = 0xc0000000
         self.thread_size = 8192
@@ -1011,6 +1026,14 @@ class RamDump():
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
             self.va_bits = 39
+        try:
+            self.page_shift = int(self.get_config_val("CONFIG_ARM64_PAGE_SHIFT"))
+        except:
+            self.page_shift = 12
+        try:
+            self.pgtable_levels = int(self.get_config_val("CONFIG_PGTABLE_LEVELS"))
+        except:
+            self.pgtable_levels = 3
 
         if self.kaslr_offset is None:
             self.determine_kaslr_offset()
@@ -1022,9 +1045,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
+                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
             else:
                 self.page_offset = 0xffffffc000000000
-            self.thread_size = 16384
+                self.thread_size = 16384
         if options.page_offset is not None:
             print_out_str(
                 '[!!!] Page offset was set to {0:x}'.format(page_offset))
@@ -1496,7 +1520,10 @@ class RamDump():
             startup_script.write('sys.cpu CORTEXA53\n')
         else:
             startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
-            startup_script.write('SYStem.Option MMUSPACES ON\n')
+            if self.minidump:
+                startup_script.write('SYStem.Option MMUSPACES OFF\n')
+            else:
+                startup_script.write('SYStem.Option MMUSPACES ON\n')
             startup_script.write('SYStem.Option ZONESPACES OFF\n')
 
         startup_script.write('sys.up\n')
@@ -1536,9 +1563,9 @@ class RamDump():
                 else:
                     startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
                         self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
-
+                    tcr_el1 = self.get_tcr_el1(is_cortexa=is_cortex_a53)
                     if is_cortex_a53:
-                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x00000012B5193519\n')
+                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
                         startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000034D5D91D\n')
@@ -1547,7 +1574,7 @@ class RamDump():
                             startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:x}\n'.format(
                             self.hlos_tcr_el1))
                         else:
-                            startup_script.write('Data.Set SPR:0x30202 %Quad 0x00000032B5193519\n')
+                            startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
                         startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         if self.hlos_sctlr_el1:
@@ -1559,7 +1586,7 @@ class RamDump():
                         if os.path.exists(corevcpu_path):
                             startup_script.write('do ' + corevcpu_path + '\n')
                     else:
-                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x00000032B5193519\n')
+                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
                         startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
@@ -1593,7 +1620,7 @@ class RamDump():
         dloadelf = 'data.load.elf {} /nocode\n'.format(where)
         startup_script.write(dloadelf)
 
-        if self.arm64:
+        if self.arm64 and not self.minidump:
             startup_script.write('TRANSlation.COMMON NS:0xF000000000000000--0xffffffffffffffff\n')
             startup_script.write('trans.tablewalk on\n')
             startup_script.write('trans.on\n')
@@ -1602,6 +1629,12 @@ class RamDump():
                 startup_script.write('MMU.SCAN PT 0xFFFFFF8000000000--0xFFFFFFFFFFFFFFFF\n')
                 startup_script.write('mmu.on\n')
                 startup_script.write('mmu.pt.list 0xffffff8000000000\n')
+
+        if self.minidump:
+            startup_script.write('y.pointer x29\n')
+            startup_script.write('frame.config.eabi on\n')
+            if self.arm64:
+                startup_script.write('Register.Set CPSR 0x1C5\n')
 
         if t32_host_system != 'Linux':
             if self.arm64:
@@ -1752,6 +1785,36 @@ class RamDump():
         print_out_str(
             '--- Created a T32 Simulator launcher (run {})'.format(launch_file))
 
+    def get_tcr_el1(self, is_cortexa=False):
+        if not is_cortexa:
+            tcr_el1 = Register(
+                0x00000032B5193519,
+                TG1=(31, 30),
+                T1SZ=(21, 16),
+                TG0=(15, 14),
+                T0SZ=(5, 0)
+            )
+            tg1_granule_size = {
+                4096  : 0b10,
+                16384 : 0b01,
+                65536 : 0b11
+            }
+            tg0_granule_size = {
+                4096  : 0b00,
+                16384 : 0b10,
+                65536 : 0b01
+            }
+            tcr_el1.TG1 = tg1_granule_size.get(self.get_page_size(), 0b10)
+            tcr_el1.TG0 = tg0_granule_size.get(self.get_page_size(), 0b00)
+            tcr_el1.T1SZ = tcr_el1.T0SZ = 64 - self.va_bits
+        else:
+            tcr_el1 = Register(
+                0x00000012B5193519,
+                RES0=(63, 39),
+                RES1=(38, 0)
+            )
+        return tcr_el1.value
+
     def read_tz_offset(self):
         if self.tz_addr == 0:
             print_out_str(
@@ -1786,21 +1849,26 @@ class RamDump():
                 self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
 
                 try:
+                    self.dynamic_kaslr_offset = None
                     kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    kimage_vaddr = self.get_kimage_vaddr()
+                    kimage_vaddr = self.get_kimage_vaddr(need_aslr=False)
                     kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
                     kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
                     kimage_va = struct.unpack('<Q', kimage_va_temp)
                     kimage_va = int(kimage_va[0])
-                    if kimage_va > kimage_vaddr:
+                    if kimage_va >= kimage_vaddr:
                         self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
                 except:
+                    self.dynamic_kaslr_offset = None
                     pass
 
                 if kaslr_magic != 0xdead4ead:
                     if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
-                        self.kaslr_offset = self.dynamic_kaslr_offset
+                        if self.dynamic_kaslr_offset is not None:
+                            self.kaslr_offset = self.dynamic_kaslr_offset
+                        else:
+                            print_out_str('!!!! Could not get the dynamic_kaslr_offset.')
                     else:
                         print_out_str('!!!! Kaslr feature is not enabled.')
                         self.kaslr_offset = 0x0
@@ -1808,11 +1876,7 @@ class RamDump():
                     print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
 
     def get_page_size(self):
-        if self.is_config_defined('CONFIG_ARM64_PAGE_SHIFT'):
-            PAGE_SHIFT = int(self.get_config_val('CONFIG_ARM64_PAGE_SHIFT'))
-        else:
-            PAGE_SHIFT = 12
-        return 1 << PAGE_SHIFT
+        return 1 << self.page_shift
 
     def get_hw_id(self, add_offset=True):
         socinfo_format = -1
@@ -2027,7 +2091,9 @@ class RamDump():
             percpu_offset = self.field_offset('struct module', 'percpu')
             percpu_size_offset = self.field_offset('struct module', 'percpu_size')
 
-        if self.kernel_version > (4, 9, 0):
+        if self.kernel_version >= (6, 4, 0):
+            module_core_offset = self.field_offset('struct module', 'mem[0].base')
+        elif self.kernel_version > (4, 9, 0):
             module_core_offset = self.field_offset('struct module', 'core_layout.base')
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
@@ -2541,18 +2607,54 @@ class RamDump():
             return data
 
         else:
-            ebi = (-1, -1, -1)
-            for a in self.ebi_files:
-                fd, start, end, path = a
-                if addr >= start and addr <= end:
-                    ebi = a
-                    break
-            if ebi[0] == -1:
-                return None
-            offset = addr - ebi[1]
-            ebi[0].seek(offset)
-            a = ebi[0].read(length)
-            return a
+            if self.use_multithread and threading.current_thread().name.startswith(self.thread_name_prefix):
+                '''multi-thread enabled'''
+                ebi_files = self.ebi_files_mappings[threading.current_thread().name]
+                return self.__read_physical(addr, length, ebi_files)
+            else:
+                return self.__read_physical(addr, length, self.ebi_files)
+
+    def __read_physical(self, addr, length, ebi_files):
+        ebi = (-1, -1, -1)
+        for a in ebi_files:
+            fd, start, end, path = a
+            if addr >= start and addr <= end:
+                ebi = a
+                break
+        if ebi[0] == -1:
+            return None
+        offset = addr - ebi[1]
+        ebi[0].seek(offset)
+        a = ebi[0].read(length)
+        return a
+
+    def enable_multithread(self, thread_max_count, thread_name_prefix):
+        if self.use_multithread:
+            print_out_str("Ramparser is already running in multi-thread mode!!!")
+            return
+        if thread_max_count > 8 or thread_max_count <= 1:
+            thread_max_count = 8
+
+        self.use_multithread = True
+        self.thread_name_prefix = thread_name_prefix
+        self.ebi_files_mappings = {}
+        for idx in range(thread_max_count):
+            tmp_ebi = []
+            for file in self.ebi_files:
+                _, start, end, path = file
+                tmp_ebi.append([open(path, 'rb'), start, end, path])
+            self.ebi_files_mappings[f"{thread_name_prefix}_{idx}"] = tmp_ebi
+
+    def disable_multithread(self):
+        if not self.use_multithread:
+            return
+
+        self.use_multithread =  False
+        for eib_files in self.ebi_files_mappings.values():
+            for file in self.ebi_files:
+                fd, start, end, path = file
+                fd.close()
+        self.ebi_files_mappings = {}
 
     def read_dword(self, addr_or_name, virtual=True, cpu=None, allow_elf=False):
         s = self.read_string(addr_or_name, '<Q', virtual, cpu, allow_elf)
@@ -2925,6 +3027,10 @@ class RamDump():
         if self.arm64:
             return self.thread_saved_field_common_64(task, self.field_offset('struct cpu_context', 'fp'))
         else:
+            pc  = self.thread_saved_pc(task)
+            # PC value last bit is 1 for Thumb and 0 for ARM
+            if (pc & 0x1):
+                return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'r7'))
             return self.thread_saved_field_common_32(task, self.field_offset('struct cpu_context_save', 'fp'))
 
     def for_each_process(self):
@@ -2973,54 +3079,43 @@ class RamDump():
             if (next == init_task):
                 break
 
+    '''
+    task_struct->signal->thread_head
+                struct list_head {
+                    struct list_head *next; -->task_struct->thread_node
+                    struct list_head *prev; -->task_struct->thread_node
+                } thread_head;
+    '''
     def for_each_thread(self, task_addr):
-        thread_group_offset = self.field_offset(
-                            'struct task_struct', 'thread_group')
-        thread_group_pointer = self.read_word(
-                                task_addr + thread_group_offset, True)
-        prev_offset = self.field_offset('struct list_head', 'prev')
-
-        thread_group_pointer = thread_group_pointer - thread_group_offset
-
-        next = thread_group_pointer
-        seen_thread = []
-
-        while(1):
-            task_offset = next + thread_group_offset
-            task_pointer = self.read_word(task_offset, True)
-            if not task_pointer:
-                break
-
-            task_struct = task_pointer - thread_group_offset
-            if (self.validate_task_struct(task_struct) == -1) or (
-                    self.validate_sched_class(task_struct) == -1):
-                    next = thread_group_pointer
-                    while (1):
-                        task_pointer = self.read_word(next +
-                                                      thread_group_offset +
-                                                      prev_offset)
-
-                        if not task_pointer:
-                            break
-                        task_struct = task_pointer - thread_group_offset
-                        if (self.validate_task_struct(task_struct) == -1) or (
-                                self.validate_sched_class(task_struct) == -1):
-                                break
-
-                        yield task_struct
-                        seen_thread.append(task_struct)
-                        next = task_struct
-                        if (next == thread_group_pointer):
-                            break
+        offset_thread_node =self.field_offset(
+            'struct task_struct', 'thread_node')
+        offset_signal = self.field_offset(
+            'struct task_struct', 'signal')
+        offset_thread_head = self.field_offset(
+            'struct signal_struct', 'thread_head')
+        signal_addr = self.read_word(task_addr + offset_signal)
+        thread_head_addr = self.read_word(signal_addr + offset_thread_head)
+        next_thread_head = thread_head_addr
+        seen_threads = []
+        while True:
+            task_addr = next_thread_head - offset_thread_node
+            if (self.validate_task_struct(task_addr) == -1) or (
+                    self.validate_sched_class(task_addr) == -1):
                     break
 
-            if task_struct in seen_thread:
+            yield task_addr
+
+            next_thr = self.read_word(next_thread_head)
+            if (next_thr == next_thread_head) and (next_thr != thread_head_addr):
+                print_out_str('!!!! Cycle in thread group! The list is corrupt!\n')
                 break
 
-            yield task_struct
-            seen_thread.append(task_struct)
-            next = task_struct
-            if (next == thread_group_pointer):
+            if (next_thr in seen_threads):
+                break
+
+            seen_threads.append(next_thr)
+            next_thread_head = next_thr
+            if next_thread_head == thread_head_addr:
                 break
 
     def validate_task_struct(self, task):
@@ -3033,6 +3128,8 @@ class RamDump():
             task_struct = self.read_word(task_address, True)
 
         cpu_number = self.get_task_cpu(task_struct, thread_info_address)
+        if cpu_number is None:
+            return -1
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
@@ -3208,9 +3305,7 @@ class RamDump():
             raise InvalidDatatype
 
     def __unpack_format(self, size, ty):
-        if ty == "char":
-            return "<B"
-        elif ty == "bool" or ty == "_Bool":
+        if ty == "bool" or ty == "_Bool":
             return "<?"
         elif "float" in ty:
             return "<f"
@@ -3329,7 +3424,7 @@ class RamDump():
         :return: The data read from the dumps.
         """
         bin_data = b""
-        PAGE_SIZE = 1 << 12
+        PAGE_SIZE = self.get_page_size()
         length  = PAGE_SIZE - (addr & (PAGE_SIZE-1))
         while(size > length):
             bin_data += self.read_physical(self.virt_to_phys(addr), length)

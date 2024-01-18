@@ -475,7 +475,7 @@ class FtraceParser(RamParser):
         for (f, start, end, filename) in self.ramdump.ebi_files:
                 if "DDR" in filename or "dram" in filename:
                     dumps += '{0}@0x{1:x},'.format(filename, start)
-        pagesize = "-p 4096"
+        pagesize = "-p {}".format(self.ramdump.get_page_size())
 
         commandsfile = NamedTemporaryFile(mode='w', delete=False,
                               dir=self.ramdump.outdir)
