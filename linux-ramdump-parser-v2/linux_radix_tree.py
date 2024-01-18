@@ -1,4 +1,5 @@
 # Copyright (c) 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -66,6 +67,11 @@ class RadixTreeWalker(object):
         pointer_size = self.ramdump.sizeof('struct ' + self.node_struct + ' *')
 
         shift = self.ramdump.read_byte(radix_tree_node + rnode_shift_offset)
+
+        # if CONFIG_BASE_SMALL=1: radix_tree_map_shift = 4
+        if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
+            RADIX_TREE_MAP_SHIFT = 4
+            RADIX_TREE_MAP_SIZE = (1 << RADIX_TREE_MAP_SHIFT)
 
         height = (shift // RADIX_TREE_MAP_SHIFT) + 1
         for off in range(0, RADIX_TREE_MAP_SIZE):
