@@ -1192,7 +1192,11 @@ class TZRegDump_v2():
         else:
             lr = self.core_regs.regs['r14_svc']
             bt = self.core_regs.regs['r13_svc']
-            fp = self.core_regs.regs['r11']
+            cpsr = self.core_regs.regs['cpsr']
+            if (cpsr & 0x20):
+                fp = self.core_regs.regs['r7']
+            else:
+                fp = self.core_regs.regs['r11']
 
         pc = ram_dump.pac_ignore(pc)
         a = ram_dump.unwind_lookup(pc)
@@ -1237,7 +1241,11 @@ class TZRegDump_v2():
         else:
             lr = self.core_regs.regs['r14_svc']
             bt = self.core_regs.regs['r13_svc']
-            fp = self.core_regs.regs['r11']
+            cpsr = self.core_regs.regs['cpsr']
+            if (cpsr & 0x20):
+                fp = self.core_regs.regs['r7']
+            else:
+                fp = self.core_regs.regs['r11']
 
         pc = ram_dump.pac_ignore(pc)
         a = ram_dump.unwind_lookup(pc)
@@ -1545,9 +1553,7 @@ def get_wdog_timing(ramdump):
                 next_event = ns_to_sec(next_event)
                 print_out_str(
                     "CPU{0} tick_device next_event: {1:.6f}".format(i, next_event))
-    epoch_ns = ramdump.read_u64('cd.read_data[0].epoch_ns')
-    epoch_cyc = ramdump.read_u64('cd.read_data[0].epoch_cyc')
-    print_out_str('epoch_ns: {0}ns  epoch_cyc: {1}'.format(epoch_ns,epoch_cyc))
+
     if (ramdump.kernel_version >= (4, 14)):
         ping_start_time_offset = ramdump.field_offset(
                         'struct msm_watchdog_data', 'ping_start')
