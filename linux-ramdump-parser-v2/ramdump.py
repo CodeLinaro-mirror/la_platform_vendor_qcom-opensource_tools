@@ -24,10 +24,9 @@ import stat
 import subprocess
 import enum
 import copy
-
+import threading
 from boards import get_supported_boards, get_supported_ids
 from tempfile import NamedTemporaryFile
-
 import gdbmi
 from print_out import print_out_str
 from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
@@ -694,7 +693,7 @@ class RamDump():
         vmalloc_start = self.modules_end - self.kaslr_offset
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
 
-            phys_base = 0x1ffffffff
+            phys_base = 0x27fffffff
             phys_end = 0
 
             if self.reduceddump:
@@ -712,8 +711,8 @@ class RamDump():
                     if end > phys_end:
                         phys_end = end
 
-            if phys_end > 0x1ffffffff:
-                phys_end = 0x1ffffffff
+            #if phys_end > 0x27fffffff:
+            #    phys_end = 0x27fffffff
             #mask phys_base lower address for alignment
             phys_base = phys_base & 0xfffff0000
 
@@ -738,9 +737,13 @@ class RamDump():
 
         return 0
 
-    def get_kimage_vaddr(self):
+    def get_kimage_vaddr(self, need_aslr=True):
         kimage_vaddr = None
-        if self.get_kernel_version() > (4, 20, 0):
+        if self.get_kernel_version() >= (6, 1, 0):
+            kimage_vaddr = self.address_of('_text')
+            if need_aslr:
+                kimage_vaddr -= self.kaslr_offset
+        elif self.get_kernel_version() > (4, 20, 0):
             if self.get_kernel_version() >= (6, 4, 0):
                 modules_vsize = 0x80000000
             else:
@@ -781,6 +784,11 @@ class RamDump():
 
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
+        ## used for read_physical in multi-thread mode
+        self.use_multithread = False
+        self.ebi_files_mappings = {}
+        self.thread_name_prefix = "ThreadPoolExecutor-0"
+        ##
         self.ebi_files_minidump = []
         self.ebi_pa_name_map = {}
         self.md_dict = {}
@@ -929,7 +937,7 @@ class RamDump():
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm):
+                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm, self.get_kernel_version()):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -1037,9 +1045,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
+                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
             else:
                 self.page_offset = 0xffffffc000000000
-            self.thread_size = 16384
+                self.thread_size = 16384
         if options.page_offset is not None:
             print_out_str(
                 '[!!!] Page offset was set to {0:x}'.format(page_offset))
@@ -1840,13 +1849,14 @@ class RamDump():
                 self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
 
                 try:
+                    self.dynamic_kaslr_offset = None
                     kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    kimage_vaddr = self.get_kimage_vaddr()
+                    kimage_vaddr = self.get_kimage_vaddr(need_aslr=False)
                     kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
                     kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
                     kimage_va = struct.unpack('<Q', kimage_va_temp)
                     kimage_va = int(kimage_va[0])
-                    if kimage_va > kimage_vaddr:
+                    if kimage_va >= kimage_vaddr:
                         self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
                         print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
                 except:
@@ -2597,18 +2607,54 @@ class RamDump():
             return data
 
         else:
-            ebi = (-1, -1, -1)
-            for a in self.ebi_files:
-                fd, start, end, path = a
-                if addr >= start and addr <= end:
-                    ebi = a
-                    break
-            if ebi[0] == -1:
-                return None
-            offset = addr - ebi[1]
-            ebi[0].seek(offset)
-            a = ebi[0].read(length)
-            return a
+            if self.use_multithread and threading.current_thread().name.startswith(self.thread_name_prefix):
+                '''multi-thread enabled'''
+                ebi_files = self.ebi_files_mappings[threading.current_thread().name]
+                return self.__read_physical(addr, length, ebi_files)
+            else:
+                return self.__read_physical(addr, length, self.ebi_files)
+
+    def __read_physical(self, addr, length, ebi_files):
+        ebi = (-1, -1, -1)
+        for a in ebi_files:
+            fd, start, end, path = a
+            if addr >= start and addr <= end:
+                ebi = a
+                break
+        if ebi[0] == -1:
+            return None
+        offset = addr - ebi[1]
+        ebi[0].seek(offset)
+        a = ebi[0].read(length)
+        return a
+
+    def enable_multithread(self, thread_max_count, thread_name_prefix):
+        if self.use_multithread:
+            print_out_str("Ramparser is already running in multi-thread mode!!!")
+            return
+        if thread_max_count > 8 or thread_max_count <= 1:
+            thread_max_count = 8
+
+        self.use_multithread = True
+        self.thread_name_prefix = thread_name_prefix
+        self.ebi_files_mappings = {}
+        for idx in range(thread_max_count):
+            tmp_ebi = []
+            for file in self.ebi_files:
+                _, start, end, path = file
+                tmp_ebi.append([open(path, 'rb'), start, end, path])
+            self.ebi_files_mappings[f"{thread_name_prefix}_{idx}"] = tmp_ebi
+
+    def disable_multithread(self):
+        if not self.use_multithread:
+            return
+
+        self.use_multithread =  False
+        for eib_files in self.ebi_files_mappings.values():
+            for file in self.ebi_files:
+                fd, start, end, path = file
+                fd.close()
+        self.ebi_files_mappings = {}
 
     def read_dword(self, addr_or_name, virtual=True, cpu=None, allow_elf=False):
         s = self.read_string(addr_or_name, '<Q', virtual, cpu, allow_elf)
@@ -3033,54 +3079,43 @@ class RamDump():
             if (next == init_task):
                 break
 
+    '''
+    task_struct->signal->thread_head
+                struct list_head {
+                    struct list_head *next; -->task_struct->thread_node
+                    struct list_head *prev; -->task_struct->thread_node
+                } thread_head;
+    '''
     def for_each_thread(self, task_addr):
-        thread_group_offset = self.field_offset(
-                            'struct task_struct', 'thread_group')
-        thread_group_pointer = self.read_word(
-                                task_addr + thread_group_offset, True)
-        prev_offset = self.field_offset('struct list_head', 'prev')
-
-        thread_group_pointer = thread_group_pointer - thread_group_offset
-
-        next = thread_group_pointer
-        seen_thread = []
-
-        while(1):
-            task_offset = next + thread_group_offset
-            task_pointer = self.read_word(task_offset, True)
-            if not task_pointer:
-                break
-
-            task_struct = task_pointer - thread_group_offset
-            if (self.validate_task_struct(task_struct) == -1) or (
-                    self.validate_sched_class(task_struct) == -1):
-                    next = thread_group_pointer
-                    while (1):
-                        task_pointer = self.read_word(next +
-                                                      thread_group_offset +
-                                                      prev_offset)
-
-                        if not task_pointer:
-                            break
-                        task_struct = task_pointer - thread_group_offset
-                        if (self.validate_task_struct(task_struct) == -1) or (
-                                self.validate_sched_class(task_struct) == -1):
-                                break
-
-                        yield task_struct
-                        seen_thread.append(task_struct)
-                        next = task_struct
-                        if (next == thread_group_pointer):
-                            break
+        offset_thread_node =self.field_offset(
+            'struct task_struct', 'thread_node')
+        offset_signal = self.field_offset(
+            'struct task_struct', 'signal')
+        offset_thread_head = self.field_offset(
+            'struct signal_struct', 'thread_head')
+        signal_addr = self.read_word(task_addr + offset_signal)
+        thread_head_addr = self.read_word(signal_addr + offset_thread_head)
+        next_thread_head = thread_head_addr
+        seen_threads = []
+        while True:
+            task_addr = next_thread_head - offset_thread_node
+            if (self.validate_task_struct(task_addr) == -1) or (
+                    self.validate_sched_class(task_addr) == -1):
                     break
 
-            if task_struct in seen_thread:
+            yield task_addr
+
+            next_thr = self.read_word(next_thread_head)
+            if (next_thr == next_thread_head) and (next_thr != thread_head_addr):
+                print_out_str('!!!! Cycle in thread group! The list is corrupt!\n')
                 break
 
-            yield task_struct
-            seen_thread.append(task_struct)
-            next = task_struct
-            if (next == thread_group_pointer):
+            if (next_thr in seen_threads):
+                break
+
+            seen_threads.append(next_thr)
+            next_thread_head = next_thr
+            if next_thread_head == thread_head_addr:
                 break
 
     def validate_task_struct(self, task):
@@ -3093,6 +3128,8 @@ class RamDump():
             task_struct = self.read_word(task_address, True)
 
         cpu_number = self.get_task_cpu(task_struct, thread_info_address)
+        if cpu_number is None:
+            return -1
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
@@ -3268,9 +3305,7 @@ class RamDump():
             raise InvalidDatatype
 
     def __unpack_format(self, size, ty):
-        if ty == "char":
-            return "<B"
-        elif ty == "bool" or ty == "_Bool":
+        if ty == "bool" or ty == "_Bool":
             return "<?"
         elif "float" in ty:
             return "<f"
