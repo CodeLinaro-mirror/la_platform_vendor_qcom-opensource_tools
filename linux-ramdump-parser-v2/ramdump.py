@@ -937,7 +937,7 @@ class RamDump():
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm):
+                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm, self.get_kernel_version()):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
