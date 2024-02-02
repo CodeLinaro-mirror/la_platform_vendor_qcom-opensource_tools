@@ -86,10 +86,7 @@ class FtraceParser_Event(object):
         self.rb_event_typelen_offset = self.ramdump.field_offset(
             'struct ring_buffer_event', 'type_len')
         self.trace_entry_type_offset = self.ramdump.field_offset('struct trace_entry ', 'type')
-        if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
-            self.pid_max = 0x1000
-        else:
-            self.pid_max = 0x8000
+        self.pid_max = self.ramdump.read_int("pid_max")
         self.map_cmdline_to_pid_offset = self.ramdump.field_offset(
             'struct saved_cmdlines_buffer', 'map_cmdline_to_pid')
         self.saved_cmdlines_offset = self.ramdump.field_offset(
@@ -311,7 +308,7 @@ class FtraceParser_Event(object):
             lat_fmt += '.'
         return lat_fmt
 
-    def parse_trace_entry(self,entry ,type,time):
+    def parse_trace_entry(self, entry, type, time):
         ftrace_raw_entry = None
         event_name = ""
         local_timestamp = None
@@ -360,6 +357,8 @@ class FtraceParser_Event(object):
         struct_type = self.ftrace_raw_struct_type[str(type)]
 
         pid = self.ramdump.read_u32(ftrace_raw_entry + self.pid_offset)
+        if pid > self.pid_max:
+            return
         preempt_count = self.ramdump.read_u16(ftrace_raw_entry + self.preempt_count_offset) & 0xFF
         flags = self.ramdump.read_u16(ftrace_raw_entry + self.flags_offset) & 0xFF
         DEBUG_ENABLE = 0
