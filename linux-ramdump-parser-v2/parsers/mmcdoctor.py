@@ -16,6 +16,7 @@ from parsers.irqstate import IrqParse
 from dmesglib import DmesgLib
 from print_out import print_out_str
 
+
 MMC0_IRQ = 0
 MMC1_IRQ = 0
 SDHCI_IRQ_NAME = "sdhci"
@@ -176,21 +177,14 @@ def get_sdhci_irqs(ram_dump):
     global MMC1_IRQ
     irq_action_offset = ram_dump.field_offset('struct irq_desc', 'action')
     action_name_offset = ram_dump.field_offset('struct irqaction', 'name')
-    irq_desc_tree = ram_dump.address_of('irq_desc_tree')
     nr_irqs = ram_dump.read_int(ram_dump.address_of('nr_irqs'))
 
     if nr_irqs > 50000:
         return
-    for i in range(0, nr_irqs):
-        if (ram_dump.kernel_version >= (4,9,0)):
-            irq_desc = irqs.radix_tree_lookup_element_v2(
-                ram_dump, irq_desc_tree, i)
-        else:
-            irq_desc = irqs.radix_tree_lookup_element(
-                ram_dump, irq_desc_tree, i)
-        if irq_desc is None:
-            continue
-        action = ram_dump.read_word(irq_desc + irq_action_offset)
+
+    irq_descs = irqs.get_all_irqs_desc(ram_dump)
+    for i in range(len(irq_descs)):
+        action = ram_dump.read_word(irq_descs[i] + irq_action_offset)
         if action != 0 and count < 2:
             name_addr = ram_dump.read_word(action + action_name_offset)
             name = ram_dump.read_cstring(name_addr, 48)
@@ -205,20 +199,17 @@ def get_sdhci_irqs(ram_dump):
     return count
 
 def find_sdhci_host(ramdump, irq):
-    irq_desc_tree = ramdump.address_of('irq_desc_tree')
     irq_action_offset = ramdump.field_offset('struct irq_desc', 'action')
     dev_id = ramdump.field_offset('struct irqaction', 'dev_id')
     irqs = IrqParse(ramdump)
-    if (ramdump.kernel_version >= (4,9,0)):
-        sdhci_irq_desc = irqs.radix_tree_lookup_element_v2(
-            ramdump, irq_desc_tree, irq)
-    else:
-        sdhci_irq_desc = irqs.radix_tree_lookup_element(
-            ramdump, irq_desc_tree, irq)
-    sdhci_irq_action = ramdump.read_word(sdhci_irq_desc + irq_action_offset)
+
+    irq_descs = irqs.get_all_irqs_desc(ramdump)
+    if irq > (len(irq_descs) - 1):
+        print_out_str("Invalid irq index")
+        return
+    sdhci_irq_action = ramdump.read_word(irq_descs[irq] + irq_action_offset)
     sdhci_host = ramdump.read_word(sdhci_irq_action + dev_id)
     return sdhci_host
-
 
 def find_mmc_host(ramdump, sdhci_host):
     mmc_offset = ramdump.field_offset('struct sdhci_host', 'mmc')
@@ -650,11 +641,15 @@ class MmcDataStructure():
                     self.ramdump.field_offset('struct mmc_host', 'cqe_enabled')))
         print_out_mmc("\tcqe_on = %d\n" %self.ramdump.read_bool(self.mmc_host +
                     self.ramdump.field_offset('struct mmc_host', 'cqe_on')))
+
         if (self.ramdump.kernel_version >= (5,10,0)):
-            print_out_mmc("\tcqe_recovery_reset_always = %d\n" %self.ramdump.read_bool(self.mmc_host +
-                        self.ramdump.field_offset('struct mmc_host', 'cqe_recovery_reset_always')))
+            try:
+                print_out_mmc("\tcqe_recovery_reset_always = %d\n" %self.ramdump.read_bool(self.mmc_host +
+                           self.ramdump.field_offset('struct mmc_host', 'cqe_recovery_reset_always')))
+            except:
+                print_out_mmc("\tmember tcqe_recovery_reset_alwaysnot is not included in struct mmc_host")
             print_out_mmc("\tdoing_init_tune = %d\n" %self.ramdump.read_int(self.mmc_host +
-                        self.ramdump.field_offset('struct mmc_host', 'doing_init_tune')))
+                       self.ramdump.field_offset('struct mmc_host', 'doing_init_tune')))
         print_out_mmc("\thsq_enabled = %d\n" %self.ramdump.read_bool(self.mmc_host +
                     self.ramdump.field_offset('struct mmc_host', 'hsq_enabled')))
         print_out_mmc("\tindex = %d\n" %self.ramdump.read_int(self.mmc_host +
@@ -723,6 +718,7 @@ class MmcDataStructure():
                     self.ramdump.field_offset('struct mmc_host', 'max_segs')))
         print_out_mmc("\tunused = %d\n" %self.ramdump.read_u16(self.mmc_host +
                     self.ramdump.field_offset('struct mmc_host', 'unused')))
+
         self.get_mmc_ios_info()
         self.dump_cqe_private()
         print_out_mmc("}\n")
