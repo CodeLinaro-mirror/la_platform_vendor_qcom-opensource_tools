@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 
-from parser_util import register_parser, RamParser
+from parser_util import register_parser, RamParser, time_cost
 import print_out
 import struct
 import os
 from utasklib import UTaskLib
 from utasklib import ProcessNotFoundExcetion
 from kstructlib import StructParser
+from parsers.zram import Zram
 import sys
 import traceback
-
+from concurrent import futures
+import threading
+import math
 PT_LOAD = 1
 PT_NOTE = 4
 VM_READ=0x00000001
@@ -102,7 +105,6 @@ def nt_type_to_str(type):
     except:
         return "Unknown note type"
 
-
 @register_parser('--coredump', 'output coredump')
 class coredump(RamParser):
     '''
@@ -150,9 +152,29 @@ class coredump(RamParser):
         self.gcore_elf_struct = dict()
         self.user_regset_view = self.task_user_regset_view()
         self.elf_note_info = None
-        self.large_vma_size = 50 *1024 * 2034 # 50M
+        self.vma_size_threshhold = 10 *1024 * 1024 # 10M
         self.PAGE_SIZE =  self.ramdump.get_page_size()
+        self.zram_parser = Zram(self.ramdump)
 
+        #-------------------multi-thread initial @start------------------------#
+        ## read vma data is a time-cost action.
+        ## enable multi-thread to read vma data if size is bigger than self.vma_size_threshhold
+        self.multithread_enable = False
+        max_workers = 8
+        for vma in self.taskinfo.vmalist:
+            vma_len = vma.vm_end - vma.vm_start
+            if vma_len >= self.vma_size_threshhold:
+                self.multithread_enable = True
+                break
+
+        if self.multithread_enable:
+            self.executor = futures.ThreadPoolExecutor(max_workers)
+            self.ramdump.enable_multithread(max_workers, self.executor._thread_name_prefix)
+            self.output_fd_mapping = {}
+            for i in range(max_workers):
+                self.output_fd_mapping[f"{self.executor._thread_name_prefix}_{i}"] \
+                        = open(self.corefile.name, "wb")
+        #-------------------multi-thread initial @end------------------------#
     def printi(self, *msg):
         print_out.printi(self, *msg)
 
@@ -163,8 +185,13 @@ class coredump(RamParser):
         print_out.printe(self, *msg)
 
     def __del__(self):
-        if hasattr(self, "corefile"):
+        self.ramdump.disable_multithread()
+
+        if hasattr(self, "corefile") and self.corefile:
             self.corefile.close()
+        if hasattr(self, "output_fd_mapping") and self.output_fd_mapping:
+            for _, fd in self.output_fd_mapping.items():
+                fd.close()
 
     def to_string(self, p_data):
         return bytes(p_data).decode('ascii', 'ignore').split("\0")[0]
@@ -501,19 +528,60 @@ class coredump(RamParser):
         '''
         p_startvaddr = pt_load_header.p_vaddr
         vma_len = pt_load_header.p_memsz
-        if vma_len >= self.large_vma_size:
-            self.printe("{1:>016x} ~ {2:>016x}, filesz:{3:x} mb"
-                          .format(index, p_startvaddr, p_startvaddr + vma_len, int(vma_len/1024/1024)))
-
         self.printi("PT_LOAD[{0}]: 0x{1:>016x} ~ 0x{2:>016x}, filesz:0x{3:x}  at offset 0x{4:x}"
                     .format(index, p_startvaddr, p_startvaddr + vma_len, vma_len, self.corefile.tell()))
-        data = UTaskLib.read_binary(self.ramdump, self.process_mmu, p_startvaddr, vma_len)
-        if not data or len(data) != vma_len:
+
+        if vma_len <= self.vma_size_threshhold:
+            data = self.__read_binary(p_startvaddr, vma_len)
+            self.corefile.write(data)
+        else:
+            self.printe("{1:>016x} ~ {2:>016x}, filesz:{3:x} mb"
+                        .format(index, p_startvaddr, p_startvaddr + vma_len, int(vma_len/1024/1024)))  
+            self.read_vma_to_file_thread(p_startvaddr, vma_len)
+
+    def __read_binary(self, addr, length):
+        data = UTaskLib.read_binary(self.ramdump, self.process_mmu, addr, length, self.zram_parser)
+        if not data or len(data) != length:
             error_msg = "reading data size mismatch" if data else "reading data is null"
             self.printi("reading vma failed due to %s" % error_msg)
-            data = b'\x00' * vma_len
+            data = b'\x00' * length
+        return data
 
-        self.corefile.write(data)
+    @time_cost
+    def __vma_to_file_multithread(self, addr, length, file_offset, idx_info):
+        data = self.__read_binary(addr, length)
+        #multi-thread to write data to core file
+        self.output_fd_mapping[threading.current_thread().name].seek(file_offset)
+        self.output_fd_mapping[threading.current_thread().name].write(data)
+
+        self.printe(f"__vma_to_file_multithread {threading.current_thread().name} \
+                    {idx_info} finished reading data from addr:0x{addr:x} length:0x{length:x}, \
+                    then write to file_offset:0x{file_offset:x}")
+
+    @time_cost
+    def read_vma_to_file_thread(self, addr, length, save_to_file=True):
+        file_offset = self.corefile.tell()
+        vma_offset= 0
+        vma_size = length
+        threads = []
+        threading
+        max_idx = math.ceil(vma_size/self.vma_size_threshhold)
+        idx  = 0
+
+        while vma_offset < vma_size:
+            if vma_size - vma_offset >= self.vma_size_threshhold:
+                future = self.executor.submit(self.__vma_to_file_multithread, addr + vma_offset, self.vma_size_threshhold, file_offset+vma_offset, f"{idx}/{max_idx}")
+                vma_offset += self.vma_size_threshhold
+            else:
+                future = self.executor.submit(self.__vma_to_file_multithread, addr + vma_offset, vma_size - vma_offset, file_offset+vma_offset, f"{idx}/{max_idx}")
+                vma_offset = vma_size
+            threads.append(future)
+            idx += 1
+
+        for future in futures.as_completed(threads):
+            future.result()
+
+        self.corefile.seek(file_offset + vma_size)
 
     def fill_elf_header(self,phnum):
         '''
@@ -897,9 +965,8 @@ class coredump(RamParser):
             if (dentry == d_parent or d_parent == 0x0):
                 break
 
-        if path_name:
-            path_name = path_name.replace("/system/apex/com.android.vndk.current","")
-            path_name = path_name.replace("/system/apex/com.android.runtime","")
+        if path_name and path_name.count("/apex/"):
+            path_name = path_name[path_name.rindex("/apex"):]
         return path_name
 
     # ##################################################################
@@ -1344,8 +1411,10 @@ class coredump(RamParser):
         offset = self.roundup(offset, self.PAGE_SIZE)
         self.printi("Writing PT_LOAD program header at {0}".format(offset))
         index = 0
+
+        self.multithread_enable = False
         for vma in self.taskinfo.vmalist:
-            offset = self.elf_write_vma_program_header(vma.vm_addr,offset,index)
+            offset = self.elf_write_vma_program_header(vma.vm_addr, offset, index)
             index += 1
         ##### VMA PT_LOAD program header ######
 
@@ -1363,5 +1432,4 @@ class coredump(RamParser):
         ##### VMA data ######
 
         self.printe("{} saved, size {} mb".format(self.corefile.name, int(os.path.getsize(self.corefile.name)/1024/1024)))
-        self.corefile.close()
         self.corefile.close()
