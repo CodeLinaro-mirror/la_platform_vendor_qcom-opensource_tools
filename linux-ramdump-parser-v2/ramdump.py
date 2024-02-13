@@ -1367,9 +1367,20 @@ class RamDump():
             b = self.read_cstring(command_addr, 2048)
             if b is None:
                 print_out_str('!!! could not read saved command line address')
+                static_command_addr = self.address_of('static_command_line')
+                if static_command_addr is not None:
+                    static_command_addr = self.read_word(static_command_addr)
+                    b = self.read_cstring(static_command_addr, 2048)
+                    if b is None:
+                        print_out_str('!!! could not read static command line address')
+                        return False
+                    else:
+                        print_out_str('Satic Command Line: ' + b)
+                        return True
                 return False
-            print_out_str('Command Line: ' + b)
-            return True
+            else:
+                print_out_str('Saved Command Line: ' + b)
+                return True
         else:
             print_out_str('!!! Could not lookup saved command line address')
             return False
