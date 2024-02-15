@@ -69,7 +69,7 @@ class RadixTreeWalker(object):
         shift = self.ramdump.read_byte(radix_tree_node + rnode_shift_offset)
 
         # if CONFIG_BASE_SMALL=1: radix_tree_map_shift = 4
-        if self.ramdump.is_config_defined("CONFIG_BASE_SMALL"):
+        if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
             RADIX_TREE_MAP_SHIFT = 4
             RADIX_TREE_MAP_SIZE = (1 << RADIX_TREE_MAP_SHIFT)
 
