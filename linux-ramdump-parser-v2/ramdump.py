@@ -1530,7 +1530,10 @@ class RamDump():
         if self.arm64 and is_cortex_a53:
             startup_script.write('sys.cpu CORTEXA53\n')
         else:
-            startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
+            if self.cpu_type == "ARMv8.2-A":
+                startup_script.write("sys.cpu CORTEXA55\n")
+            else:
+                startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
             if self.minidump:
                 startup_script.write('SYStem.Option MMUSPACES OFF\n')
             else:
