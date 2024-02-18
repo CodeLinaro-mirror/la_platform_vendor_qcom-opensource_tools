@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -937,7 +937,7 @@ class RamDump():
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm):
+                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm, self.get_kernel_version()):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -2269,6 +2269,15 @@ class RamDump():
             elif os.path.isfile(file):
                 on_file(file)
 
+    def has_debug_info(self, file):
+        cmd = self.objdump_path + ' -h ' + file
+        objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
+        out, err = objdump.communicate()
+        if '.debug_info' in out:
+            return True
+        else:
+            return False
+
     def parse_module_symbols(self):
         # Recursively search all files under mod_path ending in '.ko.unstripped' and store in a list
         ko_file_list = {}
@@ -2285,6 +2294,11 @@ class RamDump():
                 # Prefer .ko.unstripped
                 if ko_file_list.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
                     return
+
+                # Prefer ko with debug info
+                if name in ko_file_list and self.has_debug_info(ko_file_list.get(name)):
+                    return
+
                 ko_file_list[name] = file
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
