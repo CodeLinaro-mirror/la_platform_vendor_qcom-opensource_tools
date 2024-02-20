@@ -24,10 +24,9 @@ import stat
 import subprocess
 import enum
 import copy
-
+import threading
 from boards import get_supported_boards, get_supported_ids
 from tempfile import NamedTemporaryFile
-
 import gdbmi
 from print_out import print_out_str
 from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
@@ -694,7 +693,7 @@ class RamDump():
         vmalloc_start = self.modules_end - self.kaslr_offset
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
 
-            phys_base = 0x1ffffffff
+            phys_base = 0x27fffffff
             phys_end = 0
 
             if self.reduceddump:
@@ -712,8 +711,8 @@ class RamDump():
                     if end > phys_end:
                         phys_end = end
 
-            if phys_end > 0x1ffffffff:
-                phys_end = 0x1ffffffff
+            #if phys_end > 0x27fffffff:
+            #    phys_end = 0x27fffffff
             #mask phys_base lower address for alignment
             phys_base = phys_base & 0xfffff0000
 
@@ -785,6 +784,11 @@ class RamDump():
 
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
+        ## used for read_physical in multi-thread mode
+        self.use_multithread = False
+        self.ebi_files_mappings = {}
+        self.thread_name_prefix = "ThreadPoolExecutor-0"
+        ##
         self.ebi_files_minidump = []
         self.ebi_pa_name_map = {}
         self.md_dict = {}
@@ -2603,18 +2607,54 @@ class RamDump():
             return data
 
         else:
-            ebi = (-1, -1, -1)
-            for a in self.ebi_files:
-                fd, start, end, path = a
-                if addr >= start and addr <= end:
-                    ebi = a
-                    break
-            if ebi[0] == -1:
-                return None
-            offset = addr - ebi[1]
-            ebi[0].seek(offset)
-            a = ebi[0].read(length)
-            return a
+            if self.use_multithread and threading.current_thread().name.startswith(self.thread_name_prefix):
+                '''multi-thread enabled'''
+                ebi_files = self.ebi_files_mappings[threading.current_thread().name]
+                return self.__read_physical(addr, length, ebi_files)
+            else:
+                return self.__read_physical(addr, length, self.ebi_files)
+
+    def __read_physical(self, addr, length, ebi_files):
+        ebi = (-1, -1, -1)
+        for a in ebi_files:
+            fd, start, end, path = a
+            if addr >= start and addr <= end:
+                ebi = a
+                break
+        if ebi[0] == -1:
+            return None
+        offset = addr - ebi[1]
+        ebi[0].seek(offset)
+        a = ebi[0].read(length)
+        return a
+
+    def enable_multithread(self, thread_max_count, thread_name_prefix):
+        if self.use_multithread:
+            print_out_str("Ramparser is already running in multi-thread mode!!!")
+            return
+        if thread_max_count > 8 or thread_max_count <= 1:
+            thread_max_count = 8
+
+        self.use_multithread = True
+        self.thread_name_prefix = thread_name_prefix
+        self.ebi_files_mappings = {}
+        for idx in range(thread_max_count):
+            tmp_ebi = []
+            for file in self.ebi_files:
+                _, start, end, path = file
+                tmp_ebi.append([open(path, 'rb'), start, end, path])
+            self.ebi_files_mappings[f"{thread_name_prefix}_{idx}"] = tmp_ebi
+
+    def disable_multithread(self):
+        if not self.use_multithread:
+            return
+
+        self.use_multithread =  False
+        for eib_files in self.ebi_files_mappings.values():
+            for file in self.ebi_files:
+                fd, start, end, path = file
+                fd.close()
+        self.ebi_files_mappings = {}
 
     def read_dword(self, addr_or_name, virtual=True, cpu=None, allow_elf=False):
         s = self.read_string(addr_or_name, '<Q', virtual, cpu, allow_elf)
