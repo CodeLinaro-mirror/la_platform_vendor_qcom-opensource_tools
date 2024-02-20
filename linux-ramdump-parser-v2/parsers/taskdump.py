@@ -565,11 +565,37 @@ def dump_thread_group_timestamps(ramdump, task_addr):
 
     return True
 
+def do_dump_cmdline(ramdump):
+    '''
+    As task_struct->comm[16] stored a small part of process name.
+    developer can't distinct which process it is.
+    this method is to dump full cmdline for each user space process
+
+    output like:
+    1365         android.hardwar      /vendor/bin/hw/android.hardware.contexthub-service.qmi
+    1370         android.hardwar      /vendor/bin/hw/android.hardware.drm-service.clearkey
+    '''
+    from utasklib import UTaskLib
+    task_out = ramdump.open_file('utask_cmdline.txt')
+    task_out.write("User space processes:\n\n")
+
+    task_out.write("{} {} {}\n".format(
+                "PID".ljust(10," "),
+                "COMM".ljust(20," "),
+                "CMDLINE".ljust(20," ")))
+
+    for cmdline_obj in UTaskLib(ramdump).for_each_cmdline():
+        task_out.write("{} {} {}\n".format(
+            str(cmdline_obj.pid).ljust(10," "),
+            cmdline_obj.comm.ljust(20," "),
+            cmdline_obj.cmdline.ljust(20," ")))
+
 @register_parser('--print-tasks', 'Print all the task information', shortopt='-t')
 class DumpTasks(RamParser):
 
     def parse(self):
         do_dump_stacks(self.ramdump, 0)
+        do_dump_cmdline(self.ramdump)
 
 @register_parser('--print-tasks-timestamps', 'Print all the task sched stats per core sorted on arrival time', shortopt='-T')
 class DumpTasksTimeStamps(RamParser):
