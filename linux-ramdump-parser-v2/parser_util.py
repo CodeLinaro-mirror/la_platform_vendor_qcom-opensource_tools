@@ -1,4 +1,5 @@
 # Copyright (c) 2013-2015, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -9,12 +10,14 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
+from print_out import print_out_str
 import os
 import platform
 import glob
 import re
 import string
 import sys
+import time
 
 _parsers = []
 
@@ -122,6 +125,15 @@ def get_parsers():
     import_all_by_path(os.path.join('extensions','parsers'))
     return _parsers
 
+def time_cost(func):
+    """Print the time cost of the decorated function"""
+    def wrapper_timer(*args, **kwargs):
+        start_time = time.perf_counter()
+        value = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        print_out_str(f"Finished {func.__name__!r} in {(end_time - start_time):.2f} secs")
+        return value
+    return wrapper_timer
 
 class RamParser(object):
 
