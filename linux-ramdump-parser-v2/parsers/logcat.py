@@ -10,6 +10,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
+
 from parser_util import register_parser, RamParser, cleanupString
 from print_out import print_out_str
 import struct
@@ -293,6 +294,18 @@ class Logcat(RamParser):
                 store_offset = store_offset + size + meta_size
         self.generate_bin(taskinfo.mmu)
 
+    def is_LE_process(self, taskinfo):
+        for vma in taskinfo.vmalist:
+            if vma.file_name == "liblog.so.0.0.0":
+                return True
+        return False
+
+    def is_openwrt_process(self, taskinfo):
+        for vma in taskinfo.vmalist:
+            if "libubus.so." in vma.file_name:
+                return True
+        return False
+
     def parse(self):
         if self.ramdump.logcat_limit_time == 0:
             self.__parse()
@@ -345,6 +358,19 @@ class Logcat(RamParser):
                 else:
                     # generate logcat.bin when both logcat_v3 and logcat_vma parse failed
                     self.generate_logcat_bin(taskinfo)
+
+            elif self.is_LE_process(taskinfo):
+                print_out_str("LE ramdump")
+                from parsers.logcat_m import Logcat_m
+                #parser to supprot Android M
+                logcat = Logcat_m(self.ramdump, taskinfo)
+                logcat.parse()
+            elif self.is_openwrt_process(taskinfo):
+                print_out_str("Openwrt ramdump")
+                from parsers.logcat_openwrt import Logcat_openwrt
+                #parser to supprot openwrt platform
+                logcat = Logcat_openwrt(self.ramdump, taskinfo)
+                logcat.parse()
             else:
                 self.generate_logcat_bin(taskinfo)
         except Exception as result:

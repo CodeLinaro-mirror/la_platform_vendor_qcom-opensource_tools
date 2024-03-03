@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -18,6 +18,7 @@ from parser_util import register_parser, RamParser
 import operator
 import os
 from collections import defaultdict
+from .pagetracking import StackDepot
 
 SLAB_RED_ZONE = 0x400
 SLAB_POISON = 0x800
@@ -35,15 +36,6 @@ CALLSTACK_INDEX = 1
 CALL_STACK = 2
 TRACK_TYPE = 3
 TRACK_PIDS = 4
-
-SIZE_OF_DEPOT_STACK_HANDLE = 32
-STACK_ALLOC_NULL_PROTECTION_BITS = 1
-STACK_DEPOT_EXTRA_BITS = 5
-STACK_ALLOC_ALIGN = 4
-PAGE_SHIFT = 12
-STACK_ALLOC_ORDER = 2
-STACK_ALLOC_OFFSET_BITS = STACK_ALLOC_ORDER + PAGE_SHIFT - STACK_ALLOC_ALIGN
-STACK_ALLOC_INDEX_BITS = SIZE_OF_DEPOT_STACK_HANDLE - STACK_ALLOC_NULL_PROTECTION_BITS - STACK_ALLOC_OFFSET_BITS - STACK_DEPOT_EXTRA_BITS
 
 # g_Optimization - if false will print :
 # 1. Free objects callstacks
@@ -121,8 +113,6 @@ class struct_member_offset(object):
             'struct kmem_cache_node', 'partial')
         self.kmemcachenode_full = ramdump.field_offset(
                             'struct kmem_cache_node', 'full')
-        self.page_lru = ramdump.field_offset(
-                            'struct page', 'lru')
         self.page_flags = ramdump.field_offset(
                             'struct page', 'flags')
         self.track_cpu = ramdump.field_offset(
@@ -136,10 +126,6 @@ class struct_member_offset(object):
         self.cpu_partial_offset = ramdump.field_offset(
                             'struct kmem_cache_cpu', 'partial')
         if ramdump.kernel_version >= (5, 17):
-            self.stack_entries_offset = ramdump.field_offset(
-                            'struct stack_record', 'entries')
-            self.stack_size_offset = ramdump.field_offset(
-                            'struct stack_record', 'size')
             self.page_freelist = ramdump.field_offset(
                             'struct slab', 'freelist')
             self.cpu_cache_slab_offset = ramdump.field_offset(
@@ -150,8 +136,6 @@ class struct_member_offset(object):
                             'struct slab', 'next')
             self.track_addrs = ramdump.field_offset(
                             'struct track', 'handle')
-            self.sizeof_struct_depot = ramdump.sizeof(
-                                            'struct depot_stack_handle_t')
         else :
             self.page_freelist = ramdump.field_offset(
                             'struct page', 'freelist')
@@ -163,17 +147,30 @@ class struct_member_offset(object):
                             'struct page', 'next')
             self.track_addrs = ramdump.field_offset(
                             'struct track', 'addrs')
+        if ramdump.kernel_version >= (6, 1):
+            self.page_offset = ramdump.field_offset(
+                                'struct slab', 'slab_list')
+        elif ramdump.kernel_version >= (5, 4):
+            self.page_offset = ramdump.field_offset(
+                                'struct page', 'slab_list')
+        else:
+            self.page_offset = ramdump.field_offset(
+                                'struct page', 'lru')
         self.sizeof_void_pointer = ramdump.sizeof(
                                              "void *")
         self.sizeof_unsignedlong = ramdump.sizeof(
                                              "unsigned long")
-
 
 @register_parser('--slabinfo', 'print information about slabs', optional=True)
 class Slabinfo(RamParser):
     g_allstacks = {}  # hold callstack stack
     g_index = 0
     g_offsetof = None
+
+    def __init__(self, *args):
+        super(Slabinfo, self).__init__(*args)
+        self.stackdepot = StackDepot(self.ramdump)
+        return
 
     def get_free_pointer(self, ramdump, s, obj):
         # just like validate_slab_slab!
@@ -204,17 +201,26 @@ class Slabinfo(RamParser):
 
     def get_track(self, ramdump,  slab, obj, track_type):
         track_size = g_offsetof.sizeof_struct_track
-        if slab.offset != 0:
-            p = obj + slab.red_left_pad + slab.offset + g_offsetof.sizeof_void_pointer
+        if slab.flags & SLAB_RED_ZONE:
+            obj += slab.red_left_pad
+        if ramdump.kernel_version >= (5, 4):
+            if slab.offset >= slab.inuse:
+                p = obj + slab.inuse + g_offsetof.sizeof_void_pointer
+            else:
+                p = obj + slab.inuse
         else:
-            p = obj + slab.red_left_pad + slab.inuse
+            if slab.offset != 0:
+                p = obj + slab.offset + g_offsetof.sizeof_void_pointer
+            else:
+                p = obj + slab.inuse
         return p + track_type * track_size
 
     def extract_callstack(self, ramdump, stack, out_file):
         for a in stack:
             look = ramdump.unwind_lookup(a)
             if look is None:
-                out_file.write("Unknown symbol\n")
+                out_file.write(
+                    '      [<{0:x}>] {1}\n'.format(a, "unknown symbol"))
                 continue
             symname, offset = look
             out_file.write(
@@ -230,21 +236,7 @@ class Slabinfo(RamParser):
             return None, None
 
         handle = self.ramdump.read_word(start)
-        offset = ((handle >> STACK_ALLOC_INDEX_BITS) & 0x3FF) << STACK_ALLOC_ALIGN
-        slabindex = handle & 0xFFFF
-        stack_slabs= self.ramdump.address_of('stack_slabs')
-        pointer_size = g_offsetof.sizeof_unsignedlong
-        slab = self.ramdump.read_word(stack_slabs + slabindex * pointer_size)
-        stack_record = slab + offset
-        entry_offset = g_offsetof.stack_entries_offset
-        size = g_offsetof.stack_size_offset
-        size = self.ramdump.read_int(stack_record + size)
-        for i in range(0, size):
-            a = self.ramdump.read_word(stack_record + entry_offset + pointer_size * i)
-            if a == 0:
-                continue
-            stack += [a]
-            stackstr += str(a)
+        nr_entries, stack, stackstr = self.stackdepot.stack_depot_fetch(handle, symbol=False)
         return stack, stackstr
 
     def print_track(self, ramdump, slab, obj, track_type, out_file):
@@ -387,13 +379,13 @@ class Slabinfo(RamParser):
             if page > max_page:
                 return
             if cpu_partial is False:
-                page = page - g_offsetof.page_lru
+                page = page - g_offsetof.page_offset
             seen.append(page)
             self.print_slab(
                 self.ramdump, slab_obj, page, out_file, map_fn,
                 out_slabs_addrs)
             if cpu_partial is False:
-                page = self.ramdump.read_word(page + g_offsetof.page_lru)
+                page = self.ramdump.read_word(page + g_offsetof.page_offset)
             else:
                 page = self.ramdump.read_word(page + g_offsetof.page_next)
 
@@ -430,7 +422,7 @@ class Slabinfo(RamParser):
         else:
             print("FREE", file=self.slabs_object_out)
         if when == 0:
-            print("object 0x%x seems did not allocate/free until now\n" % (obj), file=self.slabs_object_out)
+            print("object 0x%x is not %s until now\n" % (obj, "allocated" if type == 0 else "freed"), file=self.slabs_object_out)
             return
         if self.ramdump.kernel_version <= (5, 17):
             for i in range(0, 16):
@@ -438,7 +430,6 @@ class Slabinfo(RamParser):
                 if a == 0:
                     continue
                 stack += [a]
-
         else:
             stack, stackstr = self.stack_depot_fetch(ramdump, start)
 
@@ -447,7 +438,8 @@ class Slabinfo(RamParser):
         for a in stack:
             look = ramdump.unwind_lookup(a)
             if look is None:
-                self.slabs_object_out.write("Unknown symbol\n")
+                self.slabs_object_out.write(
+                    '      [<{0:x}>] {1}\n'.format(a, "unknown symbol"))
                 continue
             symname, offset = look
             self.slabs_object_out.write(
@@ -475,7 +467,9 @@ class Slabinfo(RamParser):
             else:
                 self.print_track(ramdump, slab, p, free, out_file)
 
-    def print_check_poison(self, p, free, slab, page, out_file):
+    def print_check_poison(
+        self, ramdump, p, free, slab, page,
+            out_file, out_slabs_addrs):
         if free:
             self.check_object(slab, page, p, SLUB_RED_INACTIVE, out_file)
         else:
@@ -693,6 +687,7 @@ class Slabpoison(Slabinfo):
 
     def print_trailer(self, s, page, p, out_file):
         addr = page_address(self.ramdump, page)
+        page_size = self.ramdump.get_page_size()
 
         if self.ramdump.is_config_defined('CONFIG_SLUB_DEBUG_ON'):
             self.print_track(self.ramdump, s.addr, p, 0, out_file)
@@ -704,7 +699,7 @@ class Slabpoison(Slabinfo):
         if (p > addr + 16):
             self.print_section('Bytes b4 ', p - 16, 16, out_file)
 
-        self.print_section('Object ', p, min(s.object_size, 4096), out_file)
+        self.print_section('Object ', p, min(s.object_size, page_size), out_file)
         if (s.flags & SLAB_RED_ZONE):
             self.print_section('Redzone ', p + s.object_size,
                 s.inuse - s.object_size, out_file)
@@ -800,7 +795,7 @@ class Slabpoison(Slabinfo):
             return self.cache[idx:idx + size]
         # accessing only one page
         elif page_addr == end_page_addr:
-            fmtstr = '<{}B'.format(4096)
+            fmtstr = '<{}B'.format(self.ramdump.get_page_size())
             self.cache = self.ramdump.read_string(page_addr, fmtstr)
             self.cache_addr = page_addr
             idx = addr - self.cache_addr
@@ -813,5 +808,8 @@ class Slabpoison(Slabinfo):
         self.cache = None
         self.cache_addr = None
         slab_out = self.ramdump.open_file('slabpoison.txt')
+        self.slabs_object_out = self.ramdump.open_file('slabpoison_object.txt')
         self.validate_slab_cache(slab_out, None, self.print_check_poison)
         print_out_str('---wrote slab information to slabpoison.txt')
+        self.slabs_object_out.close()
+        slab_out.close()
