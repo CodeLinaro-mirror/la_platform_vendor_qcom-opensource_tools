@@ -164,10 +164,10 @@ class FtraceParser(RamParser):
             global_trace_data_next = self.ramdump.read_u32(global_trace_data_org + global_trace_data_offset)
 
         if self.ramdump.kernel_version >= (5, 10):
-            trace_buffer_ptr = self.ramdump.field_offset(
+            trace_buffer_offset = self.ramdump.field_offset(
                 'struct trace_array', 'array_buffer')
         else:
-            trace_buffer_ptr = self.ramdump.field_offset(
+            trace_buffer_offset = self.ramdump.field_offset(
                 'struct trace_array', 'trace_buffer')
         trace_buffer_name_offset = self.ramdump.field_offset(
             'struct trace_array', 'name')
@@ -216,23 +216,22 @@ class FtraceParser(RamParser):
         #print("Taskdump took {} secs".format(time.time()-taskdump_time))
 
         while(global_trace_data_org != global_trace_data_next):
-            global_trace_data = global_trace_data_next
-
-            trace_buffer_name = self.ramdump.read_word(global_trace_data + trace_buffer_name_offset)
+            trace_array = global_trace_data_next
+            #print("v.v (struct trace_array)0x%x" %(trace_array))
+            trace_buffer_name = self.ramdump.read_word(trace_array + trace_buffer_name_offset)
             if not (trace_buffer_name):
                 trace_name = None
             else:
                 trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
-
             if self.ramdump.arm64:
                 trace_buffer_ptr_data = self.ramdump.read_u64(
-                    global_trace_data + trace_buffer_ptr)
+                    trace_array + trace_buffer_offset)
             else:
                 trace_buffer_ptr_data = self.ramdump.read_u32(
-                    global_trace_data + trace_buffer_ptr)
+                    trace_array + trace_buffer_offset)
 
 
-            ring_trace_buffer_data = trace_buffer_ptr_data + trace_buffer_ptr
+            ring_trace_buffer_data = trace_buffer_ptr_data + trace_buffer_offset
             ring_trace_buffer_cpus = self.ramdump.read_u32(
                 ring_trace_buffer_data + ring_trace_buffer_cpus_ptr)
             if self.ramdump.arm64:
