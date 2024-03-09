@@ -236,7 +236,7 @@ class FtraceParser_Event(object):
             else:
                 tpid = pid & (self.pid_max - 1)
                 cmdline_map = self.ramdump.read_structure_field(savedcmd, 'struct saved_cmdlines_buffer', 'map_pid_to_cmdline[{}]'.format(tpid))
-                if cmdline_map != -1:
+                if cmdline_map != -1 and cmdline_map != None:
                     map_cmdline_to_pid = self.ramdump.read_pointer(savedcmd + self.map_cmdline_to_pid_offset)
                     cmdline_tpid = self.ramdump.read_int(map_cmdline_to_pid + cmdline_map * 4)
                     if cmdline_tpid == pid:
