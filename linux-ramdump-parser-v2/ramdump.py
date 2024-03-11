@@ -1177,6 +1177,7 @@ class RamDump():
 
         mm_init(self)
         self.set_available_cores()
+        self.arm_smmu_v12 = self.is_arm_smmu_v12()
 
 
     def get_section_address(self,section):
@@ -1891,6 +1892,18 @@ class RamDump():
 
     def get_page_size(self):
         return 1 << self.page_shift
+
+    def is_arm_smmu_v12(self):
+        boards = get_supported_boards()
+        chosen_board = None
+        for board in boards:
+            if self.hw_id == board.board_num:
+                chosen_board = board
+                break
+        if hasattr(chosen_board, 'arm_smmu_v12') and chosen_board.arm_smmu_v12:
+            return True
+        else:
+            return False
 
     def get_hw_id(self, add_offset=True):
         socinfo_format = -1
