@@ -132,8 +132,8 @@ class FtraceParser_Event(object):
             timestamp = self.ramdump.read_u64(
                 buffer_data_page + self.buffer_data_page_time_stamp_offset)
             rb_event = buffer_data_page + self.buffer_data_page_data_offset
-
-            while (rb_event < buffer_data_page_end):
+            total_read = 0
+            while (total_read < commit):
                 time_delta = self.ramdump.read_u32(rb_event + self.rb_event_timedelta_offset)
                 time_delta = time_delta >> 5
                 # print_out_str("time_delta after = {0} ".format(time_delta))
@@ -217,6 +217,7 @@ class FtraceParser_Event(object):
                     abs_timestamp = True
 
                 rb_event = rb_event + record_length
+                total_read +=record_length
                 #alignment = 4 - (rb_event % 4)
                 #rb_event += alignment
 
