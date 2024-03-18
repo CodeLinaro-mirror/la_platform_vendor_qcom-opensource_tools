@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2013, 2015, 2017-2020,2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -90,13 +90,16 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
     offset_prio = ramdump.field_offset('struct task_struct', 'prio')
     if ramdump.is_config_defined('CONFIG_SMP'):
         offset_oncpu = ramdump.field_offset('struct task_struct', 'on_cpu')
-    offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
+    if ramdump.sizeof('struct sched_info') != 0:
+        offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
+        offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
+        offset_last_rundelay = offset_schedinfo + ramdump.field_offset('struct sched_info', 'run_delay')
+        offset_last_pcount = offset_schedinfo + ramdump.field_offset('struct sched_info', 'pcount')
+        offset_last_arrival = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_arrival')
+    else:
+        offset_schedinfo = None
     offset_last_enqueued_ts = ramdump.field_offset('struct task_struct', 'last_enqueued_ts')
-    offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
-    offset_last_rundelay = offset_schedinfo + ramdump.field_offset('struct sched_info', 'run_delay')
-    offset_last_pcount = offset_schedinfo + ramdump.field_offset('struct sched_info', 'pcount')
     offset_last_sleep_ts = ramdump.field_offset('struct task_struct', 'last_sleep_ts')
-    offset_last_arrival = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_arrival')
     if ramdump.kernel_version > (5, 2, 0):
         offset_affine = ramdump.field_offset('struct task_struct', 'cpus_mask')
     else:
@@ -110,10 +113,11 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
         next_thread_comm = next_thread_start + offset_comm
         next_thread_pid = next_thread_start + offset_pid
         next_thread_prio = next_thread_start + offset_prio
-        next_thread_last_arrival = next_thread_start + offset_last_arrival
-        next_thread_last_queued = next_thread_start + offset_last_queued
-        next_thread_run_delay = next_thread_start + offset_last_rundelay
-        next_thread_pcount = next_thread_start + offset_last_pcount
+        if offset_schedinfo is not None:
+            next_thread_last_arrival = next_thread_start + offset_last_arrival
+            next_thread_last_queued = next_thread_start + offset_last_queued
+            next_thread_run_delay = next_thread_start + offset_last_rundelay
+            next_thread_pcount = next_thread_start + offset_last_pcount
         next_thread_stack = next_thread_start + offset_stack
         next_thread_state = next_thread_start + offset_state
         next_thread_exit_state = next_thread_start + offset_exit_state
@@ -238,11 +242,23 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
                 if cpu_no not in ramdump.iter_cpus():
                     error = 1
                     return
+
+            if offset_schedinfo is not None:
+                thread_last_arrival_val = ramdump.read_u64(next_thread_last_arrival)
+                thread_last_queued_val = ramdump.read_u64(next_thread_last_queued)
+                thread_run_delay_val = ramdump.read_u64(next_thread_run_delay)
+                thread_pcount_val = ramdump.read_word(next_thread_pcount)
+            else:
+                thread_last_arrival_val = 0
+                thread_last_queued_val = 0
+                thread_run_delay_val = 0
+                thread_pcount_val = 0
+
             task_per_cpu_list[task_cpu].append([thread_task_name, thread_task_pid,
-                ramdump.read_u64(next_thread_last_arrival),
-                ramdump.read_u64(next_thread_last_queued),
-                ramdump.read_u64(next_thread_run_delay),
-                ramdump.read_word(next_thread_pcount),
+                thread_last_arrival_val,
+                thread_last_queued_val,
+                thread_run_delay_val,
+                thread_pcount_val,
                 thread_task_prio, task_state_str,
                 task_last_enqueued_ts,
                 task_last_sleep_ts])
@@ -429,11 +445,14 @@ def dump_thread_group_timestamps(ramdump, task_addr):
     offset_task = ramdump.field_offset('struct thread_info', 'task')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
     offset_prio = ramdump.field_offset('struct task_struct', 'prio')
-    offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
-    offset_last_arrival = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_arrival')
-    offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
-    offset_last_pcount = offset_schedinfo + ramdump.field_offset('struct sched_info', 'pcount')
-    offset_last_rundelay = offset_schedinfo + ramdump.field_offset('struct sched_info', 'run_delay')
+    if ramdump.sizeof('struct sched_info') != 0:
+        offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
+        offset_last_arrival = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_arrival')
+        offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
+        offset_last_pcount = offset_schedinfo + ramdump.field_offset('struct sched_info', 'pcount')
+        offset_last_rundelay = offset_schedinfo + ramdump.field_offset('struct sched_info', 'run_delay')
+    else:
+        offset_schedinfo = None
 
     if ramdump.kernel_version >= (5, 14, 0):
         offset_state = ramdump.field_offset('struct task_struct', '__state')
@@ -452,10 +471,11 @@ def dump_thread_group_timestamps(ramdump, task_addr):
         next_thread_comm = next_thread_start + offset_comm
         next_thread_pid = next_thread_start + offset_pid
         next_thread_prio = next_thread_start + offset_prio
-        next_thread_last_arrival = next_thread_start + offset_last_arrival
-        next_thread_last_queued = next_thread_start + offset_last_queued
-        next_thread_pcount = next_thread_start + offset_last_pcount
-        next_thread_run_delay = next_thread_start + offset_last_rundelay
+        if offset_schedinfo is not None:
+            next_thread_last_arrival = next_thread_start + offset_last_arrival
+            next_thread_last_queued = next_thread_start + offset_last_queued
+            next_thread_pcount = next_thread_start + offset_last_pcount
+            next_thread_run_delay = next_thread_start + offset_last_rundelay
         next_thread_stack = next_thread_start + offset_stack
         next_thread_info = ramdump.get_thread_info_addr(next_thread_start)
         next_thread_state = next_thread_start + offset_state
@@ -519,11 +539,23 @@ def dump_thread_group_timestamps(ramdump, task_addr):
             if next_thread_start != thread_info_task:
                 print_out_str('!!!! Task list or Thread info corruption\n{0}  {1}'.format(next_thread_start,thread_info_task))
                 return False
+
+        if offset_schedinfo is not None:
+            thread_last_arrival_val = ramdump.read_u64(next_thread_last_arrival)
+            thread_last_queued_val = ramdump.read_u64(next_thread_last_queued)
+            thread_run_delay_val = ramdump.read_u64(next_thread_run_delay)
+            thread_pcount_val = ramdump.read_word(next_thread_pcount)
+        else:
+            thread_last_arrival_val = 0
+            thread_last_queued_val = 0
+            thread_run_delay_val = 0
+            thread_pcount_val = 0
+
         task_per_cpu_list[cpu_no].append([thread_task_name, thread_task_pid,
-            ramdump.read_u64(next_thread_last_arrival),
-            ramdump.read_u64(next_thread_last_queued),
-            ramdump.read_u64(next_thread_run_delay),
-            ramdump.read_word(next_thread_pcount),
+            thread_last_arrival_val,
+            thread_last_queued_val,
+            thread_run_delay_val,
+            thread_pcount_val,
             thread_task_prio,thread_task_state_str,
             thread_last_enqueued_ts,
             thread_last_sleep_ts])
@@ -533,11 +565,37 @@ def dump_thread_group_timestamps(ramdump, task_addr):
 
     return True
 
+def do_dump_cmdline(ramdump):
+    '''
+    As task_struct->comm[16] stored a small part of process name.
+    developer can't distinct which process it is.
+    this method is to dump full cmdline for each user space process
+
+    output like:
+    1365         android.hardwar      /vendor/bin/hw/android.hardware.contexthub-service.qmi
+    1370         android.hardwar      /vendor/bin/hw/android.hardware.drm-service.clearkey
+    '''
+    from utasklib import UTaskLib
+    task_out = ramdump.open_file('utask_cmdline.txt')
+    task_out.write("User space processes:\n\n")
+
+    task_out.write("{} {} {}\n".format(
+                "PID".ljust(10," "),
+                "COMM".ljust(20," "),
+                "CMDLINE".ljust(20," ")))
+
+    for cmdline_obj in UTaskLib(ramdump).for_each_cmdline():
+        task_out.write("{} {} {}\n".format(
+            str(cmdline_obj.pid).ljust(10," "),
+            cmdline_obj.comm.ljust(20," "),
+            cmdline_obj.cmdline.ljust(20," ")))
+
 @register_parser('--print-tasks', 'Print all the task information', shortopt='-t')
 class DumpTasks(RamParser):
 
     def parse(self):
         do_dump_stacks(self.ramdump, 0)
+        do_dump_cmdline(self.ramdump)
 
 @register_parser('--print-tasks-timestamps', 'Print all the task sched stats per core sorted on arrival time', shortopt='-T')
 class DumpTasksTimeStamps(RamParser):

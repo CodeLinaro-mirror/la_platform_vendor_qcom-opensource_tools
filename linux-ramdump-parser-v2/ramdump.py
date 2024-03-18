@@ -1177,6 +1177,7 @@ class RamDump():
 
         mm_init(self)
         self.set_available_cores()
+        self.arm_smmu_v12 = self.is_arm_smmu_v12()
 
 
     def get_section_address(self,section):
@@ -1367,9 +1368,20 @@ class RamDump():
             b = self.read_cstring(command_addr, 2048)
             if b is None:
                 print_out_str('!!! could not read saved command line address')
+                static_command_addr = self.address_of('static_command_line')
+                if static_command_addr is not None:
+                    static_command_addr = self.read_word(static_command_addr)
+                    b = self.read_cstring(static_command_addr, 2048)
+                    if b is None:
+                        print_out_str('!!! could not read static command line address')
+                        return False
+                    else:
+                        print_out_str('Satic Command Line: ' + b)
+                        return True
                 return False
-            print_out_str('Command Line: ' + b)
-            return True
+            else:
+                print_out_str('Saved Command Line: ' + b)
+                return True
         else:
             print_out_str('!!! Could not lookup saved command line address')
             return False
@@ -1519,7 +1531,10 @@ class RamDump():
         if self.arm64 and is_cortex_a53:
             startup_script.write('sys.cpu CORTEXA53\n')
         else:
-            startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
+            if self.cpu_type == "ARMv8.2-A":
+                startup_script.write("sys.cpu CORTEXA55\n")
+            else:
+                startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
             if self.minidump:
                 startup_script.write('SYStem.Option MMUSPACES OFF\n')
             else:
@@ -1877,6 +1892,18 @@ class RamDump():
 
     def get_page_size(self):
         return 1 << self.page_shift
+
+    def is_arm_smmu_v12(self):
+        boards = get_supported_boards()
+        chosen_board = None
+        for board in boards:
+            if self.hw_id == board.board_num:
+                chosen_board = board
+                break
+        if hasattr(chosen_board, 'arm_smmu_v12') and chosen_board.arm_smmu_v12:
+            return True
+        else:
+            return False
 
     def get_hw_id(self, add_offset=True):
         socinfo_format = -1
