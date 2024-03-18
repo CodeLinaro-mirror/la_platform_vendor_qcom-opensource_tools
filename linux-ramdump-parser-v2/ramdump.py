@@ -928,6 +928,10 @@ class RamDump():
             vector, htable, filemap = elfutil.setup_elfmappings(self.elf_addr)
             self.elf_vector, self.elf_htable, self.elf_filemap = vector, htable, filemap
 
+        if not self.has_debug_info(self.vmlinux):
+            print('!!! Your vmlinux does not have debug info.')
+            print('!!! Exiting now')
+            sys.exit(1)
 
         if options.minidump:
             if not options.autodump:
