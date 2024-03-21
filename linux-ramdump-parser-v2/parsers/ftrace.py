@@ -10,10 +10,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-import parser_util
-import local_settings
-import os
-import subprocess
 import re
 from collections import OrderedDict
 
@@ -26,10 +22,7 @@ import linux_list as llist
 from . import taskdump
 #import time
 
-@register_parser(
-    '--dump-ftrace',
-    'Use \'crash\' to extract ftrace and trace-cmd to parse it.',
-    optional=True)
+@register_parser('--dump-ftrace', 'extract ftrace by iterate the ring buffer page',optional=True)
 class FtraceParser(RamParser):
 
     def __init__(self, *args):
@@ -406,102 +399,5 @@ class FtraceParser(RamParser):
 
 
     def parse(self):
-        if parser_util.get_system_type() != 'Linux':
-            self.ftrace_extract()
-            return False
-
-        try:
-            crashtool = local_settings.crashtool
-            trace_ext = local_settings.trace_ext
-            tracecmdtool = local_settings.tracecmdtool
-        except AttributeError:
-            print_out_str("One of crashtool, the trace extension or" +
-                          " trace-cmd is missing from local-settings.py")
-            return False
-
-        if not os.path.exists(crashtool):
-            print_out_str("Couldn't find the crash tool")
-            return False
-        if not os.path.exists(trace_ext):
-            print_out_str("Couldn't find the crash tool trace extension")
-            return False
-        if not os.path.exists(tracecmdtool):
-            print_out_str("Couldn't find the trace-cmd tool")
-            return False
-
-        print_out_str(crashtool)
-        dumps=""
-        for (f, start, end, filename) in self.ramdump.ebi_files:
-                if "DDR" in filename or "dram" in filename:
-                    dumps += '{0}@0x{1:x},'.format(filename, start)
-        pagesize = "-p {}".format(self.ramdump.get_page_size())
-
-        commandsfile = NamedTemporaryFile(mode='w', delete=False,
-                              dir=self.ramdump.outdir)
-        commandsfile.write("extend " + trace_ext + "\n")
-        commandsfile.write("trace dump -t " + self.ramdump.outdir +
-                       "/rawtracedata\n")
-        commandsfile.write("quit\n")
-        commandsfile.close()
-
-        commands = "-i " + commandsfile.name
-
-        crashargs = [crashtool]
-
-        kaslr_offset = self.ramdump.get_kaslr_offset()
-        if kaslr_offset != 0:
-            kaslroffset = "--kaslr={0}".format(hex(kaslr_offset))
-            crashargs.append(kaslroffset)
-
-        if self.ramdump.kimage_voffset is not None:
-            kimagevoff="kimage_voffset={0}".format(hex(self.ramdump.kimage_voffset).replace('L',''))
-            crashargs.append("--machdep")
-            crashargs.append(kimagevoff)
-
-        crashargs.extend([dumps, self.ramdump.vmlinux,
-                     pagesize, commands])
-
-        print_out_str('args to crash: {0}'.format(crashargs))
-
-        sp = subprocess.Popen(crashargs,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE,
-                              universal_newlines = True)
-        out, err = sp.communicate()
-
-        if out:
-             print_out_str("crash standard output recorded.")
-             std = self.ramdump.open_file('stdout_crashtool.txt')
-             std.write(out);
-             std.close();
-        if err:
-             print_out_str("crash standard error recorded.")
-             std = self.ramdump.open_file('stderr_crashtool.txt')
-             std.write(err);
-             std.close();
-
-        os.remove(commandsfile.name)
-
-        if not os.path.exists(self.ramdump.outdir + "/rawtracedata"):
-             print_out_str("crash failed to extract raw ftrace data")
-             return False
-
-        tracecmd_arg = self.ramdump.outdir + "/rawtracedata"
-        sp = subprocess.Popen([tracecmdtool, "report", "-l", tracecmd_arg],
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE,
-                              universal_newlines=True)
-        out, err = sp.communicate();
-
-        if out:
-             ftrace_out = self.ramdump.open_file('ftrace.txt')
-             ftrace_out.write(out);
-             ftrace_out.close();
-             print_out_str("Ftrace successfully extracted.");
-        if err:
-             print_out_str("trace-cmd standard error recorded.")
-             std = self.ramdump.open_file('stderr_tracecmd.txt')
-             std.write(err);
-             std.close();
-
-        return True
+        self.ftrace_extract()
+        
