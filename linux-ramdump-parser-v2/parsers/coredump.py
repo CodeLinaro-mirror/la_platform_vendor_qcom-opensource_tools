@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 
 from parser_util import register_parser, RamParser, time_cost
 import print_out
@@ -143,7 +143,11 @@ class coredump(RamParser):
         self.mm = self.struct_parser.read_struct(self.task.mm,"struct mm_struct")
         if self.mm is None:
             raise Exception("Coredump is not supported!!, please give userspace process name or pid")
-        corefile_name = "core.{0:d}.{1:s}".format(self.task.pid, self.to_string(self.task.comm))
+        ### ":" character is invalid symbol for file create when process name has ":" like binder:781_2
+        ### it will lead to core dump file failed.
+        ### solution was replace ":" with "_"
+        comm = self.to_string(self.task.comm).replace(":","_")
+        corefile_name = "core.{0:d}.{1:s}".format(self.task.pid, comm)
         self.corefile = self.ramdump.open_file(corefile_name,'wb+')
         try:
             self.gate_vma = self.ramdump.address_of("gate_vma")
