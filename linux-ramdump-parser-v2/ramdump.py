@@ -1988,7 +1988,9 @@ class RamDump():
                     if not found:
                         continue
                 socinfo_id = self.read_int(socinfo_start + 4, False)
-                if socinfo_id != board.socid:
+                if socinfo_id is None:
+                    break
+                if (socinfo_id & 0xFFFF) != board.socid:
                     continue
 
                 socinfo_format = self.read_int(socinfo_start, False)
