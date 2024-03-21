@@ -143,6 +143,22 @@ class FtraceParser(RamParser):
         self.format_event_map[name_str] = fmt_list
         self.format_event_field_map = OrderedDict()
 
+    def ftrace_get_format(self):
+        self.formats_out = self.ramdump.open_file('formats.txt')
+        fevent_list = FtraceParser_Event_List(self.ramdump)
+        #print(fevent_list.ftrace_raw_struct_type)
+
+        ftrace_events_list = self.ramdump.address_of('ftrace_events')
+        next_offset = self.ramdump.field_offset(self.event_call, 'list')
+        list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
+        list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
+        self.formats_out.close()
+        #taskdump_time = time.time()
+        taskdump.do_dump_stacks(self.ramdump, 0)
+        #print("Taskdump took {} secs".format(time.time()-taskdump_time))
+
+        return fevent_list
+
     def ftrace_extract(self):
         #ftrace_event_time = 0
         #post_ftrace_event_time = 0
@@ -151,11 +167,7 @@ class FtraceParser(RamParser):
         global_trace_data_org = self.ramdump.address_of('ftrace_trace_arrays')
         global_trace_data_offset = self.ramdump.field_offset(
             'struct list_head ', 'next')
-        if self.ramdump.arm64:
-            global_trace_data_next = self.ramdump.read_u64(global_trace_data_org + global_trace_data_offset)
-        else:
-            global_trace_data_next = self.ramdump.read_u32(global_trace_data_org + global_trace_data_offset)
-
+        global_trace_data_next = self.ramdump.read_pointer(global_trace_data_org + global_trace_data_offset)
         if self.ramdump.kernel_version >= (5, 10):
             trace_buffer_offset = self.ramdump.field_offset(
                 'struct trace_array', 'array_buffer')
@@ -193,21 +205,7 @@ class FtraceParser(RamParser):
         ring_trace_buffer_nr_pages = self.ramdump.field_offset(
             'struct ring_buffer_per_cpu', 'nr_pages')
         log_pattern = re.compile(r'\s*(.*)-(\d+)\s*\[(\d+)\]\s*.*')
-
-        formats_out = self.ramdump.open_file('formats.txt')
-        self.formats_out = formats_out
-        fevent_list = FtraceParser_Event_List(self.ramdump)
-        #print(fevent_list.ftrace_raw_struct_type)
-
-        ftrace_events_list = self.ramdump.address_of('ftrace_events')
-        next_offset = self.ramdump.field_offset(self.event_call, 'list')
-        list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
-        list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
-        self.formats_out.close
-        #taskdump_time = time.time()
-        taskdump.do_dump_stacks(self.ramdump, 0)
-        #print("Taskdump took {} secs".format(time.time()-taskdump_time))
-
+        fevent_list = self.ftrace_get_format();
         while(global_trace_data_org != global_trace_data_next):
             trace_array = global_trace_data_next
             #print("v.v (struct trace_array)0x%x" %(trace_array))
@@ -216,30 +214,12 @@ class FtraceParser(RamParser):
                 trace_name = None
             else:
                 trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
-            if self.ramdump.arm64:
-                trace_buffer_ptr_data = self.ramdump.read_u64(
-                    trace_array + trace_buffer_offset)
-            else:
-                trace_buffer_ptr_data = self.ramdump.read_u32(
-                    trace_array + trace_buffer_offset)
 
-
+            trace_buffer_ptr_data = self.ramdump.read_pointer(trace_array + trace_buffer_offset)
             ring_trace_buffer_data = trace_buffer_ptr_data + trace_buffer_offset
-            ring_trace_buffer_cpus = self.ramdump.read_u32(
-                ring_trace_buffer_data + ring_trace_buffer_cpus_ptr)
-            if self.ramdump.arm64:
-                ring_trace_buffer_base_data = self.ramdump.read_u64(
-                    ring_trace_buffer_data + ring_trace_buffer_ptr)
-            else:
-                ring_trace_buffer_base_data = self.ramdump.read_u32(
-                    ring_trace_buffer_data + ring_trace_buffer_ptr)
+            ring_trace_buffer_base_data = self.ramdump.read_pointer(ring_trace_buffer_data + ring_trace_buffer_ptr)
+            ring_trace_buffer_base_data1 = self.ramdump.read_pointer(ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
 
-            if self.ramdump.arm64:
-                ring_trace_buffer_base_data1 = self.ramdump.read_u64(
-                    ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
-            else:
-                ring_trace_buffer_base_data1 = self.ramdump.read_u32(
-                    ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
 
             if trace_name is None or trace_name == 0x0 or trace_name == "0x0" or trace_name == "None" or trace_name == "null" or len(trace_name) < 1:
                 #ftrace_out = self.ramdump.open_file('ftrace.txt','w')
@@ -263,10 +243,7 @@ class FtraceParser(RamParser):
                     fout = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
                     ftrace_out = BufferedWrite(fout)
                 else:
-                    if self.ramdump.arm64:
-                        global_trace_data_next =  self.ramdump.read_u64(global_trace_data_next)
-                    else:
-                        global_trace_data_next =  self.ramdump.read_u32(global_trace_data_next)
+                    global_trace_data_next =  self.ramdump.read_pointer(global_trace_data_next)
                     continue
             #    ftrace_out = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
 
@@ -278,11 +255,7 @@ class FtraceParser(RamParser):
             for cpu_idx in range(0,8):
                 #array_ptr = self.ramdump.read_u64(ring_trace_buffer_base_data1 + self.ramdump.sizeof('void *') * cpu_idx)
                 array_ptr = (ring_trace_buffer_base_data1 + self.ramdump.sizeof('void *') * cpu_idx)
-                #print "array_ptr = {0}".format(hex(array_ptr))
-                if self.ramdump.arm64:
-                    b = self.ramdump.read_u64(array_ptr)
-                else:
-                    b = self.ramdump.read_u32(array_ptr)
+                b = self.ramdump.read_pointer(array_ptr)
                 if b is None or b == 0x0:
                     continue
                 if self.ramdump.arm64:
@@ -315,12 +288,7 @@ class FtraceParser(RamParser):
                     evt.ftrace_event_parsing()
                     #parse_trace_entry_time += evt.parse_trace_entry_time
             #ftrace_event_time += (time.time()-start)
-
-            if self.ramdump.arm64:
-                global_trace_data_next =  self.ramdump.read_u64(global_trace_data_next)
-            else:
-                global_trace_data_next =  self.ramdump.read_u32(global_trace_data_next)
-
+            global_trace_data_next =  self.ramdump.read_pointer(global_trace_data_next)
             switch_map = {}
             ftrace_file_map = {}
             if trace_name is None or trace_name == 0x0 or trace_name == "0x0" or trace_name == "None" or trace_name == "null" or len(trace_name) < 1:
