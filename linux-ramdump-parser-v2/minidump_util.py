@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -160,7 +160,7 @@ def generate_elf(autodump, outdir, vm, kernel_version):
             if vm:
                 for file in files:
                     if "autogvm" in vm:
-                        if kernel_version >= (6, 1, 0):
+                        if re.match(r'^[0-9]_', names) is None:
                             filepath = "md_" + vmid + names + ".BIN"
                             is_found = fnmatch(file, "md_" + vmid + names + "*.BIN")
                         else:
