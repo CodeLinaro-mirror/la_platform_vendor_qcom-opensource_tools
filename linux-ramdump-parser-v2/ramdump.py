@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -28,7 +28,7 @@ import threading
 from boards import get_supported_boards, get_supported_ids
 from tempfile import NamedTemporaryFile
 import gdbmi
-from print_out import print_out_str
+from print_out import print_out_str, print_out_exception
 from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
 import parser_util
 import minidump_util
@@ -928,6 +928,10 @@ class RamDump():
             vector, htable, filemap = elfutil.setup_elfmappings(self.elf_addr)
             self.elf_vector, self.elf_htable, self.elf_filemap = vector, htable, filemap
 
+        if not self.has_debug_info(self.vmlinux):
+            print('!!! Your vmlinux does not have debug info.')
+            print('!!! Exiting now')
+            sys.exit(1)
 
         if options.minidump:
             if not options.autodump:
@@ -1177,6 +1181,7 @@ class RamDump():
 
         mm_init(self)
         self.set_available_cores()
+        self.arm_smmu_v12 = self.is_arm_smmu_v12()
 
 
     def get_section_address(self,section):
@@ -1367,9 +1372,20 @@ class RamDump():
             b = self.read_cstring(command_addr, 2048)
             if b is None:
                 print_out_str('!!! could not read saved command line address')
+                static_command_addr = self.address_of('static_command_line')
+                if static_command_addr is not None:
+                    static_command_addr = self.read_word(static_command_addr)
+                    b = self.read_cstring(static_command_addr, 2048)
+                    if b is None:
+                        print_out_str('!!! could not read static command line address')
+                        return False
+                    else:
+                        print_out_str('Satic Command Line: ' + b)
+                        return True
                 return False
-            print_out_str('Command Line: ' + b)
-            return True
+            else:
+                print_out_str('Saved Command Line: ' + b)
+                return True
         else:
             print_out_str('!!! Could not lookup saved command line address')
             return False
@@ -1519,7 +1535,10 @@ class RamDump():
         if self.arm64 and is_cortex_a53:
             startup_script.write('sys.cpu CORTEXA53\n')
         else:
-            startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
+            if self.cpu_type == "ARMv8.2-A":
+                startup_script.write("sys.cpu CORTEXA55\n")
+            else:
+                startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
             if self.minidump:
                 startup_script.write('SYStem.Option MMUSPACES OFF\n')
             else:
@@ -1877,6 +1896,18 @@ class RamDump():
 
     def get_page_size(self):
         return 1 << self.page_shift
+
+    def is_arm_smmu_v12(self):
+        boards = get_supported_boards()
+        chosen_board = None
+        for board in boards:
+            if self.hw_id == board.board_num:
+                chosen_board = board
+                break
+        if hasattr(chosen_board, 'arm_smmu_v12') and chosen_board.arm_smmu_v12:
+            return True
+        else:
+            return False
 
     def get_hw_id(self, add_offset=True):
         socinfo_format = -1
@@ -2269,6 +2300,15 @@ class RamDump():
             elif os.path.isfile(file):
                 on_file(file)
 
+    def has_debug_info(self, file):
+        cmd = self.objdump_path + ' -h ' + file
+        objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
+        out, err = objdump.communicate()
+        if '.debug_info' in out:
+            return True
+        else:
+            return False
+
     def parse_module_symbols(self):
         # Recursively search all files under mod_path ending in '.ko.unstripped' and store in a list
         ko_file_list = {}
@@ -2285,6 +2325,11 @@ class RamDump():
                 # Prefer .ko.unstripped
                 if ko_file_list.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
                     return
+
+                # Prefer ko with debug info
+                if name in ko_file_list and self.has_debug_info(ko_file_list.get(name)):
+                    return
+
                 ko_file_list[name] = file
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
@@ -3041,43 +3086,46 @@ class RamDump():
         next = init_task
         seen_tasks = []
 
-        while (1):
-            task_pointer = self.read_word(next + tasks_offset, True)
-            if not task_pointer:
-                break
+        try:
+            while (1):
+                task_pointer = self.read_word(next + tasks_offset, True)
+                if not task_pointer:
+                    break
 
-            task_struct = task_pointer - tasks_offset
-            if ((self.validate_task_struct(task_struct) == -1) or (
-                    self.validate_sched_class(task_struct) == -1)):
-                next = init_task
-                while (1):
-                    task_pointer = self.read_word(next + tasks_offset +
-                                                  prev_offset, True)
+                task_struct = task_pointer - tasks_offset
+                if ((self.validate_task_struct(task_struct) == -1) or (
+                        self.validate_sched_class(task_struct) == -1)):
+                    next = init_task
+                    while (1):
+                        task_pointer = self.read_word(next + tasks_offset +
+                                                    prev_offset, True)
 
-                    if not task_pointer:
-                        break
-                    task_struct = task_pointer - tasks_offset
-                    if (self.validate_task_struct(task_struct) == -1):
-                        break
-                    if (self.validate_sched_class(task_struct) == -1):
-                        break
-                    if task_struct in seen_tasks:
-                        break
+                        if not task_pointer:
+                            break
+                        task_struct = task_pointer - tasks_offset
+                        if (self.validate_task_struct(task_struct) == -1):
+                            break
+                        if (self.validate_sched_class(task_struct) == -1):
+                            break
+                        if task_struct in seen_tasks:
+                            break
 
-                    yield task_struct
-                    seen_tasks.append(task_struct)
-                    next = task_struct
-                    if (next == init_task):
-                        break
-                break
+                        yield task_struct
+                        seen_tasks.append(task_struct)
+                        next = task_struct
+                        if (next == init_task):
+                            break
+                    break
 
-            if task_struct in seen_tasks:
-                break
-            yield task_struct
-            seen_tasks.append(task_struct)
-            next = task_struct
-            if (next == init_task):
-                break
+                if task_struct in seen_tasks:
+                    break
+                yield task_struct
+                seen_tasks.append(task_struct)
+                next = task_struct
+                if (next == init_task):
+                    break
+        except:
+            print_out_exception()
 
     '''
     task_struct->signal->thread_head
@@ -3093,30 +3141,34 @@ class RamDump():
             'struct task_struct', 'signal')
         offset_thread_head = self.field_offset(
             'struct signal_struct', 'thread_head')
-        signal_addr = self.read_word(task_addr + offset_signal)
-        thread_head_addr = self.read_word(signal_addr + offset_thread_head)
-        next_thread_head = thread_head_addr
-        seen_threads = []
-        while True:
-            task_addr = next_thread_head - offset_thread_node
-            if (self.validate_task_struct(task_addr) == -1) or (
-                    self.validate_sched_class(task_addr) == -1):
+        try:
+            signal_addr = self.read_word(task_addr + offset_signal)
+            thread_head_addr = self.read_word(signal_addr + offset_thread_head)
+            next_thread_head = thread_head_addr
+            seen_threads = []
+
+            while True:
+                task_addr = next_thread_head - offset_thread_node
+                if (self.validate_task_struct(task_addr) == -1) or (
+                        self.validate_sched_class(task_addr) == -1):
+                        break
+
+                yield task_addr
+
+                next_thr = self.read_word(next_thread_head)
+                if (next_thr == next_thread_head) and (next_thr != thread_head_addr):
+                    print_out_str('!!!! Cycle in thread group! The list is corrupt!\n')
                     break
 
-            yield task_addr
+                if (next_thr in seen_threads):
+                    break
 
-            next_thr = self.read_word(next_thread_head)
-            if (next_thr == next_thread_head) and (next_thr != thread_head_addr):
-                print_out_str('!!!! Cycle in thread group! The list is corrupt!\n')
-                break
-
-            if (next_thr in seen_threads):
-                break
-
-            seen_threads.append(next_thr)
-            next_thread_head = next_thr
-            if next_thread_head == thread_head_addr:
-                break
+                seen_threads.append(next_thr)
+                next_thread_head = next_thr
+                if next_thread_head == thread_head_addr:
+                    break
+        except:
+            print_out_exception()
 
     def validate_task_struct(self, task):
         thread_info_address = self.get_thread_info_addr(task)
