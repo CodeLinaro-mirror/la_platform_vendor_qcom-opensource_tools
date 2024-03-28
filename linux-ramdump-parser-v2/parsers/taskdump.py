@@ -164,24 +164,30 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
         task_last_enqueued_ts = 0
         task_last_sleep_ts = 0
         if offset_last_enqueued_ts is None and (ramdump.is_config_defined('CONFIG_SCHED_WALT') or 'sched_walt' in ramdump.ko_file_names):
-            offset_last_enqueued_ts = ramdump.field_offset('struct walt_task_struct', 'last_enqueued_ts')
-            if (ramdump.kernel_version >= (5, 10, 0)):
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
-            else:
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
-            offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
+            try:
+                offset_last_enqueued_ts = ramdump.field_offset('struct walt_task_struct', 'last_enqueued_ts')
+                if (ramdump.kernel_version >= (5, 10, 0)):
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
+                else:
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
+                offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
+            except:
+                pass
         if offset_last_enqueued_ts:
             next_thread_last_enqueued = next_thread_start + offset_last_enqueued_ts
             task_last_enqueued_ts = ramdump.read_u64(next_thread_last_enqueued)
             if task_last_enqueued_ts is None:
                 task_last_enqueued_ts = 0
         if offset_last_sleep_ts is None and (ramdump.is_config_defined('CONFIG_SCHED_WALT') or 'sched_walt' in ramdump.ko_file_names):
-            offset_last_sleep_ts = ramdump.field_offset('struct walt_task_struct', 'last_sleep_ts ')
-            if (ramdump.kernel_version >= (5, 10, 0)):
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
-            else:
-                walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
-            offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
+            try:
+                offset_last_sleep_ts = ramdump.field_offset('struct walt_task_struct', 'last_sleep_ts ')
+                if (ramdump.kernel_version >= (5, 10, 0)):
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
+                else:
+                    walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
+                offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
+            except:
+                pass
         if offset_last_sleep_ts:
             next_thread_last_sleep_ts = next_thread_start + offset_last_sleep_ts
             task_last_sleep_ts = ramdump.read_u64(next_thread_last_sleep_ts)
