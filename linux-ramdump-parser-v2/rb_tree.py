@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2014, 2018 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -11,7 +11,7 @@
 # GNU General Public License for more details.
 
 from print_out import print_out_str
-
+import logging
 """
 struct rb_node
 {
@@ -92,16 +92,22 @@ class RbTree(object):
         parent = self.__rb_parent(node)
         if self.validate(parent, node):
             return parent
+        else:
+            return 0
 
     def rb_left(self, node):
         child = self.__rb_left(node)
         if self.validate(node, child):
             return child
+        else:
+            return 0
 
     def rb_right(self, node):
         child = self.__rb_right(node)
         if self.validate(node, child):
             return child
+        else:
+            return 0
 
     def rb_first(self, node):
         if not node:
@@ -138,15 +144,19 @@ class RbTree(object):
     class RbTreeIter(object):
         def __init__(self, rbtree):
             self.rbtree = rbtree
-            node = rbtree.rd.read_structure_field(
-                        rbtree.rb_root, 'struct rb_root', 'rb_node')
-            self.cur = rbtree.rb_first(node)
+            self.is_head = True
+            self.cur = None
 
-        def next(self):
-            if not self.cur:
-                raise StopIteration
-            self.cur = self.rbtree.rb_next(self.cur)
-            if not self.cur:
+        # for python3
+        def __next__(self):
+            if self.is_head is True:
+                node = self.rbtree.rd.read_structure_field(
+                    self.rbtree.rb_root, 'struct rb_root', 'rb_node')
+                self.cur = self.rbtree.rb_first(node)
+                self.is_head = False
+            else:
+                self.cur = self.rbtree.rb_next(self.cur)
+            if self.cur is None or self.cur == 0:
                 raise StopIteration
             return self.cur
 
