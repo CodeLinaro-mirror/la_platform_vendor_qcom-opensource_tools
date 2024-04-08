@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -48,10 +48,15 @@ def register_board(b):
 
 def get_supported_boards():
     """ Called by other part of the code to get a list of boards """
-
-    dir = os.path.join(os.path.dirname(__file__), 'extensions', 'board_def.py')
-    if os.path.exists(dir):
-        import extensions.board_def
+    extensions_path = os.path.join(os.path.dirname(__file__), 'extensions')
+    if os.path.exists(extensions_path):
+        dir = os.path.join(os.path.dirname(__file__), 'extensions', 'board_def.py')
+        if os.path.exists(dir):
+            import extensions.board_def
+    else:
+        dir = os.path.join(os.path.dirname(__file__), 'board_config.py')
+        if os.path.exists(dir):
+            import board_config
     return boards
 
 def get_supported_ids():
