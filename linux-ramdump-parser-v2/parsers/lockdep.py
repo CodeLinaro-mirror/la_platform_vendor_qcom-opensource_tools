@@ -1,4 +1,5 @@
 # Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
+# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -11,7 +12,6 @@
 
 from parser_util import register_parser, RamParser, cleanupString
 from print_out import print_out_str
-
 def test_bit(nr, addr, ramdump, my_task_out):
     BITS_PER_LONG = 64
     if not ramdump.arm64:
@@ -91,6 +91,11 @@ def parse_held_locks(ramdump, task, my_task_out):
         hl_pin_count = ramdump.read_structure_field(held_lock_indx, 'struct held_lock', 'pin_count')
         if (ramdump.is_config_defined('CONFIG_LOCKDEP_CROSSRELEASE')):
             hl_gen_id = ramdump.read_structure_field(held_lock_indx, 'struct held_lock', 'gen_id')
+        hl_acquire_ip_name_func = 'n/a'
+        wname = ramdump.unwind_lookup(hl_acquire_ip)
+        if wname is not None:
+            hl_acquire_ip_name_func, a = wname
+
 
         my_task_out.write(
                 '\nheld_locks[{0}] [0x{1:x}]:\
@@ -107,7 +112,8 @@ def parse_held_locks(ramdump, task, my_task_out):
                 \n\thardirqs_off = {12},\
                 \n\treferences = {13},\
                 \n\tpin_count = {14},\
-                \n\tname = {15}'.format(
+                \n\tname = {15},\
+                \n\tacquire_ip_func = {16}'.format(
                             i, held_lock_indx,
                             hex(hl_prev_chain_key),
                             hex(hl_acquire_ip),
@@ -122,13 +128,14 @@ def parse_held_locks(ramdump, task, my_task_out):
                             hex(hl_hardirqs_off),
                             hex(hl_references),
                             hex(hl_pin_count),
-                            hl_name))
+                            hl_name,
+                            hl_acquire_ip_name_func))
         if (ramdump.is_config_defined('CONFIG_LOCK_STAT')):
             my_task_out.write(
                 '\n\twaittime_stamp = {0},\
                 \n\tholdtime_stamp = {1}'.format(
-                            hex(hl_waittime_stamp),
-                            hex(hl_holdtime_stamp)))
+                            (hl_waittime_stamp),
+                            (hl_holdtime_stamp)))
         if (ramdump.is_config_defined('CONFIG_LOCKDEP_CROSSRELEASE')):
             my_task_out.write(
                 '\n\tgen_id = {0}'.format( hex(hl_gen_id)))

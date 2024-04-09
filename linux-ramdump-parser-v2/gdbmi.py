@@ -90,6 +90,7 @@ class GdbMI(object):
             creationflags=subprocess_flags
         )
         self._flush_gdbmi()
+        self._run('set max-value-size unlimited')
 
     def close(self):
         """Close the connection to the ``gdbmi`` backend. Not needed if using
@@ -319,7 +320,11 @@ class GdbMI(object):
         '0xc0b0006a'
         """
         result = self._run_for_one('print /x &{0}'.format(symbol))
-        return int(result.split(' ')[-1], 16) + self.kaslr_offset + self.gdbmi_aslr_offset
+        addr =  int(result.split(' ')[-1], 16) + self.kaslr_offset + self.gdbmi_aslr_offset
+        if (addr >> 64):
+            return addr - self.gdbmi_aslr_offset
+        else:
+            return addr
 
     def get_symbol_info(self, address):
         """Returns a GdbSymbol representing the nearest symbol found at
