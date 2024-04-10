@@ -17,11 +17,12 @@ import subprocess
 import sys
 from collections import OrderedDict
 import re
-#import time
 
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from tempfile import NamedTemporaryFile
+
+comm_pid_dict = {}
 
 class BufferedWrite(object):
     """
@@ -53,7 +54,7 @@ class BufferedWrite(object):
 
 class FtraceParser_Event(object):
     def __init__(self,ramdump,ftrace_out,cpu ,buffer ,nr_pages ,nr_total_pages,
-                 ftrace_event_type,ftrace_raw_struct_type,ftrace_time_data,fromat_event_map):
+                 ftrace_event_type,ftrace_raw_struct_type,ftrace_time_data,fromat_event_map,savedcmd):
         self.cpu = "[{:03d}]".format(cpu)
         self.buffer = buffer
         self.nr_pages = nr_pages
@@ -94,46 +95,56 @@ class FtraceParser_Event(object):
         self.pid_offset = self.ramdump.field_offset("struct trace_entry" , "pid")
         self.preempt_count_offset = self.ramdump.field_offset("struct trace_entry", "preempt_count")
         self.flags_offset = self.ramdump.field_offset("struct trace_entry", "flags")
+        self.comm_pid_dict = comm_pid_dict
+        self.savedcmd = savedcmd
 
-    def parse_buffer_page_entry(self,buffer_page_entry):
-        buffer = None
+    def parse_buffer_page_entry(self, buffer_page_entry):
         buffer_data_page = None
-        real_end = None
         buffer_data_page_end = None
         #buffer_data_page_data_offset = None
         timestamp = 0
         rb_event = None
         rb_event_timestamp = 0
-        rb_event_length = 0
         time_delta = 0
         record_length = 0
         #rb_event_array_offset = 0
         tr_entry  = None
         tr_event_type = None
         commit = 0
-        buffer = buffer_page_entry
-        real_end = self.ramdump.read_u32(buffer + self.buffer_page_real_end_offset)
-        if self.ramdump.arm64:
-            buffer_data_page = self.ramdump.read_u64(buffer + self.buffer_page_data_page_offset)
-        else:
-            buffer_data_page = self.ramdump.read_u32(buffer + self.buffer_page_data_page_offset)
 
+        '''
+        struct buffer_page {
+            [0x0] struct list_head list;
+            [0x10] local_t write;
+            [0x18] unsigned int read;
+            [0x20] local_t entries;
+            [0x28] unsigned long real_end;
+            [0x30] struct buffer_data_page *page;
+        }
+        '''
+        buffer_data_page = self.ramdump.read_pointer(buffer_page_entry + self.buffer_page_data_page_offset)
+
+        '''
+        struct buffer_data_page {
+            [0x0] u64 time_stamp;
+            [0x8] local_t commit;
+            [0x10] unsigned char data[];
+        }
+        '''
+        commit = 0
         if self.ramdump.arm64:
-            buffer_data_page_commit = self.ramdump.read_u64(
+            commit = self.ramdump.read_u64(
                 buffer_data_page + self.buffer_data_page_commit_offset)
         else:
-            buffer_data_page_commit = self.ramdump.read_u32(
+            commit = self.ramdump.read_u32(
                 buffer_data_page + self.buffer_data_page_commit_offset)
-        commit = buffer_data_page_commit
-        abs_timestamp = False
-
         if commit and commit > 0:
-            buffer_data_page_end = buffer_data_page + self.buffer_page_data_page_offset + commit
-            timestamp = self.ramdump.read_u64(
+            buffer_data_page_end = buffer_data_page + commit
+            time_stamp = self.ramdump.read_u64(
                 buffer_data_page + self.buffer_data_page_time_stamp_offset)
             rb_event = buffer_data_page + self.buffer_data_page_data_offset
-
-            while (rb_event < buffer_data_page_end):
+            total_read = 0
+            while (total_read < commit):
                 time_delta = self.ramdump.read_u32(rb_event + self.rb_event_timedelta_offset)
                 time_delta = time_delta >> 5
                 # print_out_str("time_delta after = {0} ".format(time_delta))
@@ -178,7 +189,7 @@ class FtraceParser_Event(object):
                         #self.ftrace_out.write("unknown event \n")
                         pass
                     else:
-                        self.parse_trace_entry(tr_entry,tr_event_type,timestamp+rb_event_timestamp)
+                        self.parse_trace_entry(tr_entry, tr_event_type, time_stamp + rb_event_timestamp)
                     record_length = record_length + 0x4   #Header Size
 
                 elif rb_event_type <= 28: #Data Events
@@ -188,7 +199,7 @@ class FtraceParser_Event(object):
                         #self.ftrace_out.write("unknown event \n")
                         pass
                     else:
-                        self.parse_trace_entry(tr_entry,tr_event_type,timestamp+rb_event_timestamp)
+                        self.parse_trace_entry(tr_entry, tr_event_type, time_stamp + rb_event_timestamp)
                     record_length = record_length + 0x4
 
                 elif rb_event_type == 29:
@@ -214,9 +225,8 @@ class FtraceParser_Event(object):
                     # Accounts for an absolute timestamp
                     timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
                     rb_event_timestamp = 0
-                    abs_timestamp = True
-
                 rb_event = rb_event + record_length
+                total_read += record_length
                 #alignment = 4 - (rb_event % 4)
                 #rb_event += alignment
 
@@ -229,20 +239,20 @@ class FtraceParser_Event(object):
 
     def find_cmdline(self, pid):
         comm = "<TBD>"
-        savedcmd = self.ramdump.read_pointer('savedcmd')
-        if savedcmd is not None:
+        if self.savedcmd is not None:
             if pid == 0:
                 comm = "<idle>"
             else:
                 tpid = pid & (self.pid_max - 1)
-                cmdline_map = self.ramdump.read_structure_field(savedcmd, 'struct saved_cmdlines_buffer', 'map_pid_to_cmdline[{}]'.format(tpid))
-                if cmdline_map != -1:
-                    map_cmdline_to_pid = self.ramdump.read_pointer(savedcmd + self.map_cmdline_to_pid_offset)
+                cmdline_map = self.savedcmd.map_pid_to_cmdline[tpid]
+                if cmdline_map != -1 and cmdline_map != None:
+                    map_cmdline_to_pid = self.savedcmd.map_cmdline_to_pid
                     cmdline_tpid = self.ramdump.read_int(map_cmdline_to_pid + cmdline_map * 4)
                     if cmdline_tpid == pid:
-                        saved_cmdlines = self.ramdump.read_pointer(savedcmd + self.saved_cmdlines_offset)
+                        saved_cmdlines = self.savedcmd.saved_cmdlines
                         comm = self.ramdump.read_cstring(saved_cmdlines + cmdline_map * 16, 16) #TASK_COMM_LEN
         comm = "{}-{}".format(comm, pid)
+        self.comm_pid_dict[pid] = comm
         return comm
 
     def get_lat_fmt(self, flags, preempt_count):
@@ -362,7 +372,11 @@ class FtraceParser_Event(object):
         preempt_count = self.ramdump.read_u16(ftrace_raw_entry + self.preempt_count_offset) & 0xFF
         flags = self.ramdump.read_u16(ftrace_raw_entry + self.flags_offset) & 0xFF
         DEBUG_ENABLE = 0
-        curr_comm = "{0: >25}".format(self.find_cmdline(pid))
+        if pid in self.comm_pid_dict.keys():
+            comm = self.comm_pid_dict[pid]
+        else:
+            comm = self.find_cmdline(pid)
+        curr_comm = "{0: >25}".format(comm)
         lat_fmt = self.get_lat_fmt(flags, preempt_count)
         if event_name == "scm_call_start":
                 #print("ftrace_raw_entry  of scm_call_start = {0}".format(hex(ftrace_raw_entry)))
