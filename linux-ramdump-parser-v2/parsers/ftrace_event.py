@@ -17,11 +17,12 @@ import subprocess
 import sys
 from collections import OrderedDict
 import re
-#import time
 
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from tempfile import NamedTemporaryFile
+
+comm_pid_dict = {}
 
 class BufferedWrite(object):
     """
@@ -53,7 +54,7 @@ class BufferedWrite(object):
 
 class FtraceParser_Event(object):
     def __init__(self,ramdump,ftrace_out,cpu ,buffer ,nr_pages ,nr_total_pages,
-                 ftrace_event_type,ftrace_raw_struct_type,ftrace_time_data,fromat_event_map):
+                 ftrace_event_type,ftrace_raw_struct_type,ftrace_time_data,fromat_event_map,savedcmd):
         self.cpu = "[{:03d}]".format(cpu)
         self.buffer = buffer
         self.nr_pages = nr_pages
@@ -94,6 +95,8 @@ class FtraceParser_Event(object):
         self.pid_offset = self.ramdump.field_offset("struct trace_entry" , "pid")
         self.preempt_count_offset = self.ramdump.field_offset("struct trace_entry", "preempt_count")
         self.flags_offset = self.ramdump.field_offset("struct trace_entry", "flags")
+        self.comm_pid_dict = comm_pid_dict
+        self.savedcmd = savedcmd
 
     def parse_buffer_page_entry(self, buffer_page_entry):
         buffer_data_page = None
@@ -236,20 +239,20 @@ class FtraceParser_Event(object):
 
     def find_cmdline(self, pid):
         comm = "<TBD>"
-        savedcmd = self.ramdump.read_pointer('savedcmd')
-        if savedcmd is not None:
+        if self.savedcmd is not None:
             if pid == 0:
                 comm = "<idle>"
             else:
                 tpid = pid & (self.pid_max - 1)
-                cmdline_map = self.ramdump.read_structure_field(savedcmd, 'struct saved_cmdlines_buffer', 'map_pid_to_cmdline[{}]'.format(tpid))
+                cmdline_map = self.savedcmd.map_pid_to_cmdline[tpid]
                 if cmdline_map != -1 and cmdline_map != None:
-                    map_cmdline_to_pid = self.ramdump.read_pointer(savedcmd + self.map_cmdline_to_pid_offset)
+                    map_cmdline_to_pid = self.savedcmd.map_cmdline_to_pid
                     cmdline_tpid = self.ramdump.read_int(map_cmdline_to_pid + cmdline_map * 4)
                     if cmdline_tpid == pid:
-                        saved_cmdlines = self.ramdump.read_pointer(savedcmd + self.saved_cmdlines_offset)
+                        saved_cmdlines = self.savedcmd.saved_cmdlines
                         comm = self.ramdump.read_cstring(saved_cmdlines + cmdline_map * 16, 16) #TASK_COMM_LEN
         comm = "{}-{}".format(comm, pid)
+        self.comm_pid_dict[pid] = comm
         return comm
 
     def get_lat_fmt(self, flags, preempt_count):
@@ -369,7 +372,11 @@ class FtraceParser_Event(object):
         preempt_count = self.ramdump.read_u16(ftrace_raw_entry + self.preempt_count_offset) & 0xFF
         flags = self.ramdump.read_u16(ftrace_raw_entry + self.flags_offset) & 0xFF
         DEBUG_ENABLE = 0
-        curr_comm = "{0: >25}".format(self.find_cmdline(pid))
+        if pid in self.comm_pid_dict.keys():
+            comm = self.comm_pid_dict[pid]
+        else:
+            comm = self.find_cmdline(pid)
+        curr_comm = "{0: >25}".format(comm)
         lat_fmt = self.get_lat_fmt(flags, preempt_count)
         if event_name == "scm_call_start":
                 #print("ftrace_raw_entry  of scm_call_start = {0}".format(hex(ftrace_raw_entry)))

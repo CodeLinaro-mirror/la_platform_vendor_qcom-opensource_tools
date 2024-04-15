@@ -37,6 +37,7 @@ class FtraceParser(RamParser):
         self.whitelisted_trace_names =[]
         self.ftrace_buffer_size_kb = None
         self.per_cpu_buffer_pages = None
+        self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
 
         if len(self.ramdump.ftrace_args):
             self.whitelisted_trace_names = self.ramdump.ftrace_args
@@ -284,7 +285,7 @@ class FtraceParser(RamParser):
                 per_cpu_buffer = rb_per_cpu[cpu_idx]
                 if per_cpu_buffer is not None:
                     evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,per_cpu_buffer,nr_pages_per_buffer_item,nr_total_buffer_pages
-                                       ,fevent_list.ftrace_event_type,fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map)
+                                       ,fevent_list.ftrace_event_type,fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
                     evt.ftrace_event_parsing()
                     #parse_trace_entry_time += evt.parse_trace_entry_time
             #ftrace_event_time += (time.time()-start)
