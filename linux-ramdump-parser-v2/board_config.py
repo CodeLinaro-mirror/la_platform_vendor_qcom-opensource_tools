@@ -18,6 +18,7 @@ class BoardQCM6490(Board):
         self.kaslr_addr = 0x146aa6d0
         self.wdog_addr = 0x146aa658
         self.imem_file_name = 'OCIMEM.BIN'
+        self.arm_smmu_v12 = True
 
 class BoardQCM6490SVM(Board):
     def __init__(self, socid):
@@ -33,6 +34,7 @@ class BoardQCM6490SVM(Board):
         self.kaslr_addr = 0x146aa6d0
         self.wdog_addr = 0x146aa658
         self.imem_file_name = 'OCIMEM.BIN'
+        self.arm_smmu_v12 = True
 
 BoardQCM6490(socid=475)
 BoardQCM6490SVM(socid=475)
