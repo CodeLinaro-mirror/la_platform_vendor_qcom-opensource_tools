@@ -159,7 +159,7 @@ class FtraceParser_Event(object):
                             length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
                             return length
                         else:
-                            return buffer_data_page_end - rb_event #Padding till end of page
+                            return abs(buffer_data_page_end - rb_event) #Padding till end of page
 
                     elif(type_len == 30):
                         # Accounts for header size + one u32 array entry
