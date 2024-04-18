@@ -1,5 +1,5 @@
 # Copyright (c) 2012, 2014-2018, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -443,7 +443,7 @@ class QDSSDump():
             return True
 
     def parse_domain(self, dbaddr, rsz, sts, rwpval, ram_dump, tmc_etr, d, domain_num):
-        if d.client_name.endswith(".tmc"):
+        if d.client_name.endswith(".tmc") or d.client_name.endswith(".etr"):
             flat_mapping = create_flat_mappings(ram_dump, d.pg_table, d.level)
             collapsed_mapping = create_collapsed_mapping(flat_mapping)
             if (sts & 0x1) == 1:
