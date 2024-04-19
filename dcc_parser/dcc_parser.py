@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2015, 2017, 2019-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -237,7 +237,10 @@ def dump_regs_xml(options):
     for addr, val in zip(address, data):
         parsed_data.info("\t\t<register address=\"0x{0:08x}\" value=\"0x{1:08x}\" />".format(addr, val))
     parsed_data.info("\t</chip>")
-    parsed_data.info("\t<next_ll_offset>next_ll_offset : {0} </next_ll_offset>".format(next_ll_offset[-1]))
+    try:
+        parsed_data.info("\t<next_ll_offset>next_ll_offset : {0} </next_ll_offset>".format(next_ll_offset[-1]))
+    except:
+        pass
     parsed_data.info("</hwioDump>")
     return
 
