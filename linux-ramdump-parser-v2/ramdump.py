@@ -980,6 +980,12 @@ class RamDump():
                 '!!! This is really bad and probably indicates RAM corruption')
             print_out_str('!!! Some features may be disabled!')
 
+        # extract kernel's configuration to kconfig.txt
+        saved_config = self.open_file('kconfig.txt')
+        for l in self.config:
+            saved_config.write(l + '\n')
+
+        saved_config.close()
         try:
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
