@@ -38,7 +38,7 @@ import module_table
 from mm import mm_init
 from register import Register
 from collections import namedtuple
-
+import shlex
 SP = 13
 LR = 14
 PC = 15
@@ -2388,7 +2388,12 @@ class RamDump():
 
     def has_debug_info(self, file):
         cmd = self.objdump_path + ' -h ' + file
-        objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
+        if platform.system() != "Linux":
+            objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       universal_newlines=True, )
+        else:
+            objdump = subprocess.Popen(shlex.split(cmd), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       universal_newlines=True, )
         out, err = objdump.communicate()
         if '.debug_info' in out:
             return True
