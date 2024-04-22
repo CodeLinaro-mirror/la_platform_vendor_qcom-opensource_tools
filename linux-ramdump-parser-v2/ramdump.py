@@ -2274,7 +2274,7 @@ class RamDump():
                 mod_tbl_ent.section_offsets[sect_name] = sect_addr
             if self.is_config_defined('CONFIG_SMP'):
                 percpu_size = self.read_u32(module + percpu_size_offset)
-                if percpu_size is not 0:
+                if percpu_size != 0:
                     percpu_pointer = self.read_pointer(module + percpu_offset)
                     mod_tbl_ent.section_offsets['.data..percpu'] = percpu_pointer
             self.module_table.add_entry(mod_tbl_ent)
