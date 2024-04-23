@@ -113,6 +113,31 @@ class FtraceParser_Event(object):
         self.comm_pid_dict = comm_pid_dict
         self.savedcmd = savedcmd
 
+    def get_event_length(self, rb_event, rb_event_type, time_delta,  buffer_data_page_end):
+        type_len = rb_event_type
+
+        if(type_len == 0):
+            length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
+            return length
+
+        elif(type_len <= 28):
+            return (type_len << 2)
+
+        elif(type_len == 29):
+            if(time_delta == 1):
+                length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
+                return length
+            else:
+                return buffer_data_page_end - rb_event #Padding till end of page
+
+        elif(type_len == 30):
+            # Accounts for header size + one u32 array entry
+            return 8
+
+        elif(type_len == 31):
+            return 8
+
+
     def parse_buffer_page_entry(self, buffer_page_entry):
         buffer_data_page = None
         buffer_data_page_end = None
@@ -237,7 +262,6 @@ class FtraceParser_Event(object):
 
                 elif rb_event_type == 31:
                     # Accounts for an absolute timestamp
-                    timestamp = time_delta + (self.ramdump.read_u32(rb_event + self.rb_event_array_offset) << 27)
                     rb_event_timestamp = 0
                 rb_event = rb_event + record_length
                 total_read += record_length
@@ -538,7 +562,7 @@ class FtraceParser_Event(object):
                     else:
                         function = 0
                         function_name = 'na'
-                    temp_data = " {4}   {0} {7}  {1:.6f}: workqueue_activate_work:{2}work struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                    temp_data = "  {4}   {0} {7}  {1:.6f}: workqueue_activate_work:{2}work struct {3} function 0x{5:x} {6}\n".format(self.cpu,
                                  local_timestamp,space_data,
                                  str(hex(work)).replace("L",""), curr_comm, function, function_name, lat_fmt)
                     self.ftrace_time_data[local_timestamp].append(temp_data)
@@ -576,7 +600,7 @@ class FtraceParser_Event(object):
                         work = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_work_offset)
                    else:
                         work = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_work_offset)
-                   temp_data = " {4}   {0} {7}  {1:.6f}: {2}  work_struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                   temp_data = "  {4}   {0} {7}  {1:.6f}: {2}  work_struct {3} function 0x{5:x} {6}\n".format(self.cpu,
                                 local_timestamp, event_name,
                                 str(hex(work)).replace("L",""), curr_comm, function, function_name, lat_fmt)
                    self.ftrace_time_data[local_timestamp].append(temp_data)
@@ -809,12 +833,7 @@ class FtraceParser_Event(object):
                 #print_ip_func = self.ramdump.read_cstring(print_ip)
 
                 function = self.ramdump.get_symbol_info1(print_ip)
-
-                temp_data = " {4}   {0} {5}  {1:.6f}:   print:        {2} {3}\n".format(self.cpu,
-                                                                                                          local_timestamp ,
-                                                                                                          function,
-                                                                                                          print_buffer
-                                                                                                           ,curr_comm,lat_fmt)
+                temp_data = " {4}   {0} {5}  {1:.6f}:   print:        {2} {3}\n".format(self.cpu, local_timestamp , function, print_buffer, curr_comm, lat_fmt)
                 self.ftrace_time_data[local_timestamp].append(temp_data)
         else:
             event_data = self.fromat_event_map[event_name]
@@ -926,9 +945,6 @@ class FtraceParser_Event(object):
                     temp_a.append(v)
                     j = j + 1
                 temp = ""
-                t1 = len(temp_a)
-                t2 = len(pr_f)
-                f = False
                 try:
                     for keyinfo in fmt_name_value_map:
                         if "function" == keyinfo and isinstance(fmt_name_value_map[keyinfo], int):
@@ -989,20 +1005,12 @@ class FtraceParser_Event(object):
         nr_pages = trace_ring_buffer_per_cpu_data.get_val('nr_pages')
         buffer_page_entry = trace_ring_buffer_per_cpu_data.get_val('tail_page')
 
-        NR_TO_REWIND = nr_pages - 5
-        if nr_pages > NR_TO_REWIND:
-            while page_index < nr_pages:
-                #buffer_page_entry_list = self.ramdump.read_u64(buffer_page_entry + buffer_page_list_offset)
-                if buffer_page_entry:
-                    self.parse_buffer_page_entry(buffer_page_entry)
-                    #print("buffer_page_list_offset = {0}".format(buffer_page_list_offset))
-                    buffer_page_entry_list = buffer_page_entry + buffer_page_list_offset
-                    #print("buffer_page_entry_list = {0}".format(buffer_page_entry_list))
-                    buffer_page_entry = self.ramdump.read_pointer(buffer_page_entry_list + buffer_page_list_prev_offset)
-                page_index = page_index + 1
-                #print("page_index = %d" % page_index)
-                #if (page_index == ( NR_TO_REWIND + 1)):
-                #    self.ftrace_out.write(" =========================================================> TARGET REBOOT HERE <=========================================================")
-                #break
+        while page_index < nr_pages:
+            if buffer_page_entry:
+                self.parse_buffer_page_entry(buffer_page_entry)
+                buffer_page_entry_list = buffer_page_entry + buffer_page_list_offset
+                buffer_page_entry = self.ramdump.read_pointer(buffer_page_entry_list + buffer_page_list_prev_offset)
+            page_index = page_index + 1
+
         self.ftrace_out.flush()
 
