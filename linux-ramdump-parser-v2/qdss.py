@@ -593,7 +593,7 @@ class QDSSDump():
         csdev = self.ramdump.read_structure_field(drvdata, struct_name, 'csdev')
         dev = self.ramdump.struct_field_addr(csdev, 'struct coresight_device', 'dev')
         csname = self.ramdump.read_cstring(self.ramdump.read_word(dev + self.name_offset))
-        print(f"{csname:<50} : {atid:#04x}",file = self.f)
+        print("{:<50} : {:#04x}".format(csname, atid),file = self.f)
 
     def parse_remote_etm_atid(self, driver_name, drvdata, struct_name, atid_field):
         atid_str = ''
@@ -601,13 +601,13 @@ class QDSSDump():
         atid_addr = self.ramdump.read_structure_field(drvdata, "struct remote_etm_drvdata", "traceids")
         for i in range(atid_num):
             atid = self.ramdump.read_byte(atid_addr)
-            atid_str = f"{atid:#04x}" + " " + atid_str
+            atid_str = "{:#04x}".format(atid) + " " + atid_str
             atid_addr = atid_addr + 1
 
         remote_etm_csdev = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'csdev')
         cs_dev = self.ramdump.struct_field_addr(remote_etm_csdev, 'struct coresight_device', 'dev')
         csname = self.ramdump.read_cstring(self.ramdump.read_word(cs_dev + self.name_offset))
-        print(f"{csname:<50} : {atid_str}", file = self.f)
+        print("{:<50} : {}".format(csname, atid_str), file = self.f)
 
     def list_qdss_atid(self, device):
         drv = self.ramdump.read_structure_field(device, 'struct device', 'driver')
@@ -628,8 +628,8 @@ class QDSSDump():
         self.qdss_structs = dict(driver_structs)
         self.atid_fields = dict(qdss_atid_fields)
         self.f = open(self.ramdump.outdir + "/ATID.txt", "w")
-        print(f"{"Source Name":<50} : {"ATID"}", file = self.f)
-        print(f"{"=" * 80}", file = self.f)
+        print("{:<50} {}".format("Source Name", "ATID"), file = self.f)
+        print("{}".format("=" * 60), file = self.f)
         devices_kset_addr = self.ramdump.address_of('devices_kset')
         list_head = devices_kset_addr
         list_offset = self.kobj_offset + self.entry_offset
