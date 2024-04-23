@@ -517,8 +517,8 @@ class FtraceParser_Event(object):
                     try:
                         temp_data = " {4}   {0} {5}  {1:.6f}: softirq_raise:        vec={2} [action={3}]\n".format(self.cpu, local_timestamp, vector,softirq_action_list[vector],curr_comm,lat_fmt)
                     except Exception as err:
-                        print_out_str("failed vetor =  {0}".format(vector))
-                        temp_data = " {4}   {0} {5}  {1:.6f}: softirq_raise:        vec={2} [action={3}]\n".format(self.cpu, local_timestamp, vector,"softirq unknonw vector",curr_comm,lat_fmt)
+                        print_out_str("failed to find a softirq action = {0}".format(vector))
+                        temp_data = " {4}   {0} {5}  {1:.6f}: softirq_raise:        vec={2} [action={3}]\n".format(self.cpu, local_timestamp, vector,"softirq unknown vector",curr_comm,lat_fmt)
                     self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "workqueue_activate_work":
                 trace_event_raw_work_offset = self.ramdump.field_offset('struct ' + 'trace_event_raw_workqueue_execute_start', "work")
@@ -540,7 +540,7 @@ class FtraceParser_Event(object):
                     else:
                         function = 0
                         function_name = 'na'
-                    temp_data = "  {4}   {0} {7}  {1:.6f}: workqueue_activate_work:{2}work struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                    temp_data = " {4}   {0} {7}  {1:.6f}: workqueue_activate_work:{2}work struct {3} function 0x{5:x} {6}\n".format(self.cpu,
                                  local_timestamp,space_data,
                                  str(hex(work)).replace("L",""), curr_comm, function, function_name, lat_fmt)
                     self.ftrace_time_data[local_timestamp].append(temp_data)
@@ -578,34 +578,10 @@ class FtraceParser_Event(object):
                         work = self.ramdump.read_u64(ftrace_raw_entry + trace_event_raw_work_offset)
                    else:
                         work = self.ramdump.read_u32(ftrace_raw_entry + trace_event_raw_work_offset)
-                   temp_data = "  {4}   {0} {7}  {1:.6f}: {2}  work_struct {3} function 0x{5:x} {6}\n".format(self.cpu,
+                   temp_data = " {4}   {0} {7}  {1:.6f}: {2}  work_struct {3} function 0x{5:x} {6}\n".format(self.cpu,
                                 local_timestamp, event_name,
                                 str(hex(work)).replace("L",""), curr_comm, function, function_name, lat_fmt)
                    self.ftrace_time_data[local_timestamp].append(temp_data)
-        elif event_name == "regulator_set_voltage":
-            event_data = self.fromat_event_map[event_name]
-            offset_data = event_data[0]
-            temp_a = []
-            for item,item_list in offset_data.items():
-                type_str,offset,size = item_list
-                if 'unsigned char' in type_str or 'long' in type_str or 'int' in type_str or 'u32' in type_str or 'bool' in type_str or 'pid_t' in type_str:
-                    v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                elif 'char' in type_str or '__data_loc char' in type_str:
-                    v = self.ramdump.read_cstring(ftrace_raw_entry + offset*2 + size)
-                elif 'unsigned long' in type_str or 'u64' in type_str or 'void *' in type_str:
-                    if self.ramdump.arm64:
-                        v = self.ramdump.read_u64(ftrace_raw_entry + offset)
-                    else:
-                        v = self.ramdump.read_u32(ftrace_raw_entry + offset)
-                elif 'unsigned short' in type_str or 'u16' in type_str:
-                    v = self.ramdump.read_u16(ftrace_raw_entry + offset)
-                elif 'short' in type_str or 'signed short' in type_str or 's16' in type_str:
-                    v = self.ramdump.read_s32(ftrace_raw_entry + offset)
-                elif 's64' in type_str:
-                    v = self.ramdump.read_s64(ftrace_raw_entry + offset)
-                temp_a.append(v)
-            temp_data = " {3}   {0} {4}  {1:.6f}: regulator_set_voltage: {2}\n".format(self.cpu, local_timestamp, time, curr_comm, lat_fmt)
-            self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "bprint":
                 MAX_LEN = 1000
                 print_entry_ip_offset = self.ramdump.field_offset('struct bprint_entry' , "ip")
@@ -798,7 +774,6 @@ class FtraceParser_Event(object):
                     except Exception as err:
                         temp_data = "Error parsing bprint event entry"
                         return
-
         elif event_name == "print":
                 #print("ftrace_raw_entry = {0}".format(hex(ftrace_raw_entry)))
                 print_entry_ip_offset = self.ramdump.field_offset('struct print_entry' , "ip")
