@@ -1,5 +1,5 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 
 import linux_list as llist
 from parser_util import register_parser, RamParser, cleanupString
@@ -10,6 +10,7 @@ class iostat(RamParser):
 
     def __init__(self, *args):
         super(iostat, self).__init__(*args)
+        self.disk_name = []
 
     def io_per_cpu_offset(self, cpu):
         per_cpu_offset_addr = self.ramdump.address_of('__per_cpu_offset')
@@ -66,12 +67,23 @@ class iostat(RamParser):
         self.list_ouput.append([major, bd_disk, disk_name, queue, count0, count1, count0 + count1])
 
     def init_block_class(self):
-        self.disk_name = []
+        p = None
         block_class = self.ramdump.address_of('block_class')
         if block_class is None:
-            self.f.write("ERROR: 'block_class' not found\n")
+            self.output.write("ERROR: 'block_class' not found\n")
             return
-        p = self.ramdump.read_structure_field(block_class, 'struct class', 'p')
+        if self.ramdump.field_offset('struct class', 'p') is None:
+            classkset_ptr = self.ramdump.read_pointer('class_kset')
+            classkset_list_ptr = self.ramdump.read_structure_field(classkset_ptr, 'struct kset', 'list.next')
+            kobj_offset = self.ramdump.field_offset('struct kobject', 'entry')
+            sp_buf = []
+            class_subsys_walker = llist.ListWalker(self.ramdump, classkset_list_ptr, kobj_offset)
+            class_subsys_walker.walk(classkset_list_ptr, self.get_class_to_subsys, block_class, sp_buf)
+            if bool(sp_buf):
+                p = sp_buf[0]
+        else:
+            p = self.ramdump.read_structure_field(block_class, 'struct class', 'p')
+
         list_head = (p + self.ramdump.field_offset('struct subsys_private', 'klist_devices')
                     + self.ramdump.field_offset('struct klist', 'k_list'))
         list_offset = self.ramdump.field_offset('struct klist_node', 'n_node')
@@ -79,19 +91,37 @@ class iostat(RamParser):
         init_list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
         if not init_list_walker.is_empty():
             init_list_walker.walk(init_list_walker.next() + list_offset,
-                                  self.block_class_init_walker)
+                                self.block_class_init_walker)
 
         sorted_list = sorted(self.list_ouput, key=lambda l: l[6], reverse=True)
         print("MAJOR     gendisk          NAME       request_queue      TOTAL     ASYNC     SYNC \n", file = self.f)
         for item in sorted_list:
             major = item[0]
             bd_disk = item[1]
+            fops_offset = self.ramdump.field_offset('struct gendisk', 'fops')
+            fops = self.ramdump.read_pointer(bd_disk + fops_offset)
+            a_ops_name = self.ramdump.unwind_lookup(fops)
+            a_ops_string = ''
+            if a_ops_name is not None:
+                name, a = a_ops_name
+                a_ops_string = '[{0}]'.format(name)
+            else:
+                a_ops_string = "xxxxxxxxxx"
             disk_name = item[2]
             queue = item[3]
             count0 = item[4]
             count1 = item[5]
-            print("%-6d 0x%x  %-8s 0x%x   %-8d   %-8d   %-8d  "
-                % (major, bd_disk, disk_name, queue, count0 + count1, count0, count1), file=self.f)
+            print("%-6d 0x%x  %-8s 0x%x   %-8d   %-8d   %-8d  %-16s "
+                % (major, bd_disk, disk_name, queue, count0 + count1, count0, count1, a_ops_string), file=self.f)
+
+    def get_class_to_subsys(self, kobj_addr, block_class, found_sp:list):
+        if not bool(found_sp):
+            kset_addr = self.ramdump.container_of(kobj_addr, 'struct kset', 'kobj')
+            sp_addr = self.ramdump.container_of(kset_addr, 'struct subsys_private', 'subsys')
+            sp_class = self.ramdump.read_structure_field(sp_addr, 'struct subsys_private', 'class')
+            if block_class == sp_class:
+                found_sp.append(sp_addr)
+        return
 
     def parse(self):
         if (self.ramdump.kernel_version) < (5, 15, 0):
