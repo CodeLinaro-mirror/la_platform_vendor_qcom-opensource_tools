@@ -128,7 +128,7 @@ class FtraceParser_Event(object):
                 length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
                 return length
             else:
-                return buffer_data_page_end - rb_event #Padding till end of page
+                return abs(buffer_data_page_end - rb_event) #Padding till end of page
 
         elif(type_len == 30):
             # Accounts for header size + one u32 array entry
@@ -192,31 +192,7 @@ class FtraceParser_Event(object):
                 rb_event_length_old = self.ramdump.read_u32(rb_event + self.rb_event_typelen_offset)
                 rb_event_type = (((1 << 5) - 1) & rb_event_length_old);
 
-                def get_event_length():
-                    type_len = rb_event_type
-
-                    if(type_len == 0):
-                        length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
-                        return length
-
-                    elif(type_len <= 28):
-                        return (type_len << 2)
-
-                    elif(type_len == 29):
-                        if(time_delta == 1):
-                            length = self.ramdump.read_u32(rb_event + self.rb_event_array_offset)
-                            return length
-                        else:
-                            return abs(buffer_data_page_end - rb_event) #Padding till end of page
-
-                    elif(type_len == 30):
-                        # Accounts for header size + one u32 array entry
-                        return 8
-
-                    elif(type_len == 31):
-                        return 8
-
-                record_length = get_event_length()
+                record_length = self.get_event_length(rb_event, rb_event_type, time_delta,  buffer_data_page_end)
                 #print("rb_event_type is ", rb_event_type)
                 if rb_event_type == 0:
                     # This could be that type_len * 4 > 112
