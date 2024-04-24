@@ -19,7 +19,6 @@ from tempfile import NamedTemporaryFile
 from .ftrace_event_list import FtraceParser_Event_List
 from .ftrace_event import FtraceParser_Event, BufferedWrite
 import linux_list as llist
-from . import taskdump
 #import time
 
 @register_parser('--dump-ftrace', 'extract ftrace by iterate the ring buffer page',optional=True)
@@ -154,10 +153,6 @@ class FtraceParser(RamParser):
         list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
         list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
         self.formats_out.close()
-        #taskdump_time = time.time()
-        taskdump.do_dump_stacks(self.ramdump, 0)
-        #print("Taskdump took {} secs".format(time.time()-taskdump_time))
-
         return fevent_list
 
     def ftrace_extract(self):
