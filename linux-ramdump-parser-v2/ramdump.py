@@ -1830,7 +1830,8 @@ class RamDump():
                     self.kimage_voffset = kimage_voffset
                     self.phys_offset = phys_offset
                 else:
-                    self.kaslr_offset = 0
+                    self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
+                    self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
 
     def determine_phys_offset(self, __kaslr_offset):
@@ -1891,7 +1892,6 @@ class RamDump():
         '''
         phys_base = _bfile.base & 0xfffff0000
         phys_end = _bfile.end
-        print_out_str(f"{os.path.basename(_bfile.path)} phys_base: {phys_base:x} phys_end: {phys_end:x}")
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
             kimage_load_addr = phys_base
             while (kimage_load_addr < phys_end):
