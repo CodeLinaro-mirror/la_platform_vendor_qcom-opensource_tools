@@ -10,17 +10,13 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-import parser_util
-import local_settings
-import os
-import subprocess
-import sys
 from collections import OrderedDict
 import re
 
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from tempfile import NamedTemporaryFile
+from struct_print import struct_print_class
 
 comm_pid_dict = {}
 
@@ -53,17 +49,13 @@ class BufferedWrite(object):
             self.flush()
 
 class FtraceParser_Event(object):
-    def __init__(self,ramdump,ftrace_out,cpu ,buffer ,nr_pages ,nr_total_pages,
-                 ftrace_event_type,ftrace_raw_struct_type,ftrace_time_data,fromat_event_map,savedcmd):
+    def __init__(self,ramdump,ftrace_out,cpu, trace_event_type,ftrace_raw_struct_type,ftrace_time_data,fromat_event_map,savedcmd):
         self.cpu = "[{:03d}]".format(cpu)
-        self.buffer = buffer
-        self.nr_pages = nr_pages
-        self.nr_total_pages = nr_total_pages
         self.ramdump = ramdump
         self.ftrace_out = ftrace_out
         #self.ftrace_out = BufferedWrite(ftrace_out)
         self.nr_ftrace_events = 0
-        self.ftrace_event_type = ftrace_event_type
+        self.ftrace_event_type = trace_event_type
         self.ftrace_raw_struct_type = ftrace_raw_struct_type
         self.ftrace_time_data = ftrace_time_data
         self.fromat_event_map = fromat_event_map
@@ -102,7 +94,6 @@ class FtraceParser_Event(object):
         buffer_data_page = None
         buffer_data_page_end = None
         #buffer_data_page_data_offset = None
-        timestamp = 0
         rb_event = None
         rb_event_timestamp = 0
         time_delta = 0
@@ -325,15 +316,10 @@ class FtraceParser_Event(object):
         pid  = 0
         preempt_count = 0
         struct_type = None
-        prev_state = None
         next_comm = None
         next_pid  = 0
         next_prio = 0
-        irq  = None
-        irq_handle = None
-        wq_function = None
         work = None
-
         print_ip = None
         print_buffer = None
         vector = None
@@ -972,41 +958,47 @@ class FtraceParser_Event(object):
                 #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                 pass
 
-    def ftrace_event_parsing(self):
-        ring_trace_buffer_cpu = self.ramdump.field_offset(
-            'struct ring_buffer_per_cpu', 'cpu')
-        buffer_page_entry_offset = self.ramdump.field_offset(
-            'struct ring_buffer_per_cpu', 'tail_page')
-        cpu = self.ramdump.read_u32(self.buffer + ring_trace_buffer_cpu)
-
-        #print "self.buffer = {0}".format(hex(self.buffer))
-
-        if self.ramdump.arm64:
-            #print("buffer_page_entry_offset = {0}".format(hex(buffer_page_entry_offset)))
-            buffer_page_entry = self.ramdump.read_u64(self.buffer + buffer_page_entry_offset)
-        else:
-            buffer_page_entry = self.ramdump.read_u32(self.buffer + buffer_page_entry_offset)
-        #print("buffer_page_entry = {0}".format(hex(buffer_page_entry)))
+    def ring_buffer_per_cpu_parsing(self, ring_trace_buffer_cpu):
         page_index = 0
         buffer_page_list_offset = self.ramdump.field_offset(
             'struct buffer_page ', 'list')
         buffer_page_list_prev_offset = self.ramdump.field_offset(
             'struct list_head ', 'prev')
-        NR_TO_REWIND = self.nr_pages - 5
+        trace_ring_buffer_per_cpu_data = struct_print_class(self.ramdump, 'ring_buffer_per_cpu', ring_trace_buffer_cpu, None)
+        '''
+            crash> struct ring_buffer_per_cpu -x -o
+            struct ring_buffer_per_cpu {
+                [0x0] int cpu;
+                [0x4] atomic_t record_disabled;
+                [0x8] atomic_t resize_disabled;
+            [0x10] struct trace_buffer *buffer;
+            [0x80] unsigned long nr_pages;
+            [0x88] unsigned int current_context;
+            [0x90] struct list_head *pages;
+            [0x98] struct buffer_page *head_page;
+            [0xa0] struct buffer_page *tail_page;   // parser this
+            [0xa8] struct buffer_page *commit_page;
+            [0xb0] struct buffer_page *reader_page;
+        '''
+        if self.ramdump.arm64:
+            trace_ring_buffer_per_cpu_data.append('nr_pages', 'u64')
+        else:
+            trace_ring_buffer_per_cpu_data.append('nr_pages', 'u32')
+        trace_ring_buffer_per_cpu_data.append('tail_page', 'ptr')
+        trace_ring_buffer_per_cpu_data.process()
+        nr_pages = trace_ring_buffer_per_cpu_data.get_val('nr_pages')
+        buffer_page_entry = trace_ring_buffer_per_cpu_data.get_val('tail_page')
 
-        if self.nr_pages > NR_TO_REWIND:
-            while page_index < self.nr_pages:
+        NR_TO_REWIND = nr_pages - 5
+        if nr_pages > NR_TO_REWIND:
+            while page_index < nr_pages:
                 #buffer_page_entry_list = self.ramdump.read_u64(buffer_page_entry + buffer_page_list_offset)
                 if buffer_page_entry:
                     self.parse_buffer_page_entry(buffer_page_entry)
                     #print("buffer_page_list_offset = {0}".format(buffer_page_list_offset))
                     buffer_page_entry_list = buffer_page_entry + buffer_page_list_offset
                     #print("buffer_page_entry_list = {0}".format(buffer_page_entry_list))
-                    if self.ramdump.arm64:
-                        buffer_page_entry = self.ramdump.read_u64(buffer_page_entry_list + buffer_page_list_prev_offset)
-                    else:
-                        buffer_page_entry = self.ramdump.read_u32(buffer_page_entry_list + buffer_page_list_prev_offset)
-                    #print("buffer_page_entry inside loop = {0}".format(hex(buffer_page_entry)))
+                    buffer_page_entry = self.ramdump.read_pointer(buffer_page_entry_list + buffer_page_list_prev_offset)
                 page_index = page_index + 1
                 #print("page_index = %d" % page_index)
                 #if (page_index == ( NR_TO_REWIND + 1)):
