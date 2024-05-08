@@ -1,5 +1,5 @@
 # Copyright (c) 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -20,23 +20,23 @@
             }
     get_radix_tree_root will return the rnode
     walk_radix_tree_node start with this rnode
- '''
-RADIX_TREE_ENTRY_MASK =	3
-RADIX_TREE_INTERNAL_NODE = 1    # 1 for 4.19; 2 for 5.4
-RADIX_TREE_MAP_SHIFT = 6
-RADIX_TREE_MAP_SIZE = (1 << RADIX_TREE_MAP_SHIFT)
-
+'''
 
 class RadixTreeWalker(object):
     def __init__(self, ramdump):
         self.ramdump = ramdump
+        self.RADIX_TREE_ENTRY_MASK = 3
+        self.RADIX_TREE_INTERNAL_NODE = 1    # 1 for 4.19; 2 for 5.4
+        self.RADIX_TREE_MAP_SHIFT = 6
+        if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
+            self.RADIX_TREE_MAP_SHIFT = 4
+        self.RADIX_TREE_MAP_SIZE = (1 << self.RADIX_TREE_MAP_SHIFT)
         if (self.ramdump.kernel_version == (0, 0, 0) or
            self.ramdump.kernel_version >= (5, 4, 0)):
             self.root_struct = 'xarray'
             self.head_struct = 'xa_head'
             self.node_struct = 'xa_node'
-            global RADIX_TREE_INTERNAL_NODE
-            RADIX_TREE_INTERNAL_NODE = 2
+            self.RADIX_TREE_INTERNAL_NODE = 2
         else:
             self.root_struct = 'radix_tree_root'
             self.head_struct = 'rnode'
@@ -49,10 +49,10 @@ class RadixTreeWalker(object):
         return rnode_addr
 
     def entry_to_node(self, rbnode):
-        return rbnode & ~RADIX_TREE_INTERNAL_NODE
+        return rbnode & ~self.RADIX_TREE_INTERNAL_NODE
 
     def radix_tree_is_internal_node(self, rbnode):
-        return (rbnode & RADIX_TREE_ENTRY_MASK) == RADIX_TREE_INTERNAL_NODE
+        return (rbnode & self.RADIX_TREE_ENTRY_MASK) == self.RADIX_TREE_INTERNAL_NODE
 
     def walk_radix_tree_node(self, radix_tree_node, func, *args):
 
@@ -65,18 +65,11 @@ class RadixTreeWalker(object):
         slots_offset = self.ramdump.field_offset('struct ' + self.node_struct,
                                                  'slots')
         pointer_size = self.ramdump.sizeof('struct ' + self.node_struct + ' *')
-
         shift = self.ramdump.read_byte(radix_tree_node + rnode_shift_offset)
-
-        # if CONFIG_BASE_SMALL=1: radix_tree_map_shift = 4
-        if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
-            RADIX_TREE_MAP_SHIFT = 4
-            RADIX_TREE_MAP_SIZE = (1 << RADIX_TREE_MAP_SHIFT)
-
-        height = (shift // RADIX_TREE_MAP_SHIFT) + 1
-        for off in range(0, RADIX_TREE_MAP_SIZE):
+        height = (shift // self.RADIX_TREE_MAP_SHIFT) + 1
+        for off in range(0, self.RADIX_TREE_MAP_SIZE):
             slot = 0
-            shift = (height - 1) * RADIX_TREE_MAP_SHIFT
+            shift = (height - 1) * self.RADIX_TREE_MAP_SHIFT
             slot = self.ramdump.read_word(radix_tree_node + slots_offset + pointer_size * off)
             if slot == 0:
                 continue
