@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -260,6 +260,15 @@ class GdbMI(object):
         result = self._run_for_one(cmd)
         return result.split("*)")[0].split("= (")[1]
 
+    def print_type(self, type_or_var):
+        cmd = 'ptype {0}'.format(type_or_var)
+        result = self._run(cmd)
+        result = '\n'.join(result.lines)
+        if len(result) > 0:
+            ptype = result.split("=")[1].strip()
+            return ptype
+        return None
+
     def field_offset(self, the_type, field):
         """Returns the offset of a field in a struct or type.
 
@@ -344,6 +353,14 @@ class GdbMI(object):
     def symbol_at(self, address):
         """Get the symbol at the given address (using ``get_symbol_info``)"""
         return self.get_symbol_info(address).symbol
+
+    def get_enum_name(self, enum, val):
+        result = self._run_for_first('print ((enum {0}){1})'.format(enum, val))
+        parts = result.split(' ')
+        if len(parts) < 3:
+            raise GdbMIException(
+                "can't parse enum {0} {1}\n".format(enum, val), result)
+        return parts[2].rstrip()
 
     def get_enum_lookup_table(self, enum, upperbound):
         """Return a table translating enum values to human readable

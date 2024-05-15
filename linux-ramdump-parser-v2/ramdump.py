@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -937,7 +937,7 @@ class RamDump():
             self.ram_elf_file = file_path
             if not os.path.exists(file_path):
                 print_out_str("ELF file not exists, try to generate")
-                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm):
+                if minidump_util.generate_elf(options.autodump, options.outdir, self.svm, self.get_kernel_version()):
                     print_out_str("!!! ELF file generate failed")
                     sys.exit(1)
             fd = open(file_path, 'rb')
@@ -1367,9 +1367,20 @@ class RamDump():
             b = self.read_cstring(command_addr, 2048)
             if b is None:
                 print_out_str('!!! could not read saved command line address')
+                static_command_addr = self.address_of('static_command_line')
+                if static_command_addr is not None:
+                    static_command_addr = self.read_word(static_command_addr)
+                    b = self.read_cstring(static_command_addr, 2048)
+                    if b is None:
+                        print_out_str('!!! could not read static command line address')
+                        return False
+                    else:
+                        print_out_str('Satic Command Line: ' + b)
+                        return True
                 return False
-            print_out_str('Command Line: ' + b)
-            return True
+            else:
+                print_out_str('Saved Command Line: ' + b)
+                return True
         else:
             print_out_str('!!! Could not lookup saved command line address')
             return False
@@ -1519,7 +1530,10 @@ class RamDump():
         if self.arm64 and is_cortex_a53:
             startup_script.write('sys.cpu CORTEXA53\n')
         else:
-            startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
+            if self.cpu_type == "ARMv8.2-A":
+                startup_script.write("sys.cpu CORTEXA55\n")
+            else:
+                startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
             if self.minidump:
                 startup_script.write('SYStem.Option MMUSPACES OFF\n')
             else:
@@ -2269,6 +2283,15 @@ class RamDump():
             elif os.path.isfile(file):
                 on_file(file)
 
+    def has_debug_info(self, file):
+        cmd = self.objdump_path + ' -h ' + file
+        objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
+        out, err = objdump.communicate()
+        if '.debug_info' in out:
+            return True
+        else:
+            return False
+
     def parse_module_symbols(self):
         # Recursively search all files under mod_path ending in '.ko.unstripped' and store in a list
         ko_file_list = {}
@@ -2285,6 +2308,11 @@ class RamDump():
                 # Prefer .ko.unstripped
                 if ko_file_list.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
                     return
+
+                # Prefer ko with debug info
+                if name in ko_file_list and self.has_debug_info(ko_file_list.get(name)):
+                    return
+
                 ko_file_list[name] = file
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
