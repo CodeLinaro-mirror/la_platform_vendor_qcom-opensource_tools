@@ -1830,7 +1830,8 @@ class RamDump():
                     self.kimage_voffset = kimage_voffset
                     self.phys_offset = phys_offset
                 else:
-                    self.kaslr_offset = 0
+                    self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
+                    self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
 
     def determine_phys_offset(self, __kaslr_offset):
@@ -1891,7 +1892,6 @@ class RamDump():
         '''
         phys_base = _bfile.base & 0xfffff0000
         phys_end = _bfile.end
-        print_out_str(f"{os.path.basename(_bfile.path)} phys_base: {phys_base:x} phys_end: {phys_end:x}")
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
             kimage_load_addr = phys_base
             while (kimage_load_addr < phys_end):
@@ -3555,9 +3555,9 @@ class RamDump():
         data = self.__get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
-            return self.__object_value(var_type, data, 0, temp_name, attr_dict)
+            return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
-            return self.__object_value(var_type, data, 0, temp_name)
+            return self.__object_value(var_type, data, 0, temp_name, addr)
 
     def __get_bin_data(self, addr, size):
         """
@@ -3722,7 +3722,7 @@ class RamDump():
             self.enum_data[var_type] = (enum_var,enum_ty)
         return self.enum_data[var_type]
 
-    def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, attr_dict=None):
+    def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, addr, attr_dict=None):
         """
         Function to return structure value for the given type and type offset.
 
@@ -3766,7 +3766,7 @@ class RamDump():
                 length = length // ar_len
                 ar = []
                 for i in range(ar_len):
-                    ar.append(self.__object_value(var_type, struct_bin_data, i * length, None, attr_dict))
+                    ar.append(self.__object_value(var_type, struct_bin_data, i * length, None, addr, attr_dict))
                 return ar
             else:
                 newclass = type(var_type)
@@ -3793,6 +3793,9 @@ class RamDump():
                                 else:
                                     res = self.__populate_bitfield(struct_bin_data[bin_offset + offset:bin_offset + offset + length], ty, bit_offset, bit_length)
                                     setattr(temp_structure, key, res)
+                            elif "[]" in key and length == 0: #flex array
+                                res = addr + offset
+                                setattr(temp_structure, key.split("[")[0], res)
                             else:  # member is an array but not of struct/union
                                 temp_ty = key.split("[")[1]
                                 temp_ty = ty + "[" + temp_ty
@@ -3802,10 +3805,10 @@ class RamDump():
                             if "[" not in key:  # member is another struct/union/obj but not an array
                                 if attr_dict != None:
                                     setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
-                                                                                   value[1] + bin_offset, None, attr_dict[key]))
+                                                                                   value[1] + bin_offset, None, addr, attr_dict[key]))
                                 else:
                                     setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
-                                                                                   value[1] + bin_offset, None))
+                                                                                   value[1] + bin_offset, None, addr))
                             else:  # member is another struct/union/obj and an array
                                 temp_s = key.split("[")[1].split("]")[0]
                                 if temp_s == '' or temp_s == '0':
@@ -3817,9 +3820,9 @@ class RamDump():
                                 arr = [None] * arr_len
                                 for i in range(arr_len):
                                     if attr_dict != None:
-                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, attr_dict[key.split("[")[0]])
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, addr, attr_dict[key.split("[")[0]])
                                     else:
-                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None)
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, addr)
                                 setattr(temp_structure, key.split("[")[0], arr)
                 return temp_structure
 
