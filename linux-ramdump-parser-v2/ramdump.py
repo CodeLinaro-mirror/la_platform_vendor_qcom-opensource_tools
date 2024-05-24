@@ -1001,6 +1001,7 @@ class RamDump():
             self.pgtable_levels = int(self.get_config_val("CONFIG_PGTABLE_LEVELS"))
         except:
             self.pgtable_levels = 3
+        self.pfn_range = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
         # value is None in ARM32

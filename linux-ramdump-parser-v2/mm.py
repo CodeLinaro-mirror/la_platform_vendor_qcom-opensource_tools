@@ -499,3 +499,19 @@ def mm_init(ramdump):
 
     ramdump.mm = mm
     return True
+
+def get_pfn_range(ramdump):
+    if ramdump.pfn_range is None:
+        ramdump.pfn_range = {}
+        memblock = ramdump.read_datatype('memblock')
+        cnt = memblock.memory.cnt - 1
+        regions = memblock.memory.regions
+        first_region = ramdump.read_datatype(regions, 'struct memblock_region')
+        if cnt > 0:
+            region_addr = regions + (cnt * ramdump.sizeof('struct memblock_region'))
+            last_region = ramdump.read_datatype(region_addr, 'struct memblock_region')
+        else:
+            last_region = first_region
+        ramdump.pfn_range['min'] = first_region.base >> ramdump.page_shift
+        ramdump.pfn_range['max'] = (last_region.base + last_region.size) >> ramdump.page_shift
+    return ramdump.pfn_range
