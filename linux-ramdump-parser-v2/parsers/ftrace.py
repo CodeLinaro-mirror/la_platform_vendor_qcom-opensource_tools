@@ -10,10 +10,6 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-import parser_util
-import local_settings
-import os
-import subprocess
 import re
 from collections import OrderedDict
 
@@ -26,10 +22,7 @@ import linux_list as llist
 from . import taskdump
 #import time
 
-@register_parser(
-    '--dump-ftrace',
-    'Use \'crash\' to extract ftrace and trace-cmd to parse it.',
-    optional=True)
+@register_parser('--dump-ftrace', 'extract ftrace by iterate the ring buffer page',optional=True)
 class FtraceParser(RamParser):
 
     def __init__(self, *args):
@@ -44,6 +37,7 @@ class FtraceParser(RamParser):
         self.whitelisted_trace_names =[]
         self.ftrace_buffer_size_kb = None
         self.per_cpu_buffer_pages = None
+        self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
 
         if len(self.ramdump.ftrace_args):
             self.whitelisted_trace_names = self.ramdump.ftrace_args
@@ -150,6 +144,22 @@ class FtraceParser(RamParser):
         self.format_event_map[name_str] = fmt_list
         self.format_event_field_map = OrderedDict()
 
+    def ftrace_get_format(self):
+        self.formats_out = self.ramdump.open_file('formats.txt')
+        fevent_list = FtraceParser_Event_List(self.ramdump)
+        #print(fevent_list.ftrace_raw_struct_type)
+
+        ftrace_events_list = self.ramdump.address_of('ftrace_events')
+        next_offset = self.ramdump.field_offset(self.event_call, 'list')
+        list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
+        list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
+        self.formats_out.close()
+        #taskdump_time = time.time()
+        taskdump.do_dump_stacks(self.ramdump, 0)
+        #print("Taskdump took {} secs".format(time.time()-taskdump_time))
+
+        return fevent_list
+
     def ftrace_extract(self):
         #ftrace_event_time = 0
         #post_ftrace_event_time = 0
@@ -158,16 +168,12 @@ class FtraceParser(RamParser):
         global_trace_data_org = self.ramdump.address_of('ftrace_trace_arrays')
         global_trace_data_offset = self.ramdump.field_offset(
             'struct list_head ', 'next')
-        if self.ramdump.arm64:
-            global_trace_data_next = self.ramdump.read_u64(global_trace_data_org + global_trace_data_offset)
-        else:
-            global_trace_data_next = self.ramdump.read_u32(global_trace_data_org + global_trace_data_offset)
-
+        global_trace_data_next = self.ramdump.read_pointer(global_trace_data_org + global_trace_data_offset)
         if self.ramdump.kernel_version >= (5, 10):
-            trace_buffer_ptr = self.ramdump.field_offset(
+            trace_buffer_offset = self.ramdump.field_offset(
                 'struct trace_array', 'array_buffer')
         else:
-            trace_buffer_ptr = self.ramdump.field_offset(
+            trace_buffer_offset = self.ramdump.field_offset(
                 'struct trace_array', 'trace_buffer')
         trace_buffer_name_offset = self.ramdump.field_offset(
             'struct trace_array', 'name')
@@ -200,54 +206,21 @@ class FtraceParser(RamParser):
         ring_trace_buffer_nr_pages = self.ramdump.field_offset(
             'struct ring_buffer_per_cpu', 'nr_pages')
         log_pattern = re.compile(r'\s*(.*)-(\d+)\s*\[(\d+)\]\s*.*')
-
-        formats_out = self.ramdump.open_file('formats.txt')
-        self.formats_out = formats_out
-        fevent_list = FtraceParser_Event_List(self.ramdump)
-        #print(fevent_list.ftrace_raw_struct_type)
-
-        ftrace_events_list = self.ramdump.address_of('ftrace_events')
-        next_offset = self.ramdump.field_offset(self.event_call, 'list')
-        list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
-        list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
-        self.formats_out.close
-        #taskdump_time = time.time()
-        taskdump.do_dump_stacks(self.ramdump, 0)
-        #print("Taskdump took {} secs".format(time.time()-taskdump_time))
-
+        fevent_list = self.ftrace_get_format();
         while(global_trace_data_org != global_trace_data_next):
-            global_trace_data = global_trace_data_next
-
-            trace_buffer_name = self.ramdump.read_word(global_trace_data + trace_buffer_name_offset)
+            trace_array = global_trace_data_next
+            #print("v.v (struct trace_array)0x%x" %(trace_array))
+            trace_buffer_name = self.ramdump.read_word(trace_array + trace_buffer_name_offset)
             if not (trace_buffer_name):
                 trace_name = None
             else:
                 trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
 
-            if self.ramdump.arm64:
-                trace_buffer_ptr_data = self.ramdump.read_u64(
-                    global_trace_data + trace_buffer_ptr)
-            else:
-                trace_buffer_ptr_data = self.ramdump.read_u32(
-                    global_trace_data + trace_buffer_ptr)
+            trace_buffer_ptr_data = self.ramdump.read_pointer(trace_array + trace_buffer_offset)
+            ring_trace_buffer_data = trace_buffer_ptr_data + trace_buffer_offset
+            ring_trace_buffer_base_data = self.ramdump.read_pointer(ring_trace_buffer_data + ring_trace_buffer_ptr)
+            ring_trace_buffer_base_data1 = self.ramdump.read_pointer(ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
 
-
-            ring_trace_buffer_data = trace_buffer_ptr_data + trace_buffer_ptr
-            ring_trace_buffer_cpus = self.ramdump.read_u32(
-                ring_trace_buffer_data + ring_trace_buffer_cpus_ptr)
-            if self.ramdump.arm64:
-                ring_trace_buffer_base_data = self.ramdump.read_u64(
-                    ring_trace_buffer_data + ring_trace_buffer_ptr)
-            else:
-                ring_trace_buffer_base_data = self.ramdump.read_u32(
-                    ring_trace_buffer_data + ring_trace_buffer_ptr)
-
-            if self.ramdump.arm64:
-                ring_trace_buffer_base_data1 = self.ramdump.read_u64(
-                    ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
-            else:
-                ring_trace_buffer_base_data1 = self.ramdump.read_u32(
-                    ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
 
             if trace_name is None or trace_name == 0x0 or trace_name == "0x0" or trace_name == "None" or trace_name == "null" or len(trace_name) < 1:
                 #ftrace_out = self.ramdump.open_file('ftrace.txt','w')
@@ -271,10 +244,7 @@ class FtraceParser(RamParser):
                     fout = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
                     ftrace_out = BufferedWrite(fout)
                 else:
-                    if self.ramdump.arm64:
-                        global_trace_data_next =  self.ramdump.read_u64(global_trace_data_next)
-                    else:
-                        global_trace_data_next =  self.ramdump.read_u32(global_trace_data_next)
+                    global_trace_data_next =  self.ramdump.read_pointer(global_trace_data_next)
                     continue
             #    ftrace_out = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
 
@@ -286,11 +256,7 @@ class FtraceParser(RamParser):
             for cpu_idx in range(0,8):
                 #array_ptr = self.ramdump.read_u64(ring_trace_buffer_base_data1 + self.ramdump.sizeof('void *') * cpu_idx)
                 array_ptr = (ring_trace_buffer_base_data1 + self.ramdump.sizeof('void *') * cpu_idx)
-                #print "array_ptr = {0}".format(hex(array_ptr))
-                if self.ramdump.arm64:
-                    b = self.ramdump.read_u64(array_ptr)
-                else:
-                    b = self.ramdump.read_u32(array_ptr)
+                b = self.ramdump.read_pointer(array_ptr)
                 if b is None or b == 0x0:
                     continue
                 if self.ramdump.arm64:
@@ -318,17 +284,11 @@ class FtraceParser(RamParser):
                 nr_pages_per_buffer_item = nr_pages_per_buffer[cpu_idx]
                 per_cpu_buffer = rb_per_cpu[cpu_idx]
                 if per_cpu_buffer is not None:
-                    evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,per_cpu_buffer,nr_pages_per_buffer_item,nr_total_buffer_pages
-                                       ,fevent_list.ftrace_event_type,fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map)
-                    evt.ftrace_event_parsing()
+                    evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,fevent_list.ftrace_event_type,fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
+                    evt.ring_buffer_per_cpu_parsing(per_cpu_buffer)
                     #parse_trace_entry_time += evt.parse_trace_entry_time
             #ftrace_event_time += (time.time()-start)
-
-            if self.ramdump.arm64:
-                global_trace_data_next =  self.ramdump.read_u64(global_trace_data_next)
-            else:
-                global_trace_data_next =  self.ramdump.read_u32(global_trace_data_next)
-
+            global_trace_data_next =  self.ramdump.read_pointer(global_trace_data_next)
             switch_map = {}
             ftrace_file_map = {}
             if trace_name is None or trace_name == 0x0 or trace_name == "0x0" or trace_name == "None" or trace_name == "null" or len(trace_name) < 1:
@@ -407,102 +367,5 @@ class FtraceParser(RamParser):
 
 
     def parse(self):
-        if parser_util.get_system_type() != 'Linux':
-            self.ftrace_extract()
-            return False
-
-        try:
-            crashtool = local_settings.crashtool
-            trace_ext = local_settings.trace_ext
-            tracecmdtool = local_settings.tracecmdtool
-        except AttributeError:
-            print_out_str("One of crashtool, the trace extension or" +
-                          " trace-cmd is missing from local-settings.py")
-            return False
-
-        if not os.path.exists(crashtool):
-            print_out_str("Couldn't find the crash tool")
-            return False
-        if not os.path.exists(trace_ext):
-            print_out_str("Couldn't find the crash tool trace extension")
-            return False
-        if not os.path.exists(tracecmdtool):
-            print_out_str("Couldn't find the trace-cmd tool")
-            return False
-
-        print_out_str(crashtool)
-        dumps=""
-        for (f, start, end, filename) in self.ramdump.ebi_files:
-                if "DDR" in filename or "dram" in filename:
-                    dumps += '{0}@0x{1:x},'.format(filename, start)
-        pagesize = "-p {}".format(self.ramdump.get_page_size())
-
-        commandsfile = NamedTemporaryFile(mode='w', delete=False,
-                              dir=self.ramdump.outdir)
-        commandsfile.write("extend " + trace_ext + "\n")
-        commandsfile.write("trace dump -t " + self.ramdump.outdir +
-                       "/rawtracedata\n")
-        commandsfile.write("quit\n")
-        commandsfile.close()
-
-        commands = "-i " + commandsfile.name
-
-        crashargs = [crashtool]
-
-        kaslr_offset = self.ramdump.get_kaslr_offset()
-        if kaslr_offset != 0:
-            kaslroffset = "--kaslr={0}".format(hex(kaslr_offset))
-            crashargs.append(kaslroffset)
-
-        if self.ramdump.kimage_voffset is not None:
-            kimagevoff="kimage_voffset={0}".format(hex(self.ramdump.kimage_voffset).replace('L',''))
-            crashargs.append("--machdep")
-            crashargs.append(kimagevoff)
-
-        crashargs.extend([dumps, self.ramdump.vmlinux,
-                     pagesize, commands])
-
-        print_out_str('args to crash: {0}'.format(crashargs))
-
-        sp = subprocess.Popen(crashargs,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE,
-                              universal_newlines = True)
-        out, err = sp.communicate()
-
-        if out:
-             print_out_str("crash standard output recorded.")
-             std = self.ramdump.open_file('stdout_crashtool.txt')
-             std.write(out);
-             std.close();
-        if err:
-             print_out_str("crash standard error recorded.")
-             std = self.ramdump.open_file('stderr_crashtool.txt')
-             std.write(err);
-             std.close();
-
-        os.remove(commandsfile.name)
-
-        if not os.path.exists(self.ramdump.outdir + "/rawtracedata"):
-             print_out_str("crash failed to extract raw ftrace data")
-             return False
-
-        tracecmd_arg = self.ramdump.outdir + "/rawtracedata"
-        sp = subprocess.Popen([tracecmdtool, "report", "-l", tracecmd_arg],
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE,
-                              universal_newlines=True)
-        out, err = sp.communicate();
-
-        if out:
-             ftrace_out = self.ramdump.open_file('ftrace.txt')
-             ftrace_out.write(out);
-             ftrace_out.close();
-             print_out_str("Ftrace successfully extracted.");
-        if err:
-             print_out_str("trace-cmd standard error recorded.")
-             std = self.ramdump.open_file('stderr_tracecmd.txt')
-             std.write(err);
-             std.close();
-
-        return True
+        self.ftrace_extract()
+        
