@@ -37,7 +37,8 @@ from importlib import import_module
 import module_table
 from mm import mm_init
 from register import Register
-
+from collections import namedtuple
+import shlex
 SP = 13
 LR = 14
 PC = 15
@@ -689,96 +690,49 @@ class RamDump():
             phys_base, phys_end = _fd.read().strip().split("--")
         return int(phys_base), int(phys_end)
 
-    def determine_phys_offset(self):
-        vmalloc_start = self.modules_end - self.kaslr_offset
-        for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
-
-            phys_base = 0x27fffffff
-            phys_end = 0
-
-            if self.reduceddump:
-                # Load the phys range from phys_range.txt
-                path = os.path.join(os.path.dirname(self.elf_addr[0]), 'phys_range.txt')
-                if os.path.exists(path):
-                    phys_base, phys_end = self.load_phys_range(path)
-                else:
-                    print_out_str("Unable to locate the phys_range.txt file !!! Linux banner will not be found !!!")
-            else:
-                for a in self.ebi_files:
-                    _, start, end, path = a
-                    if start < phys_base:
-                        phys_base = start
-                    if end > phys_end:
-                        phys_end = end
-
-            #if phys_end > 0x27fffffff:
-            #    phys_end = 0x27fffffff
-            #mask phys_base lower address for alignment
-            phys_base = phys_base & 0xfffff0000
-
-            print_out_str("phys_base: {0:x} phys_end: {1:x} step: {2:x}".format(
-                            phys_base, phys_end, min_image_align))
-
-            kimage_load_addr = phys_base
-            while (kimage_load_addr < phys_end):
-                kimage_voffset = self.modules_end - kimage_load_addr
-                addr = self.address_of("kimage_voffset") - self.kaslr_offset - \
-                    vmalloc_start + kimage_load_addr
-                if self.arm64:
-                    val = self.read_u64(addr, False)
-                else:
-                    val = self.read_u32(addr, False)
-                if val is None:
-                    val = 0
-                val = int(val)
-                if (int(kimage_voffset) == val):
-                    return kimage_load_addr
-                kimage_load_addr = kimage_load_addr + min_image_align
-
-        return 0
-
     def get_kimage_vaddr(self, need_aslr=True):
         kimage_vaddr = None
-        if self.get_kernel_version() >= (6, 1, 0):
+        try:
             kimage_vaddr = self.address_of('_text')
             if need_aslr:
                 kimage_vaddr -= self.kaslr_offset
-        elif self.get_kernel_version() > (4, 20, 0):
-            if self.get_kernel_version() >= (6, 4, 0):
-                modules_vsize = 0x80000000
+        except:
+            if self.get_kernel_version() > (4, 20, 0):
+                if self.get_kernel_version() >= (6, 4, 0):
+                    modules_vsize = 0x80000000
+                else:
+                    modules_vsize = 0x08000000
+                bpf_jit_vsize = 0x08000000
+                self.page_end = (0xffffffffffffffff << (
+                            self.va_bits - 1)) & 0xffffffffffffffff
+                if self.address_of("kasan_init") is None:
+                    self.kasan_shadow_size = 0
+                else:
+                    if self.is_config_defined("CONFIG_KASAN_SW_TAGS"):
+                        self.kasan_shadow_size = 1 << (self.va_bits - 4)
+                    else:
+                        self.kasan_shadow_size = 1 << (self.va_bits - 3)
+                kimage_vaddr = self.page_end + modules_vsize
+                if self.get_kernel_version() < (5, 10, 0):
+                    kimage_vaddr += bpf_jit_vsize
+
+                # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
+                # The KASAN shadow region is reconfigured so that it ends at the start of
+                # the vmalloc region, and grows downwards. That way, the arrangement of
+                # the vmalloc space (which contains kernel mappings, modules, BPF region,
+                # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
+                # which aids debugging.
+
+                if self.get_kernel_version() < (5, 11, 0):
+                    kimage_vaddr = kimage_vaddr + self.kasan_shadow_size
             else:
                 modules_vsize = 0x08000000
-            bpf_jit_vsize = 0x08000000
-            self.page_end = (0xffffffffffffffff << (
-                        self.va_bits - 1)) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                if self.is_config_defined("CONFIG_KASAN_SW_TAGS"):
-                    self.kasan_shadow_size = 1 << (self.va_bits - 4)
+                self.va_start = (0xffffffffffffffff << self.va_bits) & 0xffffffffffffffff
+                if self.address_of("kasan_init") is None:
+                    self.kasan_shadow_size = 0
                 else:
                     self.kasan_shadow_size = 1 << (self.va_bits - 3)
-            kimage_vaddr = self.page_end + modules_vsize
-            if self.get_kernel_version() < (5, 10, 0):
-                kimage_vaddr += bpf_jit_vsize
-
-            # new since v5.11: https://lore.kernel.org/all/20201008153602.9467-3-ardb@kernel.org/
-            # The KASAN shadow region is reconfigured so that it ends at the start of
-            # the vmalloc region, and grows downwards. That way, the arrangement of
-            # the vmalloc space (which contains kernel mappings, modules, BPF region,
-            # the vmemmap array etc) is identical between non-KASAN and KASAN builds,
-            # which aids debugging.
-
-            if self.get_kernel_version() < (5, 11, 0):
-                kimage_vaddr = kimage_vaddr + self.kasan_shadow_size
-        else:
-            modules_vsize = 0x08000000
-            self.va_start = (0xffffffffffffffff << self.va_bits) & 0xffffffffffffffff
-            if self.address_of("kasan_init") is None:
-                self.kasan_shadow_size = 0
-            else:
-                self.kasan_shadow_size = 1 << (self.va_bits - 3)
-            kimage_vaddr = self.va_start + self.kasan_shadow_size + \
+                kimage_vaddr = self.va_start + self.kasan_shadow_size + \
                            modules_vsize
         return kimage_vaddr
 
@@ -1026,10 +980,19 @@ class RamDump():
                 '!!! This is really bad and probably indicates RAM corruption')
             print_out_str('!!! Some features may be disabled!')
 
+        # extract kernel's configuration to kconfig.txt
+        saved_config = self.open_file('kconfig.txt')
+        for l in self.config:
+            saved_config.write(l + '\n')
+
+        saved_config.close()
         try:
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
-            self.va_bits = 39
+            if self.arm64:
+                self.va_bits = 39
+            else: # for arm32
+                self.va_bits = 32
         try:
             self.page_shift = int(self.get_config_val("CONFIG_ARM64_PAGE_SHIFT"))
         except:
@@ -1039,11 +1002,23 @@ class RamDump():
         except:
             self.pgtable_levels = 3
 
-        if self.kaslr_offset is None:
-            self.determine_kaslr_offset()
-            self.gdbmi.kaslr_offset = self.get_kaslr_offset()
-        else:
-            self.gdbmi.kaslr_offset = self.kaslr_offset
+        ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
+        # value is None in ARM32
+        self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
+        # Virtual address of the variable 'kimage_voffset'
+        # value is None in ARM32 before kernel version 5.4
+        self.__kimage_voffset_var_va = self.address_of('kimage_voffset')
+        # virtual address of start of kernel image
+        self.__kimage_vaddr_va = self.get_kimage_vaddr(need_aslr=False)
+        # address of linux_banner variable
+        self.__linux_banner_va = self.address_of('linux_banner')
+        self.kimage_voffset = None
+        print_out_str(f"kimage_vaddr is: 0x{self.__kimage_vaddr_va:x}")
+
+        # determine kaslr_offset and kimage_voffset here
+        self.determine_kaslr_offset()
+        self.gdbmi.kaslr_offset = self.kaslr_offset
+        ''' determine kaslr_offset, phys_offset and kimage_voffset @end '''
 
         self.wlan = options.wlan
         if self.arm64:
@@ -1055,42 +1030,13 @@ class RamDump():
                 self.thread_size = 16384
         if options.page_offset is not None:
             print_out_str(
-                '[!!!] Page offset was set to {0:x}'.format(page_offset))
+                '[!!!] Page offset was set to {0:x}'.format(options.page_offset))
             self.page_offset = options.page_offset
         self.setup_symbol_tables()
-        kimage_vaddr = self.get_kimage_vaddr()
         print_out_str("Kernel version vmlinux: {0}".format(self.kernel_version))
         self.field_offset("struct trace_entry", "preempt_count")
-        print_out_str("kimage_vaddr is" ": {:x}".format(kimage_vaddr))
-        self.kimage_vaddr = kimage_vaddr + self.get_kaslr_offset()
-        self.modules_end = self.page_offset
-        if self.arm64:
-            self.kimage_voffset = self.address_of("kimage_voffset")
-            if self.kimage_voffset is not None:
-                self.kimage_voffset = self.kimage_vaddr - self.phys_offset
-                self.modules_end = self.kimage_vaddr
-                if not (options.phys_offset or self.minidump or self.svm):
-                    phys_offset_dyn = self.determine_phys_offset()
-                    if phys_offset_dyn:
-                        print_out_str("Dynamically determined phys offset is"
-                                      ": {:x}".format(phys_offset_dyn))
-                        self.phys_offset = phys_offset_dyn
-
-                if self.kimage_vaddr > self.phys_offset:
-                    self.kimage_voffset = self.kimage_vaddr - self.phys_offset
-                else:
-                    self.kimage_voffset = self.phys_offset
-                print_out_str("The kimage_voffset extracted is: {:x}".format(self.kimage_voffset))
-        else:
-            self.kimage_voffset = self.address_of("kimage_voffset")
-            if self.kimage_voffset is not None:
-                if not (options.phys_offset or self.minidump):
-                    phys_offset_dyn = self.determine_phys_offset()
-                    if phys_offset_dyn:
-                        print_out_str("Dynamically determined phys offset is"
-                                      ": {:x}".format(phys_offset_dyn))
-                        self.phys_offset = phys_offset_dyn
-            self.kimage_voffset = None
+        self.kimage_vaddr = self.__kimage_vaddr_va + self.get_kaslr_offset()
+        print_out_str(f"kimage_vaddr with kaslr is: 0x{self.kimage_vaddr:x}")
 
         # The address of swapper_pg_dir can be used to determine
         # whether or not we're running with LPAE enabled since an
@@ -1110,14 +1056,13 @@ class RamDump():
             stext = self.address_of('primary_entry')
         else:
             stext = self.address_of('stext')
-        if self.kimage_voffset is None:
+        if self.kimage_voffset is None or not self.arm64:
             self.kernel_text_offset = stext - self.page_offset
         else:
             self.kernel_text_offset = stext - self.kimage_vaddr
 
         pg_dir_size = self.kernel_text_offset + self.page_offset \
             - self.swapper_pg_dir_addr
-
         if self.arm64:
             print_out_str('Using 64bit MMU')
             self.mmu = Armv8MMU(self)
@@ -1845,54 +1790,199 @@ class RamDump():
     def get_kaslr_offset(self):
         return self.kaslr_offset
 
+    @parser_util.time_cost
     def determine_kaslr_offset(self):
         if self.svm and self.svm_kaslr_offset:
             self.kaslr_offset = self.svm_kaslr_offset
             self.kaslr_addr = None
+            self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
             return
         elif self.svm and not self.svm_kaslr_offset:
             self.kaslr_offset = 0
             self.kaslr_addr = None
+            self.kimage_voffset = self.__kimage_vaddr_va - self.phys_offset
             return
         else:
-            self.kaslr_offset = 0
-            if self.kaslr_addr is None:
-                print_out_str('!!!! Kaslr addr is not provided.')
+            __kaslr_offset = None
+            if not self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                __kaslr_offset = 0x0
+                print_out_str('!!!! Kaslr feature is not enabled.')
             else:
                 if self.minidump:
                     for a in self.ebi_files:
                         if "md_SHRDIMEM".lower() in a[3].lower():
                             self.kaslr_addr = a[1] + 0x6d0
                             break
-                kaslr_magic = self.read_u32(self.kaslr_addr, False)
-                self.kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
+                if self.kaslr_addr:
+                    kaslr_magic = self.read_u32(self.kaslr_addr, False)
+                    if kaslr_magic == 0xdead4ead:
+                        __kaslr_offset = self.read_u64(self.kaslr_addr + 4, False)
+                        if __kaslr_offset:
+                            print_out_str(f"&kaslr_offset=0x{self.kaslr_addr:x} kaslr_offset=0x{__kaslr_offset:x}")
+            try:
+                self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset, __kaslr_offset)
+            except:
+                print_out_exception()
+                print_out_str("Traverse DDR to find out correct kaslr_offset and phys_offset, it may take a little time to do!!")
+                hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset(__kaslr_offset)
+                if hasFound:
+                    self.kaslr_offset = kaslr_offset
+                    self.kimage_voffset = kimage_voffset
+                    self.phys_offset = phys_offset
+                else:
+                    self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
+                    self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
+                    print_out_str("!!! Determine kaslr_offset failed")
 
+    def determine_phys_offset(self, __kaslr_offset):
+        fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
+        bfiles = []
+        if self.reduceddump:
+            # Load the phys range from phys_range.txt
+            path = os.path.join(os.path.dirname(self.elf_addr[0]), 'phys_range.txt')
+            if os.path.exists(path):
+                phys_base, phys_end = self.load_phys_range(path)
+                bfiles.append(fdtuple(phys_base, phys_end, ""))
+            else:
+                print_out_str("Unable to locate the phys_range.txt file !!! Linux banner will not be found !!!")
+                return False, 0, 0, 0
+        else:
+            for a in self.ebi_files:
+                _, start, end, path = a
+                if "DDRCS" in path:
+                    bfiles.append(fdtuple(start, end, path))
+
+        if len(bfiles) == 0:
+            print_out_str("No ddr file found!! check if there is DDRCSxxx.bin in your dumps")
+            return False, 0, 0, 0
+
+        isFound = False
+        kaslr_offset = 0
+        kimage_voffset = 0
+        phys_offset = 0
+        from concurrent import futures
+        max_workers = max(len(bfiles), 8)
+        self.executor = futures.ThreadPoolExecutor(max_workers)
+        self.enable_multithread(max_workers, self.executor._thread_name_prefix)
+        lock = threading.Lock()
+        threads = [self.executor.submit(self.traverse_file_thread, __kaslr_offset, _bfile, lock) for _bfile in bfiles]
+
+        for future in futures.as_completed(threads):
+            isFound, kaslr_offset, kimage_voffset, phys_offset  = future.result()
+            if isFound:
+                break
+        self.executor.shutdown()
+        self.disable_multithread()
+        return isFound, kaslr_offset, kimage_voffset, phys_offset
+
+    '''
+      Sometimes this function is runing in multi-thread
+      so it's better to use
+         self.read_word(kimage_vaddr_var_phy, virtual = False)
+      instead of
+         self.read_word(kimage_vaddr_var_phy, virtual = True)
+
+      read data from physical address is allowed.
+    '''
+    def traverse_file_thread(self, __kaslr_offset, _bfile, thread_lock):
+        '''
+        traverse DDR file with min_image_align
+        to find out correct kaslr_offset and kimage_voffset
+        _bfile: FDTuple type argument
+        '''
+        phys_base = _bfile.base & 0xfffff0000
+        phys_end = _bfile.end
+        for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
+            kimage_load_addr = phys_base
+            while (kimage_load_addr < phys_end):
                 try:
-                    self.dynamic_kaslr_offset = None
-                    kimage_vaddr_va = self.address_of('kimage_vaddr')
-                    kimage_vaddr = self.get_kimage_vaddr(need_aslr=False)
-                    kimage_vaddr_phy = self.phys_offset + kimage_vaddr_va - kimage_vaddr
-                    kimage_va_temp = self.read_physical(kimage_vaddr_phy, 8)
-                    kimage_va = struct.unpack('<Q', kimage_va_temp)
-                    kimage_va = int(kimage_va[0])
-                    if kimage_va >= kimage_vaddr:
-                        self.dynamic_kaslr_offset = kimage_va - kimage_vaddr
-                        print_out_str("dynamic_kaslr_offset is: "  + str(hex(self.dynamic_kaslr_offset)))
+                    if self.__kaslr_found: # kaslr was found by other threads, cancel this thread
+                        return False, 0, 0, 0
                 except:
-                    self.dynamic_kaslr_offset = None
                     pass
 
-                if kaslr_magic != 0xdead4ead:
-                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
-                        if self.dynamic_kaslr_offset is not None:
-                            self.kaslr_offset = self.dynamic_kaslr_offset
-                        else:
-                            print_out_str('!!!! Could not get the dynamic_kaslr_offset.')
-                    else:
-                        print_out_str('!!!! Kaslr feature is not enabled.')
-                        self.kaslr_offset = 0x0
+                try:
+                    kaslr_offset, kimage_voffset = self.validate_phys_offset(kimage_load_addr, __kaslr_offset)
+                    with thread_lock:
+                        self.__kaslr_found = True
+                    return True, kaslr_offset, kimage_voffset, kimage_load_addr
+                except:
+                    kimage_load_addr += min_image_align
+                    continue
+
+        return False, 0, 0, 0
+
+    '''
+      Sometimes this function is runing in multi-thread
+      so it's better to use
+         self.read_word(kimage_vaddr_var_phy, virtual = False)
+      instead of
+         self.read_word(kimage_vaddr_var_phy, virtual = True)
+
+      read data from physical address is allowed.
+    '''
+    def validate_phys_offset(self, phys_offset, kaslr_offset=None):
+        '''
+        validate whether given phys_offset was the right value
+            phys_offset: phys_offset neet to be validated
+        how to validate:
+        First step:
+                calculate kaslr_offset and kimage_voffset according to phys_offset
+
+                            Virtual Address         Physical Address
+                             --------               --------
+                             --------               -------- phys_offset
+                kimage_vaddr --------               --------
+                             --------               --------
+            kimage_vaddr var --------               --------
+                             --------               --------
+     kimage_vaddr with kaslr --------               --------
+
+            phyiscal address of kimage_vaddr var = kimage_vaddr var - kimage_vaddr + phys_offset
+            kimage_vaddr with kaslr = read content from phyiscal address of kimage_vaddr var
+            kaslr_offset = kimage_vaddr with kaslr - kimage_vaddr
+            kimage_voffset = kimage_vaddr with kaslr - phys_offset
+
+        Second step:
+              check if kimage_voffset value(calculated) == kimage_voffset read from vmlinux
+        Third step:
+              check if linux_banner read from DDR == linux_banner from vmlinux
+        '''
+        ## First step, calculate kaslr_offset and kimage_voffset
+        if self.arm64:
+            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
+            if kaslr_offset != None:
+                kimage_voffset = self.__kimage_vaddr_var_va  + kaslr_offset - kimage_vaddr_var_phy
+            else:
+                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
+                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
+                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
+                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
                 else:
-                    print_out_str("The kaslr_offset extracted is: " + str(hex(self.kaslr_offset)))
+                    raise Exception("!!! Determine kaslr_voffset failed")
+        else:
+            kimage_voffset = self.page_offset - phys_offset
+            if not self.__kimage_voffset_var_va:
+                #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
+                return kaslr_offset, kimage_voffset
+
+        '''print_out_str(f" kaslr_offset {kaslr_offset:x}, kimage_voffset {kimage_voffset:x}
+            phys_offset {phys_offset:x} self.__kimage_vaddr_va {self.__kimage_vaddr_va:x}")'''
+
+        ## Second step,  check if kimage_voffset value == "&kimage_voffset"
+        kimage_voffset_var_phys = self.__kimage_voffset_var_va + kaslr_offset - kimage_voffset
+        kimage_voffset_var_val = self.read_word(kimage_voffset_var_phys, False)
+        if kimage_voffset_var_val == kimage_voffset:
+            ## check if string from &linux_banner on DDR == string from  &linux_banner on vmlinux
+            linux_banner_phys = self.__linux_banner_va + kaslr_offset - kimage_voffset
+            banner_string = self.read_cstring(linux_banner_phys, len(self.linux_banner), False)
+            if banner_string and (banner_string == self.linux_banner):
+                print_out_str(f"<-= Determined kaslr_offset: 0x{kaslr_offset:x} phys_offset: 0x{phys_offset:x} kimage_voffset: 0x{kimage_voffset:x} =->")
+                return kaslr_offset, kimage_voffset
+            else:
+                raise Exception("!!! Validate linux_banner failed")
+        else:
+            raise Exception("!!! Validate kimage_voffset failed")
 
     def get_page_size(self):
         return 1 << self.page_shift
@@ -2190,7 +2280,7 @@ class RamDump():
                 mod_tbl_ent.section_offsets[sect_name] = sect_addr
             if self.is_config_defined('CONFIG_SMP'):
                 percpu_size = self.read_u32(module + percpu_size_offset)
-                if percpu_size is not 0:
+                if percpu_size != 0:
                     percpu_pointer = self.read_pointer(module + percpu_offset)
                     mod_tbl_ent.section_offsets['.data..percpu'] = percpu_pointer
             self.module_table.add_entry(mod_tbl_ent)
@@ -2304,7 +2394,12 @@ class RamDump():
 
     def has_debug_info(self, file):
         cmd = self.objdump_path + ' -h ' + file
-        objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
+        if platform.system() != "Linux":
+            objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       universal_newlines=True, )
+        else:
+            objdump = subprocess.Popen(shlex.split(cmd), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       universal_newlines=True, )
         out, err = objdump.communicate()
         if '.debug_info' in out:
             return True
@@ -2698,7 +2793,7 @@ class RamDump():
 
         self.use_multithread =  False
         for eib_files in self.ebi_files_mappings.values():
-            for file in self.ebi_files:
+            for file in eib_files:
                 fd, start, end, path = file
                 fd.close()
         self.ebi_files_mappings = {}
@@ -3460,9 +3555,9 @@ class RamDump():
         data = self.__get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
-            return self.__object_value(var_type, data, 0, temp_name, attr_dict)
+            return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
-            return self.__object_value(var_type, data, 0, temp_name)
+            return self.__object_value(var_type, data, 0, temp_name, addr)
 
     def __get_bin_data(self, addr, size):
         """
@@ -3627,7 +3722,7 @@ class RamDump():
             self.enum_data[var_type] = (enum_var,enum_ty)
         return self.enum_data[var_type]
 
-    def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, attr_dict=None):
+    def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, addr, attr_dict=None):
         """
         Function to return structure value for the given type and type offset.
 
@@ -3671,7 +3766,7 @@ class RamDump():
                 length = length // ar_len
                 ar = []
                 for i in range(ar_len):
-                    ar.append(self.__object_value(var_type, struct_bin_data, i * length, None, attr_dict))
+                    ar.append(self.__object_value(var_type, struct_bin_data, i * length, None, addr, attr_dict))
                 return ar
             else:
                 newclass = type(var_type)
@@ -3698,6 +3793,9 @@ class RamDump():
                                 else:
                                     res = self.__populate_bitfield(struct_bin_data[bin_offset + offset:bin_offset + offset + length], ty, bit_offset, bit_length)
                                     setattr(temp_structure, key, res)
+                            elif "[]" in key and length == 0: #flex array
+                                res = addr + offset
+                                setattr(temp_structure, key.split("[")[0], res)
                             else:  # member is an array but not of struct/union
                                 temp_ty = key.split("[")[1]
                                 temp_ty = ty + "[" + temp_ty
@@ -3707,10 +3805,10 @@ class RamDump():
                             if "[" not in key:  # member is another struct/union/obj but not an array
                                 if attr_dict != None:
                                     setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
-                                                                                   value[1] + bin_offset, None, attr_dict[key]))
+                                                                                   value[1] + bin_offset, None, addr, attr_dict[key]))
                                 else:
                                     setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
-                                                                                   value[1] + bin_offset, None))
+                                                                                   value[1] + bin_offset, None, addr))
                             else:  # member is another struct/union/obj and an array
                                 temp_s = key.split("[")[1].split("]")[0]
                                 if temp_s == '' or temp_s == '0':
@@ -3722,9 +3820,9 @@ class RamDump():
                                 arr = [None] * arr_len
                                 for i in range(arr_len):
                                     if attr_dict != None:
-                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, attr_dict[key.split("[")[0]])
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, addr, attr_dict[key.split("[")[0]])
                                     else:
-                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None)
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, addr)
                                 setattr(temp_structure, key.split("[")[0], arr)
                 return temp_structure
 

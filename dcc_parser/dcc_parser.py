@@ -311,6 +311,8 @@ if __name__ == '__main__':
                       help='DCC driver version 2')
     parser.add_option('--config-offset', dest='config_offset',
                       help='Start offset for DCC configuration')
+    parser.add_option('--data-offset', dest='data_offset',
+                      help='Start offset for DCC Data')
     parser.add_option('--config-loopoffset', dest='config_loopoffset',
                       help='Offset of loop value')
     parser.add_option('--dcc_sink', dest='dcc_sink',
@@ -377,6 +379,8 @@ if __name__ == '__main__':
         print("Sink used for the list:" ,  sink)
         if sink == 'SRAM':
             print('Read data from SRAM')
+            if options.data_offset is not None:
+                sram_file.seek(int(options.data_offset, 16))
             if read_data(sram_file):
                 log.error('Couldn\'t read complete data.')
                 sys.exit(1)
