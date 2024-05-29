@@ -284,3 +284,146 @@ class Mount(BaseFs):
         self.show_sb_opts(sb)
         self.show_mnt_opts(vfsmount)
         self.output.write("\n")
+
+@register_parser('--df', 'Extract df info from ramdump', optional=True)
+class Df(BaseFs):
+    def __init__(self, ramdump):
+        super().__init__(ramdump)
+        self.output = self.ramdump.open_file("df.txt")
+        self.dev_ids = []
+
+    def devid(self, s_dev):
+        MINORBITS = 20
+        MINORMASK =	((1 << MINORBITS) - 1)
+        major = s_dev >> MINORBITS
+        minor = s_dev & MINORMASK
+        return (minor & 0xff) | (major << 8) | ((minor & ~0xff) << 12)
+
+    def ext4_statfs(self, super_block, s_fs_info):
+        sbi = self.ramdump.read_datatype(s_fs_info, 'struct ext4_sb_info',
+                                         ["s_es", "s_overhead", "s_resv_clusters",
+                                           "s_cluster_bits", "s_mount_opt",
+                                           "s_freeclusters_counter", "s_dirtyclusters_counter"])
+        _es = sbi.s_es
+        es = self.ramdump.read_datatype(_es, 'struct ext4_super_block',
+                                        ["s_r_blocks_count_hi", "s_r_blocks_count_lo",
+                                         "s_blocks_count_hi", "s_blocks_count_lo"])
+
+        s_resv_clusters = sbi.s_resv_clusters.counter
+        s_cluster_bits = sbi.s_cluster_bits
+
+        resv_blocks = s_resv_clusters << s_cluster_bits
+        s_mount_opt = sbi.s_mount_opt
+        EXT4_MOUNT_MINIX_DF	=	0x00080
+        overhead = 0
+        if s_mount_opt & EXT4_MOUNT_MINIX_DF == 0:
+            overhead = sbi.s_overhead
+
+        f_bsize = self.ramdump.read_word(super_block + self.ramdump.field_offset("struct super_block", "s_blocksize"))
+        s_blocks_count =  es.s_blocks_count_hi << 32 | es.s_blocks_count_lo
+        f_blocks = s_blocks_count - overhead << s_cluster_bits
+        bfree = self.percpu_counter(sbi.s_freeclusters_counter.count, sbi.s_freeclusters_counter.counters) + \
+                    self.percpu_counter(sbi.s_dirtyclusters_counter.count, sbi.s_dirtyclusters_counter.counters)
+        bfree = bfree if bfree > 0 else 0
+        f_bfree = bfree << s_cluster_bits
+        self.writeback(f_bsize, f_blocks, f_bfree)
+
+    def writeback(self, f_bsize, f_blocks, f_bfree):
+        if f_bsize * f_blocks <= 0:
+            self.output.write("{:<6s} {:<6s} {:<6s} {:<6.0%}".format("_","_","_",0))
+            return
+
+        total = f_bsize * f_blocks
+        used = (f_blocks - f_bfree) * f_bsize
+        free = f_bfree * f_bsize
+        used_per = used/total
+        self.output.write("{:<6s} {:<6s} {:<6s} {:<6.0%}".format(self.human_str(total), self.human_str(used), self.human_str(free), used_per))
+
+    def f2fs_statfs(self, super_block, s_fs_info):
+        sbi = self.ramdump.read_datatype(s_fs_info, 'struct f2fs_sb_info',
+                                         ["raw_super", "blocksize", "user_block_count",
+                                          "total_valid_block_count", "current_reserved_blocks"])
+        raw_super = self.ramdump.read_datatype(sbi.raw_super, 'struct f2fs_super_block',
+                                               ["block_count", "segment0_blkaddr"])
+        total_count = raw_super.block_count
+        start_count = raw_super.segment0_blkaddr
+        f_bsize = sbi.blocksize
+        f_blocks = total_count - start_count
+
+        f_bfree = sbi.user_block_count - sbi.total_valid_block_count - sbi.current_reserved_blocks
+
+        self.writeback(f_bsize, f_blocks, f_bfree)
+
+    def shmem_statfs(self, super_block, s_fs_info):
+        sbinfo = self.ramdump.read_datatype(s_fs_info, 'struct shmem_sb_info', ["max_blocks", "used_blocks"])
+
+        f_bsize = self.ramdump.get_page_size()
+        f_blocks = 0
+        f_bfree = 0
+        if sbinfo.max_blocks > 0:
+            f_blocks = sbinfo.max_blocks
+            used_blocks = self.percpu_counter(sbinfo.used_blocks.count, sbinfo.used_blocks.counters)
+            f_bfree = sbinfo.max_blocks - used_blocks
+
+        self.writeback(f_bsize, f_blocks, f_bfree)
+
+    def fat_statfs(self, super_block, s_fs_info):
+        sbi = self.ramdump.read_datatype(s_fs_info, 'struct msdos_sb_info',
+                                         ["cluster_size", "max_cluster", "free_clusters"])
+        FAT_START_ENT = 2
+        f_bsize =  sbi.cluster_size
+        f_blocks = sbi.max_cluster - FAT_START_ENT
+        f_bfree = sbi.free_clusters
+
+        self.writeback(f_bsize, f_blocks, f_bfree)
+
+    def fuse_statfs(self, super_block, s_fs_info):
+        return 0
+
+    def efivarfs_statfs(self, super_block, s_fs_info):
+        self.writeback(0, 0, 0)
+
+    def human_str(self, size):
+        if size < 1024:
+            return " %.0f " % (size)
+        if size < 1024 * 1024:
+            return " %.0fK " % (size/1024)
+        elif size < 1024 * 1024 * 1024:
+            return " %.0fM " % (size/(1024 * 1024))
+        else:
+            return " %.1fG "  % (size/(1024 * 1024 * 1024))
+
+    def percpu_counter(self, count, counters):
+        for core in self.ramdump.iter_cpus():
+            try:
+                count += self.ramdump.read_int(counters + self.ramdump.per_cpu_offset(core))
+            except:
+                continue
+        return count
+    def print_header(self):
+        self.output.write("{:<16s}  {:<16s}  {:<28s} {:<6s} {:6s} {:<6s} {:<6s} {:<16s}\n".format(
+                            "(struct mount *)", "(struct super_block *)", "dev_name",
+                            "Size", "Used", "Avail", "Use%", "Mounted On"))
+
+    def show_info(self, mtuple):
+        mount = mtuple.mount
+        vfsmount = mtuple.vfsmount
+        sb = mtuple.super_block
+        dname = mtuple.dname
+        mount_path = mtuple.mpath
+
+        sbi = self.ramdump.read_datatype(sb, 'struct super_block', ['s_fs_info', "s_dev"])
+        if sbi.s_dev in self.dev_ids:
+            return
+        self.dev_ids.append(sbi.s_dev)
+        s_op = self.ramdump.read_structure_field(sb, 'struct super_block', 's_op')
+        statfs = self.ramdump.read_structure_field(s_op, 'struct super_operations', 'statfs')
+
+        look = self.ramdump.unwind_lookup(statfs)
+        if look:
+            fop, _ = look
+            if hasattr(self, fop):
+                self.output.write("0x{:16x} 0x{:16x} {:<32s}".format(mount, sb, dname))
+                eval("self." + fop)(sb, sbi.s_fs_info)
+                self.output.write("{:<32s} {:<16s}".format(mount_path, fop))
+                self.output.write("\n")
