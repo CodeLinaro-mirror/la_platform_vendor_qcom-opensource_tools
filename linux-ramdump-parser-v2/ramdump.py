@@ -953,7 +953,6 @@ class RamDump():
         if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
-            hyp_dump.vmtype = self.svm
             hyp_dump.determine_kaslr()
             self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
             hyp_dump.get_trace_phy()
