@@ -12,7 +12,7 @@
 
 import math
 import operator
-from mm import pfn_to_page
+from mm import pfn_to_page, get_pfn_range
 from parser_util import register_parser, RamParser
 # /kernel/msm-4.4/mm/slub.c
 OO_SHIFT = 16
@@ -88,9 +88,8 @@ class Slabinfo_summary(RamParser):
         slab = self.ramdump.read_word(original_slab)
         slab_lru_offset = self.ramdump.field_offset(
                                          'struct page', 'lru')
-        max_pfn_addr = self.ramdump.address_of('max_pfn')
-        max_pfn = self.ramdump.read_word(max_pfn_addr)
-        max_page = pfn_to_page(self.ramdump, max_pfn)
+        pfn_range = get_pfn_range(ramdump)
+        max_page = pfn_to_page(self.ramdump, pfn_range['max'])
         format_string = '\n{0:35} {1:9} {2:10} {3:10} {4:10} {5:8}K {6:8}' \
                         ' {7:10}K'
         slab_out.write(
