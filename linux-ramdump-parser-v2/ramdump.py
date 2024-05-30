@@ -1822,7 +1822,6 @@ class RamDump():
             try:
                 self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset, __kaslr_offset)
             except:
-                print_out_exception()
                 print_out_str("Traverse DDR to find out correct kaslr_offset and phys_offset, it may take a little time to do!!")
                 hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset(__kaslr_offset)
                 if hasFound:
@@ -1849,7 +1848,7 @@ class RamDump():
         else:
             for a in self.ebi_files:
                 _, start, end, path = a
-                if "DDRCS" in path:
+                if path and os.path.basename(path).startswith("DDR"):
                     bfiles.append(fdtuple(start, end, path))
 
         if len(bfiles) == 0:
