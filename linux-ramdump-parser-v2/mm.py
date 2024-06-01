@@ -140,6 +140,8 @@ def page_to_pfn_sparse(ramdump, page):
 
 
 def get_vmemmap(ramdump):
+    if ramdump.vmemmap is not None:
+        return ramdump.vmemmap
     # See: include/asm-generic/pgtable-nopud.h,
     # arch/arm64/include/asm/pgtable-hwdef.h,
     # arch/arm64/include/asm/pgtable.h
@@ -189,6 +191,8 @@ def get_vmemmap(ramdump):
         struct_page_max_shift = int(math.log2(spsize))
         vmemmap_size = ( 1 << (va_bits - page_shift - 1 + struct_page_max_shift))
         vmemmap = ramdump.page_offset - vmemmap_size - memstart_offset
+
+    ramdump.vmemmap = vmemmap
     return vmemmap
 
 
