@@ -1805,7 +1805,9 @@ class RamDump():
             return
         else:
             __kaslr_offset = None
-            if not self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+            if self.kaslr_offset is not None:
+                __kaslr_offset = self.kaslr_offset
+            elif not self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
                 __kaslr_offset = 0x0
                 print_out_str('!!!! Kaslr feature is not enabled.')
             else:
