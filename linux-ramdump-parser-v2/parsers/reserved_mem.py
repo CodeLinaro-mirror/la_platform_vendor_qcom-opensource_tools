@@ -157,7 +157,8 @@ class CmaAreas(RamParser):
     def __init__(self, *args):
         super(CmaAreas, self).__init__(*args)
         self.offset_comm = self.ramdump.field_offset('struct page_owner', 'comm')
-        self.pagetrace = PageTrace(self.ramdump)
+        if self.ramdump.is_config_defined('CONFIG_PAGE_OWNER'):
+            self.pagetrace = PageTrace(self.ramdump)
 
     def parse_pfn(self, ramdump, pfn, cma, op_file, dict):
 
