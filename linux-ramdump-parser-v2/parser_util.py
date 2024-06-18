@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2015, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -153,6 +153,20 @@ class RamParser(object):
     def parse(self):
         raise NotImplementedError
 
+    def parse_param(self):
+        '''
+        This function provide an interface to pass a parameter to sub-parser
+        eg:
+        --coredump pid=1 log_level=DEBUG then coredump parser could get pid and log_level by user set
+        --mounts pid=1 dump mount info of process with pid = 1
+        --mounts proc=surfaceflinger  dump mount info of surfaceflinger
+        '''
+        param = {}
+        for arg in sys.argv:
+            if "=" in arg:
+                key, val = arg.split('=')
+                param[key] = val
+        return param
 
 def which(program):
     """Just like which(1).
