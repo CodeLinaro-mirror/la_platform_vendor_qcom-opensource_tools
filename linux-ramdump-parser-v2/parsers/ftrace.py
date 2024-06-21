@@ -19,7 +19,6 @@ from tempfile import NamedTemporaryFile
 from .ftrace_event_list import FtraceParser_Event_List
 from .ftrace_event import FtraceParser_Event, BufferedWrite
 import linux_list as llist
-from . import taskdump
 #import time
 
 @register_parser('--dump-ftrace', 'extract ftrace by iterate the ring buffer page',optional=True)
@@ -154,10 +153,6 @@ class FtraceParser(RamParser):
         list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
         list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
         self.formats_out.close()
-        #taskdump_time = time.time()
-        taskdump.do_dump_stacks(self.ramdump, 0)
-        #print("Taskdump took {} secs".format(time.time()-taskdump_time))
-
         return fevent_list
 
     def ftrace_extract(self):
@@ -284,9 +279,8 @@ class FtraceParser(RamParser):
                 nr_pages_per_buffer_item = nr_pages_per_buffer[cpu_idx]
                 per_cpu_buffer = rb_per_cpu[cpu_idx]
                 if per_cpu_buffer is not None:
-                    evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,per_cpu_buffer,nr_pages_per_buffer_item,nr_total_buffer_pages
-                                       ,fevent_list.ftrace_event_type,fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
-                    evt.ftrace_event_parsing()
+                    evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,fevent_list.ftrace_event_type,fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
+                    evt.ring_buffer_per_cpu_parsing(per_cpu_buffer)
                     #parse_trace_entry_time += evt.parse_trace_entry_time
             #ftrace_event_time += (time.time()-start)
             global_trace_data_next =  self.ramdump.read_pointer(global_trace_data_next)
