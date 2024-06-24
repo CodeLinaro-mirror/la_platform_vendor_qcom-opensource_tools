@@ -1851,8 +1851,7 @@ class RamDump():
         else:
             for a in self.ebi_files:
                 _, start, end, path = a
-                if path and os.path.basename(path).startswith("DDR"):
-                    bfiles.append(fdtuple(start, end, path))
+                bfiles.append(fdtuple(start, end, path))
 
         if len(bfiles) == 0:
             print_out_str("No ddr file found!! check if there is DDRCSxxx.bin in your dumps")
