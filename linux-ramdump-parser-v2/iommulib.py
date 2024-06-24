@@ -224,7 +224,7 @@ class IommuLib(object):
         if priv_ptr is not None:
             arm_smmu_domain_ptr = priv_ptr
         else:
-            arm_smmu_domain_offset = 0x60
+            arm_smmu_domain_offset = 0x88 #0x60
             arm_smmu_domain_ptr = domain_ptr - arm_smmu_domain_offset
 
         pgtbl_ops_ptr =  self.ramdump.read_u64(arm_smmu_domain_ptr + 0x8)
