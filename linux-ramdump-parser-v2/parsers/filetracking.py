@@ -1,5 +1,5 @@
 # Copyright (c) 2012,2014-2015,2017-2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -34,7 +34,7 @@ class FileTracking(RamParser):
         cycle_flag = 0
         cycle_detection = 12
         while True:
-            if name == '/' or name == '':
+            if name == '/' or name == '' or name is None:
                 return path, cycle_flag
             path = '/' + name + path
             parent = self.ramdump.read_structure_field(parent, 'struct dentry', 'd_parent')
@@ -102,7 +102,8 @@ class FileTracking(RamParser):
                 files[addr_space]['filepath'] = 'PARENT == CURRENT FILE: ' + path
             else:
                 files[addr_space]['filepath'] = path
-            files[addr_space]['a_ops'] = (self.ramdump.unwind_lookup(a_ops))[0]
+            a_ops_symbol = self.ramdump.unwind_lookup(a_ops)
+            files[addr_space]['a_ops'] = a_ops_symbol[0] if a_ops_symbol is not None else a_ops_symbol
             files[addr_space]['addr_space'] = addr_space
         files[addr_space]['total_pages'] += 1
         files[addr_space]['total_size'] += 4
