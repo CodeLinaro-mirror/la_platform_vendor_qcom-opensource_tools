@@ -1,5 +1,5 @@
 # Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -170,6 +170,10 @@ def percpu_counter_rss_stat(ramdump, rss_stat):
         count += ramdump.read_int(rss_stat.counters + ramdump.per_cpu_offset(core))
     return count
 
+def get_mm_counter(ramdump, rss_stat):
+    count = rss_stat.count
+    return count
+
 def get_rss(ramdump, task_struct):
     offset_mm = ramdump.field_offset('struct task_struct', 'mm')
     offset_rss_stat = ramdump.field_offset('struct mm_struct', 'rss_stat')
@@ -179,10 +183,10 @@ def get_rss(ramdump, task_struct):
     if ramdump.kernel_version >= (6, 2):
         # /* 6.2: struct percpu_counter rss_stat[NR_MM_COUNTERS] */
         mm = ramdump.read_datatype(mm_struct, 'struct mm_struct')
-        file_rss = percpu_counter_rss_stat(ramdump, mm.rss_stat[0])
-        anon_rss = percpu_counter_rss_stat(ramdump, mm.rss_stat[1])
-        swap_rss = percpu_counter_rss_stat(ramdump, mm.rss_stat[2])
-        shmem_rss = percpu_counter_rss_stat(ramdump, mm.rss_stat[3])
+        file_rss = get_mm_counter(ramdump, mm.rss_stat[0])
+        anon_rss = get_mm_counter(ramdump, mm.rss_stat[1])
+        swap_rss = get_mm_counter(ramdump, mm.rss_stat[2])
+        shmem_rss = get_mm_counter(ramdump, mm.rss_stat[3])
 
     else:
         offset_file_rss = ramdump.field_offset('struct mm_rss_stat', 'count')
