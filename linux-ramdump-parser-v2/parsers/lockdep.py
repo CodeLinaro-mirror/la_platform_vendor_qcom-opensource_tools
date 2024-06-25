@@ -1,5 +1,5 @@
 # Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -12,14 +12,15 @@
 
 from parser_util import register_parser, RamParser, cleanupString
 from print_out import print_out_str
+
 def test_bit(nr, addr, ramdump, my_task_out):
     BITS_PER_LONG = 64
     if not ramdump.arm64:
         BITS_PER_LONG = 32
     index = int(nr / BITS_PER_LONG)
-    test_bit_data = ((addr + index*ramdump.sizeof('unsigned long')) >> (nr & (BITS_PER_LONG-1)))
-    #my_task_out.write("\ntest_bit : index = {:x}, test_bit : {}".format(index, test_bit_data))
-    if 1 & ((addr + index*ramdump.sizeof('unsigned long')) >> (nr & (BITS_PER_LONG-1))):
+    data = ramdump.read_ulong(addr + index * ramdump.sizeof('unsigned long'))
+    #my_task_out.write("\ntest_bit: index = 0x{:x}, data: 0x{:x}".format(index, data))
+    if 1 & (data >> (nr & (BITS_PER_LONG - 1))):
         #my_task_out.write("\ntest bit returned true")
         return True
     #my_task_out.write("\ntest bit returned false")
