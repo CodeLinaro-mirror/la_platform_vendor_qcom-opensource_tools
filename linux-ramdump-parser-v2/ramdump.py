@@ -38,7 +38,7 @@ import module_table
 from mm import mm_init
 from register import Register
 from collections import namedtuple
-
+import shlex
 SP = 13
 LR = 14
 PC = 15
@@ -953,7 +953,6 @@ class RamDump():
         if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
-            hyp_dump.vmtype = self.svm
             hyp_dump.determine_kaslr()
             self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
             hyp_dump.get_trace_phy()
@@ -980,6 +979,12 @@ class RamDump():
                 '!!! This is really bad and probably indicates RAM corruption')
             print_out_str('!!! Some features may be disabled!')
 
+        # extract kernel's configuration to kconfig.txt
+        saved_config = self.open_file('kconfig.txt')
+        for l in self.config:
+            saved_config.write(l + '\n')
+
+        saved_config.close()
         try:
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
@@ -995,6 +1000,8 @@ class RamDump():
             self.pgtable_levels = int(self.get_config_val("CONFIG_PGTABLE_LEVELS"))
         except:
             self.pgtable_levels = 3
+        self.pfn_range = None
+        self.vmemmap = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
         # value is None in ARM32
@@ -1798,7 +1805,9 @@ class RamDump():
             return
         else:
             __kaslr_offset = None
-            if not self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+            if self.kaslr_offset is not None:
+                __kaslr_offset = self.kaslr_offset
+            elif not self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
                 __kaslr_offset = 0x0
                 print_out_str('!!!! Kaslr feature is not enabled.')
             else:
@@ -1816,7 +1825,6 @@ class RamDump():
             try:
                 self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset, __kaslr_offset)
             except:
-                print_out_exception()
                 print_out_str("Traverse DDR to find out correct kaslr_offset and phys_offset, it may take a little time to do!!")
                 hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset(__kaslr_offset)
                 if hasFound:
@@ -1824,7 +1832,8 @@ class RamDump():
                     self.kimage_voffset = kimage_voffset
                     self.phys_offset = phys_offset
                 else:
-                    self.kaslr_offset = 0
+                    self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
+                    self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
 
     def determine_phys_offset(self, __kaslr_offset):
@@ -1842,8 +1851,7 @@ class RamDump():
         else:
             for a in self.ebi_files:
                 _, start, end, path = a
-                if "DDRCS" in path:
-                    bfiles.append(fdtuple(start, end, path))
+                bfiles.append(fdtuple(start, end, path))
 
         if len(bfiles) == 0:
             print_out_str("No ddr file found!! check if there is DDRCSxxx.bin in your dumps")
@@ -1885,7 +1893,6 @@ class RamDump():
         '''
         phys_base = _bfile.base & 0xfffff0000
         phys_end = _bfile.end
-        print_out_str(f"{os.path.basename(_bfile.path)} phys_base: {phys_base:x} phys_end: {phys_end:x}")
         for min_image_align in [0x00200000, 0x00080000, 0x00008000]:
             kimage_load_addr = phys_base
             while (kimage_load_addr < phys_end):
@@ -2274,7 +2281,7 @@ class RamDump():
                 mod_tbl_ent.section_offsets[sect_name] = sect_addr
             if self.is_config_defined('CONFIG_SMP'):
                 percpu_size = self.read_u32(module + percpu_size_offset)
-                if percpu_size is not 0:
+                if percpu_size != 0:
                     percpu_pointer = self.read_pointer(module + percpu_offset)
                     mod_tbl_ent.section_offsets['.data..percpu'] = percpu_pointer
             self.module_table.add_entry(mod_tbl_ent)
@@ -2388,7 +2395,12 @@ class RamDump():
 
     def has_debug_info(self, file):
         cmd = self.objdump_path + ' -h ' + file
-        objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
+        if platform.system() != "Linux":
+            objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       universal_newlines=True, )
+        else:
+            objdump = subprocess.Popen(shlex.split(cmd), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       universal_newlines=True, )
         out, err = objdump.communicate()
         if '.debug_info' in out:
             return True
@@ -3544,9 +3556,9 @@ class RamDump():
         data = self.__get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
-            return self.__object_value(var_type, data, 0, temp_name, attr_dict)
+            return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
-            return self.__object_value(var_type, data, 0, temp_name)
+            return self.__object_value(var_type, data, 0, temp_name, addr)
 
     def __get_bin_data(self, addr, size):
         """
@@ -3711,7 +3723,7 @@ class RamDump():
             self.enum_data[var_type] = (enum_var,enum_ty)
         return self.enum_data[var_type]
 
-    def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, attr_dict=None):
+    def __object_value(self, var_type, struct_bin_data, bin_offset, temp_name, addr, attr_dict=None):
         """
         Function to return structure value for the given type and type offset.
 
@@ -3755,7 +3767,7 @@ class RamDump():
                 length = length // ar_len
                 ar = []
                 for i in range(ar_len):
-                    ar.append(self.__object_value(var_type, struct_bin_data, i * length, None, attr_dict))
+                    ar.append(self.__object_value(var_type, struct_bin_data, i * length, None, addr, attr_dict))
                 return ar
             else:
                 newclass = type(var_type)
@@ -3782,6 +3794,9 @@ class RamDump():
                                 else:
                                     res = self.__populate_bitfield(struct_bin_data[bin_offset + offset:bin_offset + offset + length], ty, bit_offset, bit_length)
                                     setattr(temp_structure, key, res)
+                            elif "[]" in key and length == 0: #flex array
+                                res = addr + offset
+                                setattr(temp_structure, key.split("[")[0], res)
                             else:  # member is an array but not of struct/union
                                 temp_ty = key.split("[")[1]
                                 temp_ty = ty + "[" + temp_ty
@@ -3791,10 +3806,10 @@ class RamDump():
                             if "[" not in key:  # member is another struct/union/obj but not an array
                                 if attr_dict != None:
                                     setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
-                                                                                   value[1] + bin_offset, None, attr_dict[key]))
+                                                                                   value[1] + bin_offset, None, addr, attr_dict[key]))
                                 else:
                                     setattr(temp_structure, key, self.__object_value(value[0], struct_bin_data,
-                                                                                   value[1] + bin_offset, None))
+                                                                                   value[1] + bin_offset, None, addr))
                             else:  # member is another struct/union/obj and an array
                                 temp_s = key.split("[")[1].split("]")[0]
                                 if temp_s == '' or temp_s == '0':
@@ -3806,9 +3821,9 @@ class RamDump():
                                 arr = [None] * arr_len
                                 for i in range(arr_len):
                                     if attr_dict != None:
-                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, attr_dict[key.split("[")[0]])
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, addr, attr_dict[key.split("[")[0]])
                                     else:
-                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None)
+                                        arr[i] = self.__object_value(value[0], struct_bin_data, value[1] + (i * l) + bin_offset, None, addr)
                                 setattr(temp_structure, key.split("[")[0], arr)
                 return temp_structure
 
