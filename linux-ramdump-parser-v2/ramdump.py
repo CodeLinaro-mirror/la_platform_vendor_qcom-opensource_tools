@@ -953,7 +953,6 @@ class RamDump():
         if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
-            hyp_dump.vmtype = self.svm
             hyp_dump.determine_kaslr()
             self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
             hyp_dump.get_trace_phy()
@@ -1001,6 +1000,8 @@ class RamDump():
             self.pgtable_levels = int(self.get_config_val("CONFIG_PGTABLE_LEVELS"))
         except:
             self.pgtable_levels = 3
+        self.pfn_range = None
+        self.vmemmap = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
         # value is None in ARM32
@@ -1804,7 +1805,9 @@ class RamDump():
             return
         else:
             __kaslr_offset = None
-            if not self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+            if self.kaslr_offset is not None:
+                __kaslr_offset = self.kaslr_offset
+            elif not self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
                 __kaslr_offset = 0x0
                 print_out_str('!!!! Kaslr feature is not enabled.')
             else:
@@ -1822,7 +1825,6 @@ class RamDump():
             try:
                 self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset, __kaslr_offset)
             except:
-                print_out_exception()
                 print_out_str("Traverse DDR to find out correct kaslr_offset and phys_offset, it may take a little time to do!!")
                 hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset(__kaslr_offset)
                 if hasFound:
@@ -1849,8 +1851,7 @@ class RamDump():
         else:
             for a in self.ebi_files:
                 _, start, end, path = a
-                if "DDRCS" in path:
-                    bfiles.append(fdtuple(start, end, path))
+                bfiles.append(fdtuple(start, end, path))
 
         if len(bfiles) == 0:
             print_out_str("No ddr file found!! check if there is DDRCSxxx.bin in your dumps")
@@ -2716,6 +2717,19 @@ class RamDump():
             size = 0
         else:
             size = table[low + 1][0] - table[low][0]
+
+        _text = self.address_of('_text')
+        _end = self.address_of('_end')
+        # do checking for symbol which is not in vmlinux
+        # if the module name in table[low][1] and table[high][1] is not same,
+        # it means that the symbols of this module are not added to lookup_table.
+        # so it's better to return None to show the symbols name as UNKNOWN but not false name
+        if not (addr > _text and addr < _end):
+            low_match = re.match(r'.*\[(.+)\]', table[low][1])
+            high_match = re.match(r'.*\[(.+)\]', table[high][1])
+            if low_match and high_match:
+                if low_match.group(1) != high_match.group(1):
+                    return None
 
         if symbol_size == 0:
             return (table[low][1] + desc, offset)
