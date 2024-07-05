@@ -1126,7 +1126,9 @@ class RamDump():
             if self.dump_global_symbol_table:
                 self.dump_global_symbol_lookup_table()
 
-        self.setup_module_layout()
+        if not self.minidump:
+            self.setup_module_layout()
+
         mm_init(self)
         self.set_available_cores()
         self.arm_smmu_v12 = self.is_arm_smmu_v12()
@@ -2719,6 +2721,36 @@ class RamDump():
             self.module_layout_dict[mod_name] = ent_array
             next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
+    def validate_module_sym_addr(self, sym_addr, mod_name):
+        """
+        Validate that if sym_addr is in specified module layaout or not
+        """
+        value = self.module_layout_dict.get(mod_name)
+        if value is None:
+            return False
+
+        for base, size in value:
+            if sym_addr >= base and sym_addr < base + size:
+                return True
+
+        return False
+
+    def match_name_for_module_sym_addr(self, sym_addr):
+        """
+        When matched ko is not provided to lrdp or this ko is not live,
+        lrdp can't find a matched symbol name in lookup table.
+        So search sym_addr in module_layout_dict to find its module
+        name to show like UNKNOWN_SYMBOL[si_core_module].
+        With this, we can know where is this symbol in easily.
+        """
+        for key in self.module_layout_dict.keys():
+            value = self.module_layout_dict[key]
+            for base, size in value:
+                if sym_addr >= base and sym_addr < base + size:
+                    return ('UNKNOWN_SYMBOL[{}]'.format(key), 0)
+
+        return None
+
     def __unwind_lookup(self, addr, symbol_size=0):
         """
         Returns closest symbols <= addr and either the relative offset
@@ -2773,16 +2805,19 @@ class RamDump():
             size = table[low + 1][0] - table[low][0]
 
         _text = self.address_of('_text')
+        if _text is None:
+            _text = 0
+
         _end = self.address_of('_end')
+        if _end is None:
+            _end = 0xFFFFFFFFFFFFFFFF
+
         # do checking for symbol which is not in vmlinux
-        # if the module name in table[low][1] and table[high][1] is not same,
-        # it means that the symbols of this module are not added to lookup_table.
-        # so it's better to return None to show the symbols name as UNKNOWN but not false name
         if not (addr > _text and addr < _end):
-            low_match = re.match(r'.*\[(.+)\]', table[low][1])
-            high_match = re.match(r'.*\[(.+)\]', table[high][1])
-            if low_match and high_match:
-                if low_match.group(1) != high_match.group(1):
+            is_matched = re.match(r'.*\[(.+)\]', table[low][1])
+            if is_matched:
+                mod_name = is_matched.group(1)
+                if not self.validate_module_sym_addr(addr, mod_name):
                     return None
 
         if symbol_size == 0:
@@ -2796,14 +2831,7 @@ class RamDump():
             return r
 
         # when fail to lookup the symbol name, show the module name as much as possible.
-        for key in self.module_layout_dict.keys():
-            value = self.module_layout_dict[key]
-            for base, size in value:
-                if addr >= base and addr < base + size:
-                    return ('UNKNOWN_SYMBOL[{}]'.format(key), 0)
-
-        # return the old value if can't find it in module_layout_dict
-        return r
+        return self.match_name_for_module_sym_addr(addr)
 
     def read_elf_memory(self, addr, length, temp_file):
         s = self.gdbmi.read_elf_memory(addr, length, temp_file)
