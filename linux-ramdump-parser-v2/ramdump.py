@@ -2718,6 +2718,19 @@ class RamDump():
         else:
             size = table[low + 1][0] - table[low][0]
 
+        _text = self.address_of('_text')
+        _end = self.address_of('_end')
+        # do checking for symbol which is not in vmlinux
+        # if the module name in table[low][1] and table[high][1] is not same,
+        # it means that the symbols of this module are not added to lookup_table.
+        # so it's better to return None to show the symbols name as UNKNOWN but not false name
+        if not (addr > _text and addr < _end):
+            low_match = re.match(r'.*\[(.+)\]', table[low][1])
+            high_match = re.match(r'.*\[(.+)\]', table[high][1])
+            if low_match and high_match:
+                if low_match.group(1) != high_match.group(1):
+                    return None
+
         if symbol_size == 0:
             return (table[low][1] + desc, offset)
         else:
