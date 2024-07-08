@@ -2390,12 +2390,15 @@ class RamDump():
     def walk_depth(self, path, on_file, depth=10):
         if depth <= 0:
             return
-        for basename in os.listdir(path):
-            file = os.path.join(path, basename)
-            if os.path.isdir(file) and not os.path.islink(file):
-                self.walk_depth(file, on_file, depth=depth-1)
-            elif os.path.isfile(file):
-                on_file(file)
+        try:
+            for basename in os.listdir(path):
+                file = os.path.join(path, basename)
+                if os.path.isdir(file) and not os.path.islink(file):
+                    self.walk_depth(file, on_file, depth=depth-1)
+                elif os.path.isfile(file):
+                    on_file(file)
+        except Exception as e:
+            print_out_str(str(e))
 
     def has_debug_info(self, file):
         cmd = self.objdump_path + ' -h ' + file
