@@ -779,6 +779,7 @@ class RamDump():
         self.enum_data = {}
         self.available_cores = []
         self.skip_TLB_Cache_parse = options.skip_TLB_Cache_parse
+        self.module_layout_dict = {}
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -1125,6 +1126,7 @@ class RamDump():
             if self.dump_global_symbol_table:
                 self.dump_global_symbol_lookup_table()
 
+        self.setup_module_layout()
         mm_init(self)
         self.set_available_cores()
         self.arm_smmu_v12 = self.is_arm_smmu_v12()
@@ -1851,8 +1853,7 @@ class RamDump():
         else:
             for a in self.ebi_files:
                 _, start, end, path = a
-                if path and os.path.basename(path).startswith("DDR"):
-                    bfiles.append(fdtuple(start, end, path))
+                bfiles.append(fdtuple(start, end, path))
 
         if len(bfiles) == 0:
             print_out_str("No ddr file found!! check if there is DDRCSxxx.bin in your dumps")
@@ -2666,7 +2667,59 @@ class RamDump():
             return fn_addr, '[jt]'
         return addr, ''
 
-    def unwind_lookup(self, addr, symbol_size=0):
+    def setup_module_layout(self):
+        mod_list = self.address_of('modules')
+        next_offset = self.field_offset('struct list_head', 'next')
+        list_offset = self.field_offset('struct module', 'list')
+        name_offset = self.field_offset('struct module', 'name')
+
+        next_list_ent = self.read_pointer(mod_list + next_offset)
+        while next_list_ent and next_list_ent != mod_list:
+            mod = next_list_ent - list_offset
+            mod_name = self.read_cstring(mod + name_offset)
+            ent_array = []
+            # setup module init layout
+            if self.kernel_version >= (6, 4, 0):
+                mem_offset = self.field_offset('struct module', 'mem')
+                module_memory_size = self.sizeof('struct module_memory')
+                # enum mod_mem_type for init layout: 4 - 6
+                for i in range(4, 7):
+                    base = self.read_structure_field(mod + mem_offset + i * module_memory_size, 'struct module_memory', 'base')
+                    size = self.read_structure_field(mod + mem_offset + i * module_memory_size, 'struct module_memory', 'size')
+                    ent_array.append((base, size))
+            elif self.kernel_version > (4, 9, 0):
+                init_layout_offset = self.field_offset('struct module', 'init_layout')
+                base = self.read_structure_field(mod + init_layout_offset, 'struct module_layout', 'base')
+                size = self.read_structure_field(mod + init_layout_offset, 'struct module_layout', 'size')
+                ent_array.append((base, size))
+            else:
+                base = self.read_structure_field(mod, 'struct module', 'module_init')
+                size = self.read_structure_field(mod, 'struct module', 'init_size')
+                ent_array.append((base, size))
+
+            # setup module core layout
+            if self.kernel_version >= (6, 4, 0):
+                mem_offset = self.field_offset('struct module', 'mem')
+                module_memory_size = self.sizeof('struct module_memory')
+                # enum mod_mem_type for core layout: 0 - 3
+                for i in range(0, 4):
+                    base = self.read_structure_field(mod + mem_offset + i * module_memory_size, 'struct module_memory', 'base')
+                    size = self.read_structure_field(mod + mem_offset + i * module_memory_size, 'struct module_memory', 'size')
+                    ent_array.append((base, size))
+            elif self.kernel_version > (4, 9, 0):
+                core_layout_offset = self.field_offset('struct module', 'core_layout')
+                base = self.read_structure_field(mod + core_layout_offset, 'struct module_layout', 'base')
+                size = self.read_structure_field(mod + core_layout_offset, 'struct module_layout', 'size')
+                ent_array.append((base, size))
+            else:
+                base = self.read_structure_field(mod, 'struct module', 'module_core')
+                size = self.read_structure_field(mod, 'struct module', 'core_size')
+                ent_array.append((base, size))
+
+            self.module_layout_dict[mod_name] = ent_array
+            next_list_ent = self.read_pointer(next_list_ent + next_offset)
+
+    def __unwind_lookup(self, addr, symbol_size=0):
         """
         Returns closest symbols <= addr and either the relative offset
         or the symbol size.
@@ -2719,10 +2772,38 @@ class RamDump():
         else:
             size = table[low + 1][0] - table[low][0]
 
+        _text = self.address_of('_text')
+        _end = self.address_of('_end')
+        # do checking for symbol which is not in vmlinux
+        # if the module name in table[low][1] and table[high][1] is not same,
+        # it means that the symbols of this module are not added to lookup_table.
+        # so it's better to return None to show the symbols name as UNKNOWN but not false name
+        if not (addr > _text and addr < _end):
+            low_match = re.match(r'.*\[(.+)\]', table[low][1])
+            high_match = re.match(r'.*\[(.+)\]', table[high][1])
+            if low_match and high_match:
+                if low_match.group(1) != high_match.group(1):
+                    return None
+
         if symbol_size == 0:
             return (table[low][1] + desc, offset)
         else:
             return (table[low][1] + desc, size)
+
+    def unwind_lookup(self, addr, symbol_size=0):
+        r = self.__unwind_lookup(addr, symbol_size)
+        if r is not None:
+            return r
+
+        # when fail to lookup the symbol name, show the module name as much as possible.
+        for key in self.module_layout_dict.keys():
+            value = self.module_layout_dict[key]
+            for base, size in value:
+                if addr >= base and addr < base + size:
+                    return ('UNKNOWN_SYMBOL[{}]'.format(key), 0)
+
+        # return the old value if can't find it in module_layout_dict
+        return r
 
     def read_elf_memory(self, addr, length, temp_file):
         s = self.gdbmi.read_elf_memory(addr, length, temp_file)
