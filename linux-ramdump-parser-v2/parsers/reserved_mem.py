@@ -1,5 +1,5 @@
 # Copyright (c) 2018-2020,2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -157,7 +157,8 @@ class CmaAreas(RamParser):
     def __init__(self, *args):
         super(CmaAreas, self).__init__(*args)
         self.offset_comm = self.ramdump.field_offset('struct page_owner', 'comm')
-        self.pagetrace = PageTrace(self.ramdump)
+        if self.ramdump.is_config_defined('CONFIG_PAGE_OWNER'):
+            self.pagetrace = PageTrace(self.ramdump)
 
     def parse_pfn(self, ramdump, pfn, cma, op_file, dict):
 
@@ -216,7 +217,7 @@ class CmaAreas(RamParser):
                 free_ts_nsec = -1
                 comm = -1
             else:
-                function_list, order, pid, ts_nsec, gfp, comm = self.pagetrace.page_trace(pfn, True)
+                function_list, order, pid, ts_nsec, gfp, comm, ext_flags = self.pagetrace.page_trace(pfn, True)
                 free_ts_nsec = 0
                 if pid in dict:
                     dict[pid] = dict[pid] + 1
