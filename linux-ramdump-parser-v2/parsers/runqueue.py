@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -60,18 +60,30 @@ class RunQueues(RamParser):
                 vruntime = self.ramdump.read_u64(se + vruntime_offset)
                 if self.ramdump.is_config_defined('CONFIG_FAIR_GROUP_SCHED'):
                     cfs_rq_offset = self.ramdump.field_offset('struct sched_entity', 'cfs_rq')
-                    cfs_rq = self.ramdump.read_word(se + cfs_rq_offset)
-                    tg_offset = self.ramdump.field_offset('struct cfs_rq', 'tg')
-                    tg = self.ramdump.read_word(cfs_rq + tg_offset)
-                    css_offset = self.ramdump.field_offset('struct task_group', 'css')
-                    css = self.ramdump.read_word(tg + css_offset)
-                    cgroup_offset = self.ramdump.field_offset('struct cgroup_subsys_state', 'cgroup')
-                    cgroup = self.ramdump.read_word(css + cgroup_offset)
-                    kn_offset = self.ramdump.field_offset('struct cgroup', 'kn')
-                    kn = self.ramdump.read_word(cgroup + kn_offset)
-                    name_offset = self.ramdump.field_offset('struct kernfs_node', 'name')
-                    name_addr = self.ramdump.read_word(kn + name_offset)
-                    name = self.ramdump.read_cstring(name_addr)
+                    cfs_rq = None
+                    if se is not None and se > 0:
+                        cfs_rq = self.ramdump.read_word(se + cfs_rq_offset)
+                        tg_offset = self.ramdump.field_offset('struct cfs_rq', 'tg')
+                    tg = None
+                    if cfs_rq is not None and cfs_rq > 0:
+                        tg = self.ramdump.read_word(cfs_rq + tg_offset)
+                        css_offset = self.ramdump.field_offset('struct task_group', 'css')
+                    css = None
+                    if tg is not None and tg > 0:
+                        css = self.ramdump.read_word(tg + css_offset)
+                        cgroup_offset = self.ramdump.field_offset('struct cgroup_subsys_state', 'cgroup')
+                    cgroup = None
+                    if css is not None and css > 0:
+                        cgroup = self.ramdump.read_word(css + cgroup_offset)
+                        kn_offset = self.ramdump.field_offset('struct cgroup', 'kn')
+                    kn = None
+                    if cgroup is not None and cgroup > 0:
+                        kn = self.ramdump.read_word(cgroup + kn_offset)
+                        name_offset = self.ramdump.field_offset('struct kernfs_node', 'name')
+                    name = 'n/a'
+                    if kn is not None and kn > 0:
+                        name_addr = self.ramdump.read_word(kn + name_offset)
+                        name = self.ramdump.read_cstring(name_addr)
                 else:
                     name ='n/a'
             print_out_str(
