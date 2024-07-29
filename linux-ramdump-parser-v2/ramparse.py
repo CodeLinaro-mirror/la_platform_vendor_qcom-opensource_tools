@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -74,8 +74,6 @@ if __name__ == '__main__':
     starttime = time.time()
     usage = 'usage: %prog [options to print]. Run with --help for more details'
     parser = OptionParser(usage)
-    parser.add_option('', '--print-watchdog-time', action='store_true',
-                      dest='watchdog_time', help='Print watchdog timing information', default=False)
     parser.add_option('', '--logcat_limit_time_sec',
                       dest='logcat_limit_time', type='int', default=0,
                       help='Defined the max time logcat parse running')
@@ -202,7 +200,7 @@ if __name__ == '__main__':
         except Exception as err:
             print("{}".format(str(err)))
             sys.exit(1)
-
+    everything_exclusion_list  = []
     if options.minidump:
         default_list = []
         default_list.append("Schedinfo")
@@ -218,6 +216,9 @@ if __name__ == '__main__':
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
         default_list.append("ipc_logging_cn")
+
+    if options.everything:
+        everything_exclusion_list.append("ROData")
 
     if options.outdir:
         if not os.path.exists(options.outdir):
@@ -446,11 +447,6 @@ if __name__ == '__main__':
         print_out_str(
             '!!! Please just use --parse-debug-image to get QDSS information')
 
-    if options.watchdog_time:
-        print_out_str('\n--------- watchdog time -------')
-        get_wdog_timing(dump)
-        print_out_str('---------- end watchdog time-----')
-
     # Always verify Scheduler requirement for active_cpus on 64-bit platforms.
     if options.arm64:
         try:
@@ -474,6 +470,9 @@ if __name__ == '__main__':
     print_out_str("Time taken to setup the subparsers run : {}".format(time.time()-starttime))
     starttime = time.time()
     for i,p in enumerate(parsers_to_run):
+        if options.everything:
+            if p.cls.__name__ in everything_exclusion_list:
+                continue
         if i == 0:
             sys.stderr.write("\n")
         if options.minidump:
