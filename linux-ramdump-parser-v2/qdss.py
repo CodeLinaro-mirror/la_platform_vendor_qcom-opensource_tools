@@ -12,6 +12,7 @@
 
 import struct
 import itertools
+import linux_list as llist
 from print_out import print_out_str
 from iommulib import IommuLib, MSM_SMMU_DOMAIN, MSM_SMMU_AARCH64_DOMAIN, ARM_SMMU_DOMAIN
 from aarch64iommulib import create_flat_mappings, create_collapsed_mapping
@@ -209,6 +210,32 @@ dbgui_registers = {
     'DBGUI_ATB_REG' : (0x024, 'ATB Configuration Register'),
 }
 
+driver_types = [
+    ('coresight-stm', 'parse_single_atid'),
+    ('coresight-tpdm', 'parse_single_atid'),
+    ('coresight-remote-etm', 'parse_remote_etm_atid'),
+    ('coresight-etm4x', 'parse_single_atid'),
+    ('coresight-dummy', 'parse_single_atid'),
+    ('coresight-uetm', 'parse_single_atid'),
+]
+
+driver_structs = [
+    ('coresight-stm', 'struct stm_drvdata'),
+    ('coresight-tpdm', 'struct tpdm_drvdata'),
+    ('coresight-remote-etm', 'struct remote_etm_drvdata'),
+    ('coresight-etm4x', 'struct etmv4_drvdata'),
+    ('coresight-dummy', 'struct dummy_drvdata'),
+    ('coresight-uetm', 'struct uetm_drvdata'),
+]
+
+qdss_atid_fields = [
+    ('coresight-stm', 'traceid'),
+    ('coresight-tpdm', 'traceid'),
+    ('coresight-remote-etm', 'traceid'),
+    ('coresight-etm4x', 'trcid'),
+    ('coresight-dummy', 'traceid'),
+    ('coresight-uetm', 'traceid'),
+]
 class QDSSDump():
 
     def __init__(self):
@@ -560,9 +587,60 @@ class QDSSDump():
                 ram_dump.read_u32(self.dbgui_start + data_offset + (4 * i), False)))
         dbgui_out.close()
 
+    def parse_single_atid(self, driver_name, drvdata, struct_name, atid_field):
+        atid_offset = self.ramdump.struct_field_addr(drvdata, struct_name, atid_field)
+        atid = self.ramdump.read_byte(atid_offset)
+        csdev = self.ramdump.read_structure_field(drvdata, struct_name, 'csdev')
+        dev = self.ramdump.struct_field_addr(csdev, 'struct coresight_device', 'dev')
+        csname = self.ramdump.read_cstring(self.ramdump.read_word(dev + self.name_offset))
+        print("{:<50} : {:#04x}".format(csname, atid),file = self.f)
+
+    def parse_remote_etm_atid(self, driver_name, drvdata, struct_name, atid_field):
+        atid_str = ''
+        atid_num = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'num_trcid')
+        atid_addr = self.ramdump.read_structure_field(drvdata, "struct remote_etm_drvdata", "traceids")
+        for i in range(atid_num):
+            atid = self.ramdump.read_byte(atid_addr)
+            atid_str = "{:#04x}".format(atid) + " " + atid_str
+            atid_addr = atid_addr + 1
+
+        remote_etm_csdev = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'csdev')
+        cs_dev = self.ramdump.struct_field_addr(remote_etm_csdev, 'struct coresight_device', 'dev')
+        csname = self.ramdump.read_cstring(self.ramdump.read_word(cs_dev + self.name_offset))
+        print("{:<50} : {}".format(csname, atid_str), file = self.f)
+
+    def list_qdss_atid(self, device):
+        drv = self.ramdump.read_structure_field(device, 'struct device', 'driver')
+        drvdata = self.ramdump.read_structure_field(device, 'struct device', 'driver_data')
+        drvname = self.ramdump.read_cstring(self.ramdump.read_word(drv + self.dev_drv_offset))
+
+        if drvname in self.qdss_drivers :
+            getattr(QDSSDump, self.qdss_drivers[drvname])(self, drvname, drvdata,
+                            self.qdss_structs[drvname], self.atid_fields[drvname])
+
+    def parse_qdss_component_atid(self, ramdump):
+        self.ramdump = ramdump
+        self.entry_offset = self.ramdump.field_offset('struct kobject', 'entry')
+        self.name_offset = self.ramdump.field_offset('struct kobject', 'name')
+        self.dev_drv_offset = self.ramdump.field_offset('struct device_driver', 'name')
+        self.kobj_offset = self.ramdump.field_offset('struct device', 'kobj')
+        self.qdss_drivers = dict(driver_types)
+        self.qdss_structs = dict(driver_structs)
+        self.atid_fields = dict(qdss_atid_fields)
+        self.f = open(self.ramdump.outdir + "/ATID.txt", "w")
+        print("{:<50} {}".format("Source Name", "ATID"), file = self.f)
+        print("{}".format("=" * 60), file = self.f)
+        devices_kset_addr = self.ramdump.address_of('devices_kset')
+        list_head = devices_kset_addr
+        list_offset = self.kobj_offset + self.entry_offset
+        list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
+        list_walker.walk(list_head, self.list_qdss_atid)
+        self.f.close()
+
     def dump_standard(self, ram_dump):
         self.print_tmc_etf(ram_dump)
         self.print_tmc_etf_swao(ram_dump)
         self.print_tmc_etr(ram_dump)
         self.print_dbgui_registers(ram_dump)
         self.print_all_etm_register(ram_dump)
+        self.parse_qdss_component_atid(ram_dump)
