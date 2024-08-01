@@ -12,7 +12,7 @@
 
 import sys
 
-from mm import page_address, pfn_to_page
+from mm import page_address, pfn_to_page, get_pfn_range
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
 import operator
@@ -366,9 +366,8 @@ class Slabinfo(RamParser):
         if page == 0:
             return
         seen = []
-        max_pfn_addr = self.ramdump.address_of('max_pfn')
-        max_pfn = self.ramdump.read_word(max_pfn_addr)
-        max_page = pfn_to_page(ramdump, max_pfn)
+        pfn_range = get_pfn_range(ramdump)
+        max_page = pfn_to_page(ramdump, pfn_range['max'])
         while True:
             if page == start:
                 return
