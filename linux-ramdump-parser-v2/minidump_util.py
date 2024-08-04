@@ -131,6 +131,8 @@ def generate_elf(autodump, outdir, vm, kernel_version):
                 vmid = ""
         elif vm == "oemvm":
             vmid = "31_"
+        elif vm == "autoghgvm":
+            vmid = "34_"
         elif vm:
             vmid = "2d_"
         else:
