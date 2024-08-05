@@ -740,6 +740,7 @@ class RamDump():
         self.ebi_files = []
         ## used for read_physical in multi-thread mode
         self.use_multithread = False
+        self.thread_maxcount = 0x8
         self.ebi_files_mappings = {}
         self.thread_name_prefix = "ThreadPoolExecutor-0"
         ##
@@ -1005,6 +1006,7 @@ class RamDump():
         self.vmemmap = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
+        self.thread_maxcount = len(self.ebi_files)
         # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
         # Virtual address of the variable 'kimage_voffset'
@@ -1411,6 +1413,7 @@ class RamDump():
             if info is not None:
                 if len(info.ebi_files) > 0:
                     self.ebi_files = info.ebi_files
+                    self.thread_maxcount = len(self.ebi_files)
                     self.phys_offset = self.ebi_files[0][1]
                     if self.get_hw_id():
                         for (f, start, end, filename) in self.ebi_files:
@@ -2888,9 +2891,8 @@ class RamDump():
         if self.use_multithread:
             print_out_str("Ramparser is already running in multi-thread mode!!!")
             return
-        if thread_max_count > 8 or thread_max_count <= 1:
-            thread_max_count = 8
-
+        if thread_max_count > self.thread_maxcount or thread_max_count <= 1:
+            thread_max_count = self.thread_maxcount
         self.use_multithread = True
         self.thread_name_prefix = thread_name_prefix
         self.ebi_files_mappings = {}
