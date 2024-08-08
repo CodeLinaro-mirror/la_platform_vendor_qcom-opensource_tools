@@ -740,6 +740,7 @@ class RamDump():
         self.ebi_files = []
         ## used for read_physical in multi-thread mode
         self.use_multithread = False
+        self.thread_maxcount = 0x8
         self.ebi_files_mappings = {}
         self.thread_name_prefix = "ThreadPoolExecutor-0"
         ##
@@ -1005,6 +1006,7 @@ class RamDump():
         self.vmemmap = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
+        self.thread_maxcount = len(self.ebi_files)
         # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
         # Virtual address of the variable 'kimage_voffset'
@@ -1126,7 +1128,9 @@ class RamDump():
             if self.dump_global_symbol_table:
                 self.dump_global_symbol_lookup_table()
 
-        self.setup_module_layout()
+        if not self.minidump:
+            self.setup_module_layout()
+
         mm_init(self)
         self.set_available_cores()
         self.arm_smmu_v12 = self.is_arm_smmu_v12()
@@ -1409,6 +1413,7 @@ class RamDump():
             if info is not None:
                 if len(info.ebi_files) > 0:
                     self.ebi_files = info.ebi_files
+                    self.thread_maxcount = len(self.ebi_files)
                     self.phys_offset = self.ebi_files[0][1]
                     if self.get_hw_id():
                         for (f, start, end, filename) in self.ebi_files:
@@ -2388,12 +2393,15 @@ class RamDump():
     def walk_depth(self, path, on_file, depth=10):
         if depth <= 0:
             return
-        for basename in os.listdir(path):
-            file = os.path.join(path, basename)
-            if os.path.isdir(file) and not os.path.islink(file):
-                self.walk_depth(file, on_file, depth=depth-1)
-            elif os.path.isfile(file):
-                on_file(file)
+        try:
+            for basename in os.listdir(path):
+                file = os.path.join(path, basename)
+                if os.path.isdir(file) and not os.path.islink(file):
+                    self.walk_depth(file, on_file, depth=depth-1)
+                elif os.path.isfile(file):
+                    on_file(file)
+        except Exception as e:
+            print_out_str(str(e))
 
     def has_debug_info(self, file):
         cmd = self.objdump_path + ' -h ' + file
@@ -2719,6 +2727,36 @@ class RamDump():
             self.module_layout_dict[mod_name] = ent_array
             next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
+    def validate_module_sym_addr(self, sym_addr, mod_name):
+        """
+        Validate that if sym_addr is in specified module layaout or not
+        """
+        value = self.module_layout_dict.get(mod_name)
+        if value is None:
+            return False
+
+        for base, size in value:
+            if sym_addr >= base and sym_addr < base + size:
+                return True
+
+        return False
+
+    def match_name_for_module_sym_addr(self, sym_addr):
+        """
+        When matched ko is not provided to lrdp or this ko is not live,
+        lrdp can't find a matched symbol name in lookup table.
+        So search sym_addr in module_layout_dict to find its module
+        name to show like UNKNOWN_SYMBOL[si_core_module].
+        With this, we can know where is this symbol in easily.
+        """
+        for key in self.module_layout_dict.keys():
+            value = self.module_layout_dict[key]
+            for base, size in value:
+                if sym_addr >= base and sym_addr < base + size:
+                    return ('UNKNOWN_SYMBOL[{}]'.format(key), 0)
+
+        return None
+
     def __unwind_lookup(self, addr, symbol_size=0):
         """
         Returns closest symbols <= addr and either the relative offset
@@ -2773,16 +2811,19 @@ class RamDump():
             size = table[low + 1][0] - table[low][0]
 
         _text = self.address_of('_text')
+        if _text is None:
+            _text = 0
+
         _end = self.address_of('_end')
+        if _end is None:
+            _end = 0xFFFFFFFFFFFFFFFF
+
         # do checking for symbol which is not in vmlinux
-        # if the module name in table[low][1] and table[high][1] is not same,
-        # it means that the symbols of this module are not added to lookup_table.
-        # so it's better to return None to show the symbols name as UNKNOWN but not false name
         if not (addr > _text and addr < _end):
-            low_match = re.match(r'.*\[(.+)\]', table[low][1])
-            high_match = re.match(r'.*\[(.+)\]', table[high][1])
-            if low_match and high_match:
-                if low_match.group(1) != high_match.group(1):
+            is_matched = re.match(r'.*\[(.+)\]', table[low][1])
+            if is_matched:
+                mod_name = is_matched.group(1)
+                if not self.validate_module_sym_addr(addr, mod_name):
                     return None
 
         if symbol_size == 0:
@@ -2796,14 +2837,7 @@ class RamDump():
             return r
 
         # when fail to lookup the symbol name, show the module name as much as possible.
-        for key in self.module_layout_dict.keys():
-            value = self.module_layout_dict[key]
-            for base, size in value:
-                if addr >= base and addr < base + size:
-                    return ('UNKNOWN_SYMBOL[{}]'.format(key), 0)
-
-        # return the old value if can't find it in module_layout_dict
-        return r
+        return self.match_name_for_module_sym_addr(addr)
 
     def read_elf_memory(self, addr, length, temp_file):
         s = self.gdbmi.read_elf_memory(addr, length, temp_file)
@@ -2857,9 +2891,8 @@ class RamDump():
         if self.use_multithread:
             print_out_str("Ramparser is already running in multi-thread mode!!!")
             return
-        if thread_max_count > 8 or thread_max_count <= 1:
-            thread_max_count = 8
-
+        if thread_max_count > self.thread_maxcount or thread_max_count <= 1:
+            thread_max_count = self.thread_maxcount
         self.use_multithread = True
         self.thread_name_prefix = thread_name_prefix
         self.ebi_files_mappings = {}
