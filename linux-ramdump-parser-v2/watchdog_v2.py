@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1434,15 +1434,16 @@ def get_wdog_timing(ramdump):
         tick_bc_force_mask = ramdump.read_word('tick_broadcast_force_mask')
         tick_bc_evt_dev = ramdump.read_structure_field(
             'tick_broadcast_device', 'struct tick_device', 'evtdev')
-        tick_bc_next_evt = ramdump.read_structure_field(
-            tick_bc_evt_dev, 'struct clock_event_device', 'next_event')
-        tick_bc_next_evt = ns_to_sec(tick_bc_next_evt)
-        tick_bc_cpumask = ramdump.read_structure_field(
-            tick_bc_evt_dev, 'struct clock_event_device', 'cpumask')
-        tick_bc_cpumask_bits = ramdump.read_structure_field(
-            tick_bc_cpumask, 'struct cpumask', 'bits')
-        if tick_bc_cpumask_bits is None:
-            tick_bc_cpumask_bits = 0
+        if tick_bc_evt_dev != 0:
+            tick_bc_next_evt = ramdump.read_structure_field(
+                tick_bc_evt_dev, 'struct clock_event_device', 'next_event')
+            tick_bc_next_evt = ns_to_sec(tick_bc_next_evt)
+            tick_bc_cpumask = ramdump.read_structure_field(
+                tick_bc_evt_dev, 'struct clock_event_device', 'cpumask')
+            tick_bc_cpumask_bits = ramdump.read_structure_field(
+                tick_bc_cpumask, 'struct cpumask', 'bits')
+            if tick_bc_cpumask_bits is None:
+                tick_bc_cpumask_bits = 0
     if ramdump.is_config_defined('CONFIG_SMP'):
         runqueues_addr = ramdump.address_of('runqueues')
         online_offset = ramdump.field_offset('struct rq', 'online')
@@ -1538,10 +1539,11 @@ def get_wdog_timing(ramdump):
             'tick_broadcast_pending_mask: {0:08b}'.format(tick_bc_pending_mask))
         print_out_str(
             'tick_broadcast_force_mask: {0:08b}'.format(tick_bc_force_mask))
-        print_out_str(
-            'tick_broadcast_device cpumask: {0:08b}'.format(tick_bc_cpumask_bits))
-        print_out_str(
-            'tick_broadcast_device next_event: {0:.6f}'.format(tick_bc_next_evt))
+        if tick_bc_evt_dev != 0:
+            print_out_str(
+                'tick_broadcast_device cpumask: {0:08b}'.format(tick_bc_cpumask_bits))
+            print_out_str(
+                'tick_broadcast_device next_event: {0:.6f}'.format(tick_bc_next_evt))
         for i in ramdump.iter_cpus():
             tick_cpu_device = ramdump.address_of(
                 'tick_cpu_device') + ramdump.per_cpu_offset(i)

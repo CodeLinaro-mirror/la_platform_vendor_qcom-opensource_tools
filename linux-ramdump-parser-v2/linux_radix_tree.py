@@ -41,48 +41,46 @@ class RadixTreeWalker(object):
             self.root_struct = 'radix_tree_root'
             self.head_struct = 'rnode'
             self.node_struct = 'radix_tree_node'
+        self.node_shift_offset = self.ramdump.field_offset('struct ' + self.node_struct, 'shift')
+        self.node_slots_offset = self.ramdump.field_offset('struct ' + self.node_struct, 'slots')
+        self.node_size = self.ramdump.sizeof('struct ' + self.node_struct + ' *')
 
     def get_radix_tree_root(self, radix_tree_root):
-        rnode_offset = self.ramdump.field_offset('struct ' + self.root_struct,
-                                                 self.head_struct)
+        rnode_offset = self.ramdump.field_offset('struct ' + self.root_struct,self.head_struct)
         rnode_addr = self.ramdump.read_word(radix_tree_root + rnode_offset)
         return rnode_addr
 
     def entry_to_node(self, rbnode):
         return rbnode & ~self.RADIX_TREE_INTERNAL_NODE
 
-    def radix_tree_is_internal_node(self, rbnode):
+    def is_internal_node(self, rbnode):
+        # 10: Internal entry
         return (rbnode & self.RADIX_TREE_ENTRY_MASK) == self.RADIX_TREE_INTERNAL_NODE
 
-    def walk_radix_tree_node(self, radix_tree_node, func, *args):
-
-        if self.radix_tree_is_internal_node(radix_tree_node):
-            radix_tree_node = self.entry_to_node(radix_tree_node)
-
-        rnode_shift_offset = self.ramdump.field_offset('struct ' +
-                                                       self.node_struct,
-                                                       'shift')
-        slots_offset = self.ramdump.field_offset('struct ' + self.node_struct,
-                                                 'slots')
-        pointer_size = self.ramdump.sizeof('struct ' + self.node_struct + ' *')
-        shift = self.ramdump.read_byte(radix_tree_node + rnode_shift_offset)
-        height = (shift // self.RADIX_TREE_MAP_SHIFT) + 1
+    def walk_radix_tree_node(self, tree_node, height,func, *args):
         for off in range(0, self.RADIX_TREE_MAP_SIZE):
-            slot = 0
-            shift = (height - 1) * self.RADIX_TREE_MAP_SHIFT
-            slot = self.ramdump.read_word(radix_tree_node + slots_offset + pointer_size * off)
-            if slot == 0:
+            slot = self.ramdump.read_word(tree_node + self.node_slots_offset + self.node_size * off)
+            if slot is None or slot == 0:
                 continue
-            radix_tree_node_next = slot
             # RADIX_TREE_INTERNAL_NODE mean we are not leaf
-            if self.radix_tree_is_internal_node(slot):
+            if self.is_internal_node(slot):
                 slot = self.entry_to_node(slot)
-            else:
-                # now we are going to handle our data on this leaf node
+            if height == 1:
                 func(slot, *args)
-            if height > 1:
-                self.walk_radix_tree_node(radix_tree_node_next, func, *args)
+            else:
+                radix_tree_node_next = slot
+                self.walk_radix_tree_node(radix_tree_node_next,(height -1), func, *args)
 
     def walk_radix_tree(self, radix_tree_root, func, *args):
+        height = 0
         radix_tree_node = self.get_radix_tree_root(radix_tree_root)
-        self.walk_radix_tree_node(radix_tree_node, func, *args)
+        if radix_tree_node is None or radix_tree_node == 0:
+            return
+        if self.is_internal_node(radix_tree_node):
+            radix_tree_node = self.entry_to_node(radix_tree_node)
+            shift = self.ramdump.read_byte(radix_tree_node + self.node_shift_offset)
+            height = (shift // self.RADIX_TREE_MAP_SHIFT) + 1
+        if height == 0:
+            func(radix_tree_node, *args)
+        else:
+            self.walk_radix_tree_node(radix_tree_node,height, func, *args)
