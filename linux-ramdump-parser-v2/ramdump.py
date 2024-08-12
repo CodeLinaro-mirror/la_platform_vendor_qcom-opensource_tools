@@ -1028,7 +1028,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
-                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                if self.address_of('__start_init_task') is not None:
+                    self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                else:
+                    self.thread_size = self.address_of('__end_init_stack') - self.address_of('__start_init_stack')
             else:
                 self.page_offset = 0xffffffc000000000
                 self.thread_size = 16384
