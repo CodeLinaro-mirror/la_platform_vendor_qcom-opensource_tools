@@ -269,6 +269,9 @@ class PageTracking(RamParser):
         #define MAX_ORDER CONFIG_FORCE_MAX_ZONEORDER
         #endif
         '''
+        if not self.ramdump.is_config_defined('CONFIG_PAGE_OWNER'):
+            print_out_str('CONFIG_PAGE_OWNER not defined')
+            return
         try:
             self.max_order = int(self.ramdump.get_config_val(
                                 "CONFIG_FORCE_MAX_ZONEORDER"))
