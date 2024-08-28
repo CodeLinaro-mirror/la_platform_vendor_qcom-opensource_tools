@@ -589,6 +589,8 @@ class QDSSDump():
 
     def parse_single_atid(self, driver_name, drvdata, struct_name, atid_field):
         atid_offset = self.ramdump.struct_field_addr(drvdata, struct_name, atid_field)
+        if atid_offset is None:
+            return
         atid = self.ramdump.read_byte(atid_offset)
         csdev = self.ramdump.read_structure_field(drvdata, struct_name, 'csdev')
         dev = self.ramdump.struct_field_addr(csdev, 'struct coresight_device', 'dev')
@@ -598,6 +600,9 @@ class QDSSDump():
     def parse_remote_etm_atid(self, driver_name, drvdata, struct_name, atid_field):
         atid_str = ''
         atid_num = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'num_trcid')
+        if atid_num is None:
+            return
+
         atid_addr = self.ramdump.read_structure_field(drvdata, "struct remote_etm_drvdata", "traceids")
         for i in range(atid_num):
             atid = self.ramdump.read_byte(atid_addr)
