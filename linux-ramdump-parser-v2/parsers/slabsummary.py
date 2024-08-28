@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -12,10 +12,11 @@
 
 import math
 import operator
-from mm import pfn_to_page
+from mm import pfn_to_page, get_pfn_range
 from parser_util import register_parser, RamParser
 # /kernel/msm-4.4/mm/slub.c
 OO_SHIFT = 16
+OO_MASK = (1 << OO_SHIFT) - 1
 
 @register_parser('--slabsummary', 'print summary of slab', optional=True)
 class Slabinfo_summary(RamParser):
@@ -88,9 +89,8 @@ class Slabinfo_summary(RamParser):
         slab = self.ramdump.read_word(original_slab)
         slab_lru_offset = self.ramdump.field_offset(
                                          'struct page', 'lru')
-        max_pfn_addr = self.ramdump.address_of('max_pfn')
-        max_pfn = self.ramdump.read_word(max_pfn_addr)
-        max_page = pfn_to_page(self.ramdump, max_pfn)
+        pfn_range = get_pfn_range(self.ramdump)
+        max_page = pfn_to_page(self.ramdump, pfn_range['max'])
         format_string = '\n{0:35} {1:9} {2:10} {3:10} {4:10} {5:8}K {6:8}' \
                         ' {7:10}K'
         slab_out.write(
@@ -140,7 +140,7 @@ class Slabinfo_summary(RamParser):
                                 slab_lru_offset, max_page, False)
 
             total_allocated = nr_total_objects - total_freeobjects
-            page_order = oo >> OO_SHIFT
+            page_order = (oo >> OO_SHIFT) & OO_MASK
             slab_size = int(math.pow(2, page_order + self.ramdump.page_shift))
             slab_size = slab_size // 1024
             slab = self.ramdump.read_word(slab + slab_list_offset)
@@ -152,10 +152,17 @@ class Slabinfo_summary(RamParser):
             nCounter += 1
         sorted_summary = sorted(slab_summary.values(),
                                 key=operator.itemgetter(5), reverse=True)
+        total_slab_object_size = 0
+        total_slab_page_size = 0
         for val in sorted_summary:
+            total_slab_object_size += val[5]
+            total_slab_page_size += (val[6] * val[7])
             slab_out.write(format_string.format(
                                 val[0], val[1], val[2], val[3], val[4],
                                 val[5], val[6], val[7]))
+        slab_out.write("\n\nTotal object size: {} KB\n".format(total_slab_object_size))
+        slab_out.write("Total page size: {} KB\n".format(total_slab_page_size))
+        return
 
     def parse(self):
         slab_out = self.ramdump.open_file('slabsummary.txt')
