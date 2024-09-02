@@ -362,5 +362,9 @@ class FtraceParser(RamParser):
 
 
     def parse(self):
-        self.ftrace_extract()
-        
+        if self.ramdump.ftrace_limit_time == 0:
+            self.ftrace_extract()
+        else:
+            from func_timeout import func_timeout
+            print_out_str("Limit ftrace parser running time to {}s".format(self.ramdump.ftrace_limit_time))
+            func_timeout(self.ramdump.ftrace_limit_time, self.ftrace_extract)

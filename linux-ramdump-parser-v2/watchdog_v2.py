@@ -1424,8 +1424,10 @@ def get_wdog_timing(ramdump):
     pet_time_off = ramdump.field_offset('struct msm_watchdog_data', 'pet_time')
     bark_time_off = ramdump.field_offset(
         'struct msm_watchdog_data', 'bark_time')
+    enabled_off = ramdump.field_offset('struct msm_watchdog_data', 'enabled')
     pet_time = ramdump.read_int(wdog_data_addr + pet_time_off)
     bark_time = ramdump.read_int(wdog_data_addr + bark_time_off)
+    enabled = ramdump.read_bool(wdog_data_addr + enabled_off)
     wdog_alive_mask = ramdump.read_structure_field(
         wdog_data_addr, 'struct msm_watchdog_data', 'alive_mask.bits')
     if not ramdump.minidump:
@@ -1481,13 +1483,14 @@ def get_wdog_timing(ramdump):
         core_id = ramdump.read_u64(cpu_logical_map_addr)
         logical_map.append(core_id >> 8)
     print_out_str('Non-secure Watchdog data')
+    if enabled:
+        print_out_str('Watchdog enabled')
+    else:
+        print_out_str('Watchdog disabled')
     print_out_str('Pet time: {0}s'.format(pet_time / 1000.0))
     print_out_str('Bark time: {0}s'.format(bark_time / 1000.0))
-    if wdog_last_pet > 1000000000:
-        last_pet_sec = ns_to_sec(wdog_last_pet)
-        print_out_str('Watchdog last pet: {0:.9f}'.format(last_pet_sec))
-    else:
-        print_out_str('Watchdog last pet: {0:.3f}'.format(wdog_last_pet))
+    last_pet_sec = ns_to_sec(wdog_last_pet)
+    print_out_str('Watchdog last pet: {0}'.format(last_pet_sec))
 
     if not ramdump.minidump:
         if wdog_task_state == 0 and wdog_task_oncpu == 1:

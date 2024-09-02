@@ -773,6 +773,7 @@ class RamDump():
         self.gdbmi_hyp = None
         self.arm64 = options.arm64
         self.logcat_limit_time = options.logcat_limit_time
+        self.ftrace_limit_time = options.ftrace_limit_time
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
