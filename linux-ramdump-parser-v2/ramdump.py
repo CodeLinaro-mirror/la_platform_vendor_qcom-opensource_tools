@@ -1535,7 +1535,6 @@ class RamDump():
                     self.HCR_EL2))
                     startup_script.write('Data.Set SPR:0x34212 %Quad 0x{0:x}\n'.format(
                     self.VTCR_EL2))
-                    startup_script.write('R.S M 5\n')
                 else:
                     startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
                         self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
@@ -1567,8 +1566,8 @@ class RamDump():
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
 
-                    startup_script.write('Register.Set NS 1\n')
-                    startup_script.write('Register.Set CPSR 0x1C5\n')
+                startup_script.write('Register.Set NS 1\n')
+                startup_script.write('Register.Set CPSR 0x1C5\n')
             else:
                 # ARM-32: MMU is enabled by default on most platforms.
                 mmu_enabled = 1
