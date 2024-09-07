@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -116,65 +116,69 @@ class Armv7MMU(MMU):
 
     """An MMU for ARMv7 (no LPAE)."""
 
+    def __init__(self, ramdump, ttbr=None):
+        super().__init__(ramdump, ttbr)
+
     def load_page_tables(self):
+        entry_size = self.ramdump.sizeof("void *")
         self.global_page_table = [0 for i in range(4096)]
-        self.secondary_page_tables = [
-            [0 for col in range(256)] for row in range(4096)]
-
-        virt_address = 0x0
-        gb_i = 0
-        se_i = 0
-        for l1_pte_ptr in range(self.ttbr, self.ttbr + (4096 * 4), 4):
-            l1_pte = self.ramdump.read_word(l1_pte_ptr, False)
-            self.global_page_table[gb_i] = l1_pte
-            if l1_pte is None:
-                gb_i += 1
+        self.secondary_page_tables = [[0 for col in range(256)] for row in range(4096)]
+        l1_index = 0
+        for l1_pte_ptr in range(self.ttbr, self.ttbr + (4096 * entry_size), entry_size):
+            l1_pte = self.ramdump.read_pointer(l1_pte_ptr, False)
+            if l1_pte is None or l1_pte == 0:
+                l1_index += 1
                 continue
-            if (l1_pte & 3) == 0 or (l1_pte & 3) == 3:
-                for k in range(0, 256):
-                    virt_address += 0x1000
-            elif (l1_pte & 3) == 2:
-                if ((l1_pte & 0x40000) == 0):
-                    l1_pte_counter = l1_pte & 0xFFF00000
-                    for k in range(0, 256):
-                        virt_address += 0x1000
-                        l1_pte_counter += 0x1000
-                else:
-                    gb_i += 1
-                    continue
-            elif (l1_pte & 3) == 1:
-                l2_pt_desc = l1_pte
-                l2_pt_base = l2_pt_desc & (~0x3ff)
-                for l2_pte_ptr in range(l2_pt_base, l2_pt_base + (256 * 4), 4):
-                    virt_address += 0x1000
-                    l2_pt_entry = self.ramdump.read_word(l2_pte_ptr, False)
-                    self.secondary_page_tables[gb_i][se_i] = l2_pt_entry
-                    se_i += 1
-                se_i = 0
-            gb_i += 1
+            self.global_page_table[l1_index] = l1_pte
+            # pointer to 2 level page table
+            if bvalsel(1, 0, l1_pte) == 1:
+                # clean low 10 bit
+                l2_pt_base = l1_pte & ~((1 << 10) - 1)
+                l2_index = 0
+                for l2_pte_ptr in range(l2_pt_base, l2_pt_base + (256 * entry_size), entry_size):
+                    l2_pte = self.ramdump.read_pointer(l2_pte_ptr, False)
+                    if l2_pte is None or l2_pte == 0:
+                        l2_index += 1
+                        continue
+                    self.secondary_page_tables[l1_index][l2_index] = l2_pte
+                    l2_index += 1
+            l1_index += 1
 
+    # here look up hw PTE
+    # arm32 page table
+    #  --------------------------------------------------------
+    #  |       12              |      8    |           12      |
+    #  --------------------------------------------------------
     def page_table_walk(self, virt):
         global_offset = bvalsel(31, 20, virt)
         l1_pte = self.global_page_table[global_offset]
         if l1_pte is None:
             return None
-        bit18 = (l1_pte & 0x40000) >> 18
-        if (bvalsel(1, 0, l1_pte) == 1):
+        # pointer to 2 level page table
+        if bvalsel(1, 0, l1_pte) == 1:
             l2_offset = bvalsel(19, 12, virt)
-            l2_pte = self.secondary_page_tables[global_offset][l2_offset]
-            if l2_pte is None:
-                return None
-            if (bvalsel(1, 0, l2_pte) == 2) or (bvalsel(1, 0, l2_pte) == 3):
+            l2_pte = self.secondary_page_tables[global_offset][l2_offset] # find out the hw pte
+            # sometime the hw pte is 0, but the sw pte is not 0
+            if l2_pte is None or l2_pte == 0:
+                l2_pte = self.page_table_walk_to_get_swap_pte(virt) # find out the linux pte again
+                if l2_pte is None or l2_pte == 0:
+                    return None
                 entry4kb = (l2_pte & bm(31, 12)) + bvalsel(11, 0, virt)
                 return entry4kb
-            elif (bvalsel(1, 0, l2_pte) == 1):
-                entry64kb = (l2_pte & bm(31, 16)) + bvalsel(15, 0, virt)
-                return entry64kb
-        if (bvalsel(1, 0, l1_pte) == 2):
+            else:
+                # small page
+                if (bvalsel(1, 0, l2_pte) == 2) or (bvalsel(1, 0, l2_pte) == 3):
+                    entry4kb = (l2_pte & bm(31, 12)) + bvalsel(11, 0, virt)
+                    return entry4kb
+                # large page
+                elif (bvalsel(1, 0, l2_pte) == 1):
+                    entry64kb = (l2_pte & bm(31, 16)) + bvalsel(15, 0, virt)
+                    return entry64kb
+        # section or supersection
+        if bvalsel(1, 0, l1_pte) == 2:
             onemb_entry = bm(31, 20) & l1_pte
             onemb_entry += bvalsel(19, 0, virt)
             return onemb_entry
-
         return 0
 
     def dump_page_tables(self, f):
@@ -182,9 +186,62 @@ class Armv7MMU(MMU):
             'Dumping page tables is not currently supported for Armv7MMU\n')
         f.flush()
 
-    def page_table_walk_to_get_swap_pte(self, virt):
-        return None
+    def SW_PGD_OFFSET(self, virt):
+        PGDIR_SHIFT = 21
+        return virt >> PGDIR_SHIFT # get hight 11 bit
 
+    def SW_PTE_OFFSET(self, virt):
+        PTRS_PER_PTE = 512
+        # get the internal 9 bit
+        return (virt >> self.ramdump.page_shift) & (PTRS_PER_PTE - 1)
+
+    def SW_pmd_page_addr(self, pmd):
+        # clean low 12 bit
+        return pmd & ~(self.ramdump.get_page_size() -1)
+
+    #  here look up Linux PTE
+    #  Linux page table
+    #  --------------------------------------------------------
+    #  |          11        |      9    |           12         |
+    #  --------------------------------------------------------
+    #   * Starting from 2.6.38
+    #   *
+    #   *     PGD                   PTE
+    #   * +---------+
+    #   * |         | 0  ---->  +------------+
+    #   * +- - - - -+           | Linux pt 0 |
+    #   * |         | 4  ---->  +------------+ +1024
+    #   * +- - - - -+           | Linux pt 1 |
+    #   * .         .           +------------+ +2048
+    #   * .         .           | h/w pt 0   |
+    #   * .         .           +------------+ +3072
+    #   * |         | 4095      | h/w pt 1   |
+    #   * +---------+           +------------+ +4096
+    def page_table_walk_to_get_swap_pte(self, virt):
+        debug = False
+        # per pgd entry is 4 byte
+        entry_size = self.ramdump.sizeof("void *")
+        if debug:
+            print("PAGE DIRECTORY: {0:x}".format(self.ttbr))
+        page_dir = self.ttbr + (entry_size * 2 * self.SW_PGD_OFFSET(virt))
+        # The unity-mapped region is mapped using 1MB pages hence 1-level translation
+        # if bit 20 is set; if we are 1MB apart physically, we move the page_dir in case bit 20 is set.
+        # if ((virt) >> (20)) & 1:
+        #     page_dir = page_dir + entry_size
+        pgd_pte = self.ramdump.read_pointer(page_dir, False)
+        if debug:
+            print("  PGD: {0:x} => {1:x}".format(page_dir, pgd_pte))
+        if pgd_pte is None or pgd_pte == 0:
+            return None
+        pmd_pte = pgd_pte
+        page_middle = page_dir
+        if debug:
+            print("  PMD: {0:x} => {1:x}".format(page_middle, pmd_pte))
+        page_table = self.SW_pmd_page_addr(pmd_pte) + (entry_size * self.SW_PTE_OFFSET(virt))
+        sw_pte = self.ramdump.read_pointer(page_table, False)
+        if debug:
+            print("  PTE: {0:x} => {1:x}".format(page_table, sw_pte))
+        return sw_pte
 
 class Armv7LPAEMMU(MMU):
 
