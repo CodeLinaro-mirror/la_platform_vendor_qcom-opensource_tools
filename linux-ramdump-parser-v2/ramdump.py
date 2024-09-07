@@ -3669,14 +3669,14 @@ class RamDump():
         var_type, vsize, temp_name = self.__get_type_info(the_type)
         if vsize is None:
             vsize = size
-        data = self.__get_bin_data(addr, vsize)
+        data = self.get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
             return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
             return self.__object_value(var_type, data, 0, temp_name, addr)
 
-    def __get_bin_data(self, addr, size):
+    def get_bin_data(self, addr, size):
         """
         Function to return binary data of 'size' bytes read
         from the given address.
