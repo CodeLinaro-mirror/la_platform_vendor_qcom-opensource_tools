@@ -1007,7 +1007,6 @@ class RamDump():
         self.vmemmap = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
-        self.thread_maxcount = len(self.ebi_files)
         # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
         # Virtual address of the variable 'kimage_voffset'
@@ -1417,7 +1416,6 @@ class RamDump():
             if info is not None:
                 if len(info.ebi_files) > 0:
                     self.ebi_files = info.ebi_files
-                    self.thread_maxcount = len(self.ebi_files)
                     self.phys_offset = self.ebi_files[0][1]
                     if self.get_hw_id():
                         for (f, start, end, filename) in self.ebi_files:
@@ -1872,7 +1870,7 @@ class RamDump():
         kimage_voffset = 0
         phys_offset = 0
         from concurrent import futures
-        max_workers = max(len(bfiles), 8)
+        max_workers = min(len(bfiles), self.thread_maxcount)
         self.executor = futures.ThreadPoolExecutor(max_workers)
         self.enable_multithread(max_workers, self.executor._thread_name_prefix)
         lock = threading.Lock()
