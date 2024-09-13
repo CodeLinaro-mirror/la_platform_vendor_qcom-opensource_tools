@@ -74,11 +74,12 @@ if __name__ == '__main__':
     starttime = time.time()
     usage = 'usage: %prog [options to print]. Run with --help for more details'
     parser = OptionParser(usage)
-    parser.add_option('', '--print-watchdog-time', action='store_true',
-                      dest='watchdog_time', help='Print watchdog timing information', default=False)
     parser.add_option('', '--logcat_limit_time_sec',
                       dest='logcat_limit_time', type='int', default=0,
                       help='Defined the max time logcat parse running')
+    parser.add_option('', '--ftrace_limit_time_sec',
+                      dest='ftrace_limit_time', type='int', default=0,
+                      help='Defined the max time ftrace parse running')
     parser.add_option('-e', '--ram-file', dest='ram_addr',
                       help='List of ram files (name, start, end)', action='callback', callback=parse_ram_file)
     parser.add_option('-v', '--vmlinux', dest='vmlinux', help='vmlinux path')
@@ -448,11 +449,6 @@ if __name__ == '__main__':
         print_out_str('!!! --parse-qdss is now deprecated')
         print_out_str(
             '!!! Please just use --parse-debug-image to get QDSS information')
-
-    if options.watchdog_time:
-        print_out_str('\n--------- watchdog time -------')
-        get_wdog_timing(dump)
-        print_out_str('---------- end watchdog time-----')
 
     # Always verify Scheduler requirement for active_cpus on 64-bit platforms.
     if options.arm64:
