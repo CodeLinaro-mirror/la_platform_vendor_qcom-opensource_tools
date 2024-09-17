@@ -1007,7 +1007,6 @@ class RamDump():
         self.vmemmap = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
-        self.thread_maxcount = len(self.ebi_files)
         # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
         # Virtual address of the variable 'kimage_voffset'
@@ -1029,7 +1028,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
-                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                if self.address_of('__start_init_task') is not None:
+                    self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                else:
+                    self.thread_size = self.address_of('__end_init_stack') - self.address_of('__start_init_stack')
             else:
                 self.page_offset = 0xffffffc000000000
                 self.thread_size = 16384
@@ -1414,7 +1416,6 @@ class RamDump():
             if info is not None:
                 if len(info.ebi_files) > 0:
                     self.ebi_files = info.ebi_files
-                    self.thread_maxcount = len(self.ebi_files)
                     self.phys_offset = self.ebi_files[0][1]
                     if self.get_hw_id():
                         for (f, start, end, filename) in self.ebi_files:
@@ -1532,7 +1533,6 @@ class RamDump():
                     self.HCR_EL2))
                     startup_script.write('Data.Set SPR:0x34212 %Quad 0x{0:x}\n'.format(
                     self.VTCR_EL2))
-                    startup_script.write('R.S M 5\n')
                 else:
                     startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
                         self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
@@ -1564,8 +1564,8 @@ class RamDump():
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
 
-                    startup_script.write('Register.Set NS 1\n')
-                    startup_script.write('Register.Set CPSR 0x1C5\n')
+                startup_script.write('Register.Set NS 1\n')
+                startup_script.write('Register.Set CPSR 0x1C5\n')
             else:
                 # ARM-32: MMU is enabled by default on most platforms.
                 mmu_enabled = 1
@@ -1870,7 +1870,7 @@ class RamDump():
         kimage_voffset = 0
         phys_offset = 0
         from concurrent import futures
-        max_workers = max(len(bfiles), 8)
+        max_workers = min(len(bfiles), self.thread_maxcount)
         self.executor = futures.ThreadPoolExecutor(max_workers)
         self.enable_multithread(max_workers, self.executor._thread_name_prefix)
         lock = threading.Lock()
@@ -3669,14 +3669,14 @@ class RamDump():
         var_type, vsize, temp_name = self.__get_type_info(the_type)
         if vsize is None:
             vsize = size
-        data = self.__get_bin_data(addr, vsize)
+        data = self.get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
             return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
             return self.__object_value(var_type, data, 0, temp_name, addr)
 
-    def __get_bin_data(self, addr, size):
+    def get_bin_data(self, addr, size):
         """
         Function to return binary data of 'size' bytes read
         from the given address.
