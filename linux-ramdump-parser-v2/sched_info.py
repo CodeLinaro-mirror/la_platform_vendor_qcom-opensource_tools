@@ -1,5 +1,5 @@
 # Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -144,6 +144,24 @@ def dump_rq_lock_information(ramdump):
         print_out_str("\n ")
 
 def dump_isolation_data(ramdump):
+    try:
+        if ramdump.address_of('cluster_state') is not None:
+            print_out_str("cluster_state:")
+            cluster_state = ramdump.read_datatype('cluster_state')
+            for idx in range(0, len(cluster_state)):
+                print_out_str("\tcluster{}: min_cpus = {} max_cpus = {} enable = {}".format(
+                    idx, cluster_state[idx].min_cpus, cluster_state[idx].max_cpus,
+                    cluster_state[idx].enable))
+        halt_state_ptr = ramdump.address_of('halt_state')
+        if halt_state_ptr is not None:
+            print_out_str("\nhalt_state:")
+            for cpu in ramdump.iter_cpus():
+                halt_state = ramdump.read_u16(halt_state_ptr, cpu=cpu)
+                print_out_str("\tcpu{}: client_vote_mask = ({}, {})".format(
+                    cpu, halt_state & 0xFF, (halt_state>>8) & 0xFF))
+    except Exception as err:
+        print_out_str("{}\n".format(str(err)))
+        pass
     try:
         cpus_paused_by_us = ramdump.read_word('cpus_paused_by_us')
         cpus_in_max_cooling_level = ramdump.read_word('cpus_in_max_cooling_level')

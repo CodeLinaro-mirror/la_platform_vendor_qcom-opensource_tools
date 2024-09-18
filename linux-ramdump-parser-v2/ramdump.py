@@ -773,6 +773,7 @@ class RamDump():
         self.gdbmi_hyp = None
         self.arm64 = options.arm64
         self.logcat_limit_time = options.logcat_limit_time
+        self.ftrace_limit_time = options.ftrace_limit_time
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
@@ -1028,7 +1029,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
-                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                if self.address_of('__start_init_task') is not None:
+                    self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                else:
+                    self.thread_size = self.address_of('__end_init_stack') - self.address_of('__start_init_stack')
             else:
                 self.page_offset = 0xffffffc000000000
                 self.thread_size = 16384
