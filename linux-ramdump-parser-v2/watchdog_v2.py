@@ -1430,7 +1430,7 @@ def get_wdog_timing(ramdump):
     enabled = ramdump.read_bool(wdog_data_addr + enabled_off)
     wdog_alive_mask = ramdump.read_structure_field(
         wdog_data_addr, 'struct msm_watchdog_data', 'alive_mask.bits')
-    if not ramdump.minidump:
+    if not ramdump.minidump and ramdump.is_config_defined('CONFIG_GENERIC_CLOCKEVENTS_BROADCAST'):
         tick_bc_mask = ramdump.read_word('tick_broadcast_oneshot_mask')
         tick_bc_pending_mask = ramdump.read_word('tick_broadcast_pending_mask')
         tick_bc_force_mask = ramdump.read_word('tick_broadcast_force_mask')
@@ -1490,7 +1490,11 @@ def get_wdog_timing(ramdump):
     print_out_str('Pet time: {0}s'.format(pet_time / 1000.0))
     print_out_str('Bark time: {0}s'.format(bark_time / 1000.0))
     last_pet_sec = ns_to_sec(wdog_last_pet)
+    next_pet_sec =  last_pet_sec + (pet_time/1000.0)
+    next_bark_sec = last_pet_sec + (bark_time / 1000.0)
     print_out_str('Watchdog last pet: {0}'.format(last_pet_sec))
+    print_out_str('Watchdog next pet: {0}'.format(next_pet_sec))
+    print_out_str('Watchdog next bark: {0}'.format(next_bark_sec))
 
     if not ramdump.minidump:
         if wdog_task_state == 0 and wdog_task_oncpu == 1:
@@ -1537,16 +1541,17 @@ def get_wdog_timing(ramdump):
     print_out_str("tick_do_timer_cpu: {0}".format(tick_do_timer_cpu))
     print_out_str('CPU logical map: {0}'.format(logical_map))
     if not ramdump.minidump:
-        print_out_str('tick_broadcast_oneshot_mask: {0:08b}'.format(tick_bc_mask))
-        print_out_str(
-            'tick_broadcast_pending_mask: {0:08b}'.format(tick_bc_pending_mask))
-        print_out_str(
-            'tick_broadcast_force_mask: {0:08b}'.format(tick_bc_force_mask))
-        if tick_bc_evt_dev != 0:
+        if ramdump.is_config_defined('CONFIG_GENERIC_CLOCKEVENTS_BROADCAST'):
+            print_out_str('tick_broadcast_oneshot_mask: {0:08b}'.format(tick_bc_mask))
             print_out_str(
-                'tick_broadcast_device cpumask: {0:08b}'.format(tick_bc_cpumask_bits))
+                'tick_broadcast_pending_mask: {0:08b}'.format(tick_bc_pending_mask))
             print_out_str(
-                'tick_broadcast_device next_event: {0:.6f}'.format(tick_bc_next_evt))
+                'tick_broadcast_force_mask: {0:08b}'.format(tick_bc_force_mask))
+            if tick_bc_evt_dev != 0:
+                print_out_str(
+                    'tick_broadcast_device cpumask: {0:08b}'.format(tick_bc_cpumask_bits))
+                print_out_str(
+                    'tick_broadcast_device next_event: {0:.6f}'.format(tick_bc_next_evt))
         for i in ramdump.iter_cpus():
             tick_cpu_device = ramdump.address_of(
                 'tick_cpu_device') + ramdump.per_cpu_offset(i)
