@@ -77,6 +77,9 @@ if __name__ == '__main__':
     parser.add_option('', '--logcat_limit_time_sec',
                       dest='logcat_limit_time', type='int', default=0,
                       help='Defined the max time logcat parse running')
+    parser.add_option('', '--ftrace_limit_time_sec',
+                      dest='ftrace_limit_time', type='int', default=0,
+                      help='Defined the max time ftrace parse running')
     parser.add_option('-e', '--ram-file', dest='ram_addr',
                       help='List of ram files (name, start, end)', action='callback', callback=parse_ram_file)
     parser.add_option('-v', '--vmlinux', dest='vmlinux', help='vmlinux path')
