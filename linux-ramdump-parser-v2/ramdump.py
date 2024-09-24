@@ -1957,18 +1957,35 @@ class RamDump():
         Third step:
               check if linux_banner read from DDR == linux_banner from vmlinux
         '''
+
+        kimage_voffset = None
         ## First step, calculate kaslr_offset and kimage_voffset
         if self.arm64:
-            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
-            if kaslr_offset != None:
-                kimage_voffset = self.__kimage_vaddr_var_va  + kaslr_offset - kimage_vaddr_var_phy
-            else:
-                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
-                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
-                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
-                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
+            if self.__kimage_vaddr_var_va is not None:
+                kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
+                if kaslr_offset != None:
+                    kimage_voffset = self.__kimage_vaddr_var_va  + kaslr_offset - kimage_vaddr_var_phy
                 else:
-                    raise Exception("!!! Determine kaslr_voffset failed")
+                    kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
+                    if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
+                        kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
+                        kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
+                    else:
+                        raise Exception("!!! Determine kaslr_offset, kimage_voffset failed")
+            else:
+                kimage_voffset_va = self.address_of('kimage_voffset')
+                if kimage_voffset_va:
+                    kimage_voffset_pa = self.phys_offset + kimage_voffset_va - self.get_kimage_vaddr()
+                    kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+                    if kimage_voffset_tmp is not None:
+                        kimage_voffset = kimage_voffset_tmp
+                        kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                        if kimage_voffset_va_kaslr >= kimage_voffset_va:
+                            kaslr_offset = kimage_voffset_va_kaslr - kimage_voffset_va
+                        else:
+                            raise Exception("!!! Determine kimage_voffset failed")
+                if kimage_voffset is None:
+                    raise Exception("!!! Determine kimage_voffset failed")
         else:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
