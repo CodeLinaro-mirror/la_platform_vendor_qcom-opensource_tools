@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2015, 2017, 2019-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -237,7 +237,10 @@ def dump_regs_xml(options):
     for addr, val in zip(address, data):
         parsed_data.info("\t\t<register address=\"0x{0:08x}\" value=\"0x{1:08x}\" />".format(addr, val))
     parsed_data.info("\t</chip>")
-    parsed_data.info("\t<next_ll_offset>next_ll_offset : {0} </next_ll_offset>".format(next_ll_offset[-1]))
+    try:
+        parsed_data.info("\t<next_ll_offset>next_ll_offset : {0} </next_ll_offset>".format(next_ll_offset[-1]))
+    except:
+        pass
     parsed_data.info("</hwioDump>")
     return
 
@@ -308,6 +311,8 @@ if __name__ == '__main__':
                       help='DCC driver version 2')
     parser.add_option('--config-offset', dest='config_offset',
                       help='Start offset for DCC configuration')
+    parser.add_option('--data-offset', dest='data_offset',
+                      help='Start offset for DCC Data')
     parser.add_option('--config-loopoffset', dest='config_loopoffset',
                       help='Offset of loop value')
     parser.add_option('--dcc_sink', dest='dcc_sink',
@@ -374,6 +379,8 @@ if __name__ == '__main__':
         print("Sink used for the list:" ,  sink)
         if sink == 'SRAM':
             print('Read data from SRAM')
+            if options.data_offset is not None:
+                sram_file.seek(int(options.data_offset, 16))
             if read_data(sram_file):
                 log.error('Couldn\'t read complete data.')
                 sys.exit(1)

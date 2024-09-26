@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -123,9 +123,16 @@ def get_strings(buf, length):
                         return nlist
         return nlist
 
-def generate_elf(autodump, outdir, vm):
-        if vm == "oemvm":
+def generate_elf(autodump, outdir, vm, kernel_version):
+        if "autogvm" in vm:
+            if kernel_version >= (5, 15, 0):
+                vmid = str(vm.split("-")[-1]) + "_"
+            else:
+                vmid = ""
+        elif vm == "oemvm":
             vmid = "31_"
+        elif vm == "autoghgvm":
+            vmid = "34_"
         elif vm:
             vmid = "2d_"
         else:
@@ -154,8 +161,16 @@ def generate_elf(autodump, outdir, vm):
         for names in nlist:
             if vm:
                 for file in files:
-                    filepath = "md_" + vmid + names + ".BIN"
-                    is_found = fnmatch(file, "md_" + vmid + names + "*.BIN")
+                    if "autogvm" in vm:
+                        if re.match(r'^[0-9]_', names) is None:
+                            filepath = "md_" + vmid + names + ".BIN"
+                            is_found = fnmatch(file, "md_" + vmid + names + "*.BIN")
+                        else:
+                            filepath = "md_" + names + ".BIN"
+                            is_found = fnmatch(file, "md_" + names + "*.BIN")
+                    else:
+                        filepath = "md_" + vmid + names + ".BIN"
+                        is_found = fnmatch(file, "md_" + vmid + names + "*.BIN")
                     if is_found:
                         break;
                 if not is_found:
