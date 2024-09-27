@@ -1,11 +1,13 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 
 from print_out import print_out_str
 from parser_util import cleanupString
 import maple_tree
 from mmu import Armv8MMU, Armv7MMU
 import struct
+from kstructlib import StructParser
+from collections import namedtuple
 
 class UTaskInfo:
     def __init__(self):
@@ -65,7 +67,6 @@ class UTaskLib:
                 if pid != process_name:
                     continue
 
-            print("found process {}".format(task_name))
             mm_addr = self.ramdump.read_word(task + self.mm_offset)
             if process_name == "init" and mm_addr == 0:
                 mm_addr = self.ramdump.read_word(task + self.active_mm_offset)
@@ -83,15 +84,10 @@ class UTaskLib:
                 mmu = Armv8MMU(self.ramdump, pgdp)
             else:
                 mmu = Armv7MMU(self.ramdump, pgdp)
-            if (self.ramdump.kernel_version) < (6, 1, 0):
-                # struct vm_area_struct *mmap
-                mmap = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
-                                                            'mmap')
-                vmalist = self._get_vma_list_from_mmap(mmap)
-            else:
-                m_mt = self.ramdump.struct_field_addr(mm_addr, 'struct mm_struct',
-                                                        'mm_mt')
-                vmalist = self._get_vma_list_from_mm_mt(m_mt)
+
+            vmalist = []
+            for vmaobj in self.for_each_vma_list(mm_addr):
+                vmalist.append(vmaobj)
 
             _utask = UTaskInfo()
             _utask.name = task_name
@@ -162,22 +158,32 @@ class UTaskLib:
                 msg = msg + msg_binary
         return msg
 
-    def _get_vma_list_from_mmap(self, mmap):
-        _map = mmap
-        vmalist = []
-        while _map:
-            vma_obj = self._make_vma_object(_map)
-            vmalist.append(vma_obj)
-            _map = self.ramdump.read_structure_field(
-                _map, 'struct vm_area_struct', 'vm_next')  # next loop
-        return vmalist
-
-    def _get_vma_list_from_mm_mt(self, mm_mt):
-        vmalist = []
-        get_vma_list = lambda node, vmalist: vmalist.append(node)
-        mt_walk = maple_tree.MapleTreeWalker(self.ramdump)
-        mt_walk.walk(mm_mt, self._save_vma_list, vmalist)
-        return vmalist
+    def for_each_vma_list(self, mm_addr, count=None):
+        self.read_count = 0
+        if (self.ramdump.kernel_version) < (6, 1, 0):
+            # struct vm_area_struct *mmap
+            mmap = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
+                                                        'mmap')
+            _map = mmap
+            while _map:
+                self.read_count +=1
+                if count and self.read_count > count:
+                    break
+                vma_obj = self._make_vma_object(_map)
+                _map = self.ramdump.read_structure_field(
+                    _map, 'struct vm_area_struct', 'vm_next')  # next loop
+                yield vma_obj
+        else:
+            mm_mt = self.ramdump.struct_field_addr(mm_addr, 'struct mm_struct',
+                                                    'mm_mt')
+            mt_walk = maple_tree.MapleTreeWalker(self.ramdump)
+            vmalist = []
+            try:
+                mt_walk.walk(mm_mt, self._save_vma_list, vmalist, count)
+            except:
+                pass
+            for vmaobj in vmalist:
+                yield vmaobj
 
     def _make_vma_object(self, vma_addr):
         '''
@@ -210,6 +216,102 @@ class UTaskLib:
         vma_obj.vm_addr = vma_addr
         return vma_obj
 
-    def _save_vma_list(self, node, vmalist):
+    def _save_vma_list(self, node, vmalist, count=None):
         if node:
+            self.read_count +=1
+            if count and self.read_count > count:
+                raise StopIteration
             vmalist.append(self._make_vma_object(node))
+
+    def __dentry_d_name(self, dentry):
+        dentry_struct = self.struct_parser.read_struct(dentry, 'struct dentry', ['d_name', 'd_parent'])
+        d_parent = dentry_struct.d_parent
+        hash_len = dentry_struct.d_name.hash_len
+        d_len = hash_len >> 32
+        d_name_addr = dentry_struct.d_name.name
+        if (d_len == 0 or d_name_addr == 0):
+            return ''
+        d_name = self.ramdump.read_cstring(d_name_addr, d_len)
+        return d_parent, d_name
+
+    def __get_path_name(self, dentry, vfsmnt):
+        tmp_vfsmnt = vfsmnt
+        d_parent = dentry
+        path_name = ''
+
+        ### first step to find out file path
+        max_count = 8
+        index = 0
+        while True:
+            index += 1
+            if index > max_count:
+                # make an error
+                break
+            tmp_dentry = d_parent
+            d_parent, d_name = self.__dentry_d_name(tmp_dentry)
+            if d_name == "/":
+                break
+
+            if (tmp_dentry != d_parent):
+                path_name = d_name + '/' + path_name if path_name else d_name
+            else:
+                break
+
+        if tmp_vfsmnt == 0:
+            return path_name
+
+        ### second step to find out mount path
+        tmp_mount = tmp_vfsmnt - self.mnt_offset
+        index = 0
+        while True:
+            index += 1
+            if index > max_count:
+                # make an error
+                break
+            mount_struct = self.struct_parser.read_struct(tmp_mount, 'struct mount', ['mnt_parent', 'mnt_mountpoint'])
+            if tmp_mount == mount_struct.mnt_parent:
+                break
+            _, d_name = self.__dentry_d_name(mount_struct.mnt_mountpoint)
+            tmp_mount = mount_struct.mnt_parent
+            if d_name != "/":
+                path_name = d_name + '/' + path_name
+                break
+        return path_name
+
+    def for_each_cmdline(self):
+        '''
+        As task_struct->comm[16] stored a small part of process name.
+        developer can't distinct which process it is.
+        this method is to dump full cmdline for each user space process
+        '''
+        if not hasattr(self, "struct_parser"):
+            self.struct_parser = StructParser(self.ramdump)
+
+        cmdline_obj = namedtuple("TaskCmdline", ["pid", "comm", "cmdline"])
+        self.mnt_offset = self.ramdump.field_offset('struct mount', 'mnt')
+
+        for task in self.ramdump.for_each_process():
+            mm_addr = self.ramdump.read_word(task + self.mm_offset)
+            if mm_addr == 0:
+                # skip kernel process
+                continue
+
+            mm_addr = self.ramdump.read_word(task + self.mm_offset)
+            pid = self.ramdump.read_u32(task + self.pid_offset)
+            task_name = cleanupString(self.ramdump.read_cstring(task + self.offset_comm, 16))
+            path_struct = None
+
+            for vmaobj in self.for_each_vma_list(mm_addr, count=1):# only read the first vma
+                if vmaobj.file != 0:
+                    path_struct = self.struct_parser.read_struct(
+                                vmaobj.file + self.f_path_offset, 'struct path', ['dentry', 'mnt'])
+
+            if not path_struct:
+                continue
+
+            dentry_addr = path_struct.dentry
+            vfsmnt = path_struct.mnt
+            if (dentry_addr != 0x0):
+                file_name = self.__get_path_name(dentry_addr, vfsmnt)
+                if task_name in file_name:
+                    yield cmdline_obj(pid, task_name, file_name)
