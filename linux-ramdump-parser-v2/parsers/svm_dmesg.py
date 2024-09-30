@@ -5,7 +5,7 @@ from print_out import print_out_str
 from parser_util import RamParser, cleanupString, register_parser
 import linux_list as llist
 from struct_print import struct_print_class
-import linux_devices_list as ldevices
+import parsers.linux_devices as ldevices
 
 @register_parser('--print-svmdmesg', 'Print the svmdmesg')
 class svmdmesg(RamParser):
