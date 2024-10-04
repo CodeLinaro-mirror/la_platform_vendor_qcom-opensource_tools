@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -281,7 +281,7 @@ class GpuParser_510(RamParser):
             filename = 'gpu_parser/globals/{0}.bin'.format(
                 name + '_' + hex(kgsl_global_memdesc_base))
             file = dump.open_file(filename, 'wb')
-            data = dump.read_binarystring(hostptr, size)
+            data = dump.get_bin_data(hostptr, size)
             file.write(data)
             file.close()
 
@@ -318,10 +318,10 @@ class GpuParser_510(RamParser):
     def parse_open_process_mementry(self, dump):
         self.writeln('WARNING: Some nodes can be corrupted one, Ignore them.')
         format_str = '{0:20} {1:20} {2:12} {3:30} ' \
-                     '{4:20} {5:20} {6:12} {7:20} {8:20}'
+                     '{4:20} {5:20} {6:12} {7:20} {8:20} {9:12}'
         self.writeln(format_str.format("PID", "PNAME", "INDEX", "MEMDESC_ADDR",
                                        "MEMDESC_SIZE", "GPUADDR", "FLAGS",
-                                       "USAGE", "PENDING_FREE"))
+                                       "USAGE", "PENDING_FREE", "PRIV"))
 
         node_addr = dump.read('kgsl_driver.process_list.next')
         list_elem_offset = dump.field_offset(
@@ -385,18 +385,22 @@ class GpuParser_510(RamParser):
         pending_free = dump.read_structure_field(mementry_addr,
                                                  'struct kgsl_mem_entry',
                                                  'pending_free')
+        priv = dump.read_structure_field(kgsl_memdesc_address,
+                                         'struct kgsl_mem_entry',
+                                         'priv')
         total_size[0] += size
 
         if print_header[0] is True:
             self.writeln(format_str.format(
                 str(pid), pname, hex(idr_id), hex(kgsl_memdesc_address),
-                str(size), hex(gpuaddr), str(flags), usage, str(pending_free)))
+                str(size), hex(gpuaddr), str(flags), usage, str(pending_free),
+                hex(priv)))
             # Set to False to skip printing pid and pname for the rest
             print_header[0] = False
         else:
             self.writeln(format_str.format(
                 "", "", hex(idr_id), hex(kgsl_memdesc_address), str(size),
-                hex(gpuaddr), str(flags), usage, str(pending_free)))
+                hex(gpuaddr), str(flags), usage, str(pending_free), hex(priv)))
 
     '''
     Returns flag string with following legend:
@@ -1050,11 +1054,12 @@ class GpuParser_510(RamParser):
                      + str(kgsl_sync_timeline_kref_counter))
 
     def parse_open_process_data(self, dump):
-        format_str = '{0:10} {1:20} {2:20} {3:30} {4:20} {5:20} {6:10} {7:20}'
+        format_str = '{0:10} {1:20} {2:20} {3:30} {4:20} {5:20} {6:10} ' \
+                     '{7:20} {8:20}'
         self.writeln(format_str.format("PID", "PNAME", "PROCESS_PRIVATE_PTR",
                                        "KGSL_PAGETABLE_ADDRESS",
                                        "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
-                                       "CTX_CNT", "CMDLINE STRING"))
+                                       "CTX_CNT", "STATE", "CMDLINE STRING"))
 
         node_addr = dump.read('kgsl_driver.process_list.next')
         list_elem_offset = dump.field_offset(
@@ -1088,6 +1093,9 @@ class GpuParser_510(RamParser):
         ctxt_count = dump.read_structure_field(kgsl_private_base_addr,
                                                'struct kgsl_process_private',
                                                'ctxt_count')
+        state = dump.read_structure_field(kgsl_private_base_addr,
+                                          'struct kgsl_process_private',
+                                          'state')
         cmdline_offset = dump.field_offset('struct kgsl_process_private',
                                            'cmdline')
         cmdline_string = dump.read_cstring(dump.read_pointer(
@@ -1098,7 +1106,7 @@ class GpuParser_510(RamParser):
             str(upid), str(pname), hex(kgsl_private_base_addr),
             hex(kgsl_pagetable_address), str_convert_to_kb(kgsl_mem),
             str_convert_to_kb(dmabuf_mem), str(ctxt_count),
-            str(cmdline_string)))
+            hex(state), str(cmdline_string)))
 
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20}'
@@ -1227,7 +1235,7 @@ class GpuParser_510(RamParser):
             self.writeln('Dumping ' + str_convert_to_kb(size) +
                          ' starting from ' + strhex(hostptr) +
                          ' to gmu_trace.bin')
-            data = self.ramdump.read_binarystring(hostptr, size)
+            data = self.ramdump.get_bin_data(hostptr, size)
             file.write(data)
             file.close()
 
