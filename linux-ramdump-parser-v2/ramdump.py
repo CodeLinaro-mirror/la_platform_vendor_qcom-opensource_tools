@@ -2381,9 +2381,14 @@ class RamDump():
                 ###
                 if (sym_name is None or mod_tbl_ent.name is None):
                     continue
-                if sym_addr:
-                    # when sym_addr is 0, it means the symbol is undefined
-                    # will not add undefined symbols here to avoid address 0x0
+                """
+                see include/uapi/linux/elf.h
+                #define STT_FUNC    2
+                ...
+                #define ELF_ST_TYPE(x)		((x) & 0xf)
+                """
+                if st_info & 0xf == 2:
+                    # only add FUNC type symbols to avoid built-in symbols
                     # being treated as belonging to a particular kernel module
                     mod_tbl_ent.kallsyms_table.append(
                         (sym_addr, sym_name + '[' + mod_tbl_ent.name + ']', sym_type, i,
