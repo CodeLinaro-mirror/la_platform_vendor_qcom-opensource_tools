@@ -996,7 +996,13 @@ class RamDump():
             else: # for arm32
                 self.va_bits = 32
         try:
-            self.page_shift = int(self.get_config_val("CONFIG_ARM64_PAGE_SHIFT"))
+            page_shift_config = self.get_config_val("CONFIG_PAGE_SHIFT")
+            if page_shift_config is None:
+                page_shift_config = self.get_config_val("CONFIG_ARM64_PAGE_SHIFT")
+            if page_shift_config is not None:
+                self.page_shift = int(page_shift_config)
+            else:
+                self.page_shift = 12
         except:
             self.page_shift = 12
         try:
