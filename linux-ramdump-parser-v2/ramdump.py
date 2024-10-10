@@ -773,6 +773,7 @@ class RamDump():
         self.gdbmi_hyp = None
         self.arm64 = options.arm64
         self.logcat_limit_time = options.logcat_limit_time
+        self.ftrace_limit_time = options.ftrace_limit_time
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
@@ -1028,7 +1029,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
-                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                if self.address_of('__start_init_task') is not None:
+                    self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                else:
+                    self.thread_size = self.address_of('__end_init_stack') - self.address_of('__start_init_stack')
             else:
                 self.page_offset = 0xffffffc000000000
                 self.thread_size = 16384
@@ -1531,7 +1535,6 @@ class RamDump():
                     self.HCR_EL2))
                     startup_script.write('Data.Set SPR:0x34212 %Quad 0x{0:x}\n'.format(
                     self.VTCR_EL2))
-                    startup_script.write('R.S M 5\n')
                 else:
                     startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
                         self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
@@ -1563,8 +1566,8 @@ class RamDump():
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
 
-                    startup_script.write('Register.Set NS 1\n')
-                    startup_script.write('Register.Set CPSR 0x1C5\n')
+                startup_script.write('Register.Set NS 1\n')
+                startup_script.write('Register.Set CPSR 0x1C5\n')
             else:
                 # ARM-32: MMU is enabled by default on most platforms.
                 mmu_enabled = 1
