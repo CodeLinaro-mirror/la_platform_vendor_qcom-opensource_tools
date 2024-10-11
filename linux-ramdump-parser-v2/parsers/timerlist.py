@@ -1,6 +1,6 @@
 # Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -45,7 +45,15 @@ class TimerList(RamParser) :
             self.HZ = 100.0
 
         if (major, minor) >= (4, 9):
-            self.vectors = {'vectors': 512}
+            # the wheel size is defined in kernel/time/timer.c:
+            # the WHEEL_SIZE is LVL_SIZE * LVL_DEPTH
+            # LVL_SIZE is 64
+            # if HZ > 100
+            #   define LVL_DEPTH	9
+            # else
+            #   define LVL_DEPTH	8
+            # endif
+            self.vectors = {'vectors': 9 * 64 if self.HZ > 100.0 else 8 * 64}
             self.timer_jiffies = 'clk'
             self.tvec_base = 'struct timer_base'
             self.tvec_bases = 'timer_bases'

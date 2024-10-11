@@ -773,6 +773,7 @@ class RamDump():
         self.gdbmi_hyp = None
         self.arm64 = options.arm64
         self.logcat_limit_time = options.logcat_limit_time
+        self.ftrace_limit_time = options.ftrace_limit_time
         self.ndk_compatible = False
         self.lookup_table = []
         self.ko_file_names = []
@@ -1004,9 +1005,7 @@ class RamDump():
             self.pgtable_levels = 3
         self.pfn_range = None
         self.vmemmap = None
-
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
-        self.thread_maxcount = len(self.ebi_files)
         # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
         # Virtual address of the variable 'kimage_voffset'
@@ -1028,7 +1027,10 @@ class RamDump():
         if self.arm64:
             if self.get_kernel_version() >= (5, 4):
                 self.page_offset = -(1 << self.va_bits) % (1 << 64)
-                self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                if self.address_of('__start_init_task') is not None:
+                    self.thread_size = self.address_of('__end_init_task') - self.address_of('__start_init_task')
+                else:
+                    self.thread_size = self.address_of('__end_init_stack') - self.address_of('__start_init_stack')
             else:
                 self.page_offset = 0xffffffc000000000
                 self.thread_size = 16384
@@ -1413,7 +1415,6 @@ class RamDump():
             if info is not None:
                 if len(info.ebi_files) > 0:
                     self.ebi_files = info.ebi_files
-                    self.thread_maxcount = len(self.ebi_files)
                     self.phys_offset = self.ebi_files[0][1]
                     if self.get_hw_id():
                         for (f, start, end, filename) in self.ebi_files:
@@ -1531,7 +1532,6 @@ class RamDump():
                     self.HCR_EL2))
                     startup_script.write('Data.Set SPR:0x34212 %Quad 0x{0:x}\n'.format(
                     self.VTCR_EL2))
-                    startup_script.write('R.S M 5\n')
                 else:
                     startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
                         self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
@@ -1563,8 +1563,8 @@ class RamDump():
                         startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
                         startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
 
-                    startup_script.write('Register.Set NS 1\n')
-                    startup_script.write('Register.Set CPSR 0x1C5\n')
+                startup_script.write('Register.Set NS 1\n')
+                startup_script.write('Register.Set CPSR 0x1C5\n')
             else:
                 # ARM-32: MMU is enabled by default on most platforms.
                 mmu_enabled = 1
@@ -1869,7 +1869,7 @@ class RamDump():
         kimage_voffset = 0
         phys_offset = 0
         from concurrent import futures
-        max_workers = max(len(bfiles), 8)
+        max_workers = min(len(bfiles), self.thread_maxcount)
         self.executor = futures.ThreadPoolExecutor(max_workers)
         self.enable_multithread(max_workers, self.executor._thread_name_prefix)
         lock = threading.Lock()
@@ -1956,23 +1956,38 @@ class RamDump():
         Third step:
               check if linux_banner read from DDR == linux_banner from vmlinux
         '''
-        ## First step, calculate kaslr_offset and kimage_voffset
+        kimage_voffset = None
+        ###********* First step, calculate kaslr_offset and kimage_voffset *********
         if self.arm64:
-            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
             if kaslr_offset != None:
-                kimage_voffset = self.__kimage_vaddr_var_va  + kaslr_offset - kimage_vaddr_var_phy
-            else:
+                ## kaslr_offset=0 means kaslr feature was disabled
+                ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
+                ## kaslr_offset=None need to be calculated
+                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
+            elif self.__kimage_vaddr_var_va != None:
+                ## calculte depends on kimage_vaddr variable which should exist
+                kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
                 kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
                 if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
                     kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
                     kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
-                else:
-                    raise Exception("!!! Determine kaslr_voffset failed")
+            elif self.__kimage_voffset_var_va != None:
+                ## calculte depends on kimage_voffset variable which should exist
+                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+                if kimage_voffset_tmp is not None:
+                    kimage_voffset = kimage_voffset_tmp
+                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
+                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
         else:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
                 #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
+        if kimage_voffset is None or kaslr_offset is None:
+            raise Exception("!!! Determine kimage_voffset failed")
+        ###********* First step end *********
 
         '''print_out_str(f" kaslr_offset {kaslr_offset:x}, kimage_voffset {kimage_voffset:x}
             phys_offset {phys_offset:x} self.__kimage_vaddr_va {self.__kimage_vaddr_va:x}")'''
@@ -3668,14 +3683,14 @@ class RamDump():
         var_type, vsize, temp_name = self.__get_type_info(the_type)
         if vsize is None:
             vsize = size
-        data = self.__get_bin_data(addr, vsize)
+        data = self.get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
             return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
             return self.__object_value(var_type, data, 0, temp_name, addr)
 
-    def __get_bin_data(self, addr, size):
+    def get_bin_data(self, addr, size):
         """
         Function to return binary data of 'size' bytes read
         from the given address.
