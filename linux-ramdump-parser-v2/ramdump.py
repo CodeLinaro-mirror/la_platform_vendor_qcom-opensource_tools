@@ -1007,7 +1007,6 @@ class RamDump():
         self.vmemmap = None
 
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
-        self.thread_maxcount = len(self.ebi_files)
         # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
         # Virtual address of the variable 'kimage_voffset'
@@ -1417,7 +1416,6 @@ class RamDump():
             if info is not None:
                 if len(info.ebi_files) > 0:
                     self.ebi_files = info.ebi_files
-                    self.thread_maxcount = len(self.ebi_files)
                     self.phys_offset = self.ebi_files[0][1]
                     if self.get_hw_id():
                         for (f, start, end, filename) in self.ebi_files:
@@ -1872,7 +1870,7 @@ class RamDump():
         kimage_voffset = 0
         phys_offset = 0
         from concurrent import futures
-        max_workers = max(len(bfiles), 8)
+        max_workers = min(len(bfiles), self.thread_maxcount)
         self.executor = futures.ThreadPoolExecutor(max_workers)
         self.enable_multithread(max_workers, self.executor._thread_name_prefix)
         lock = threading.Lock()
@@ -1959,18 +1957,35 @@ class RamDump():
         Third step:
               check if linux_banner read from DDR == linux_banner from vmlinux
         '''
+
+        kimage_voffset = None
         ## First step, calculate kaslr_offset and kimage_voffset
         if self.arm64:
-            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
-            if kaslr_offset != None:
-                kimage_voffset = self.__kimage_vaddr_var_va  + kaslr_offset - kimage_vaddr_var_phy
-            else:
-                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
-                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
-                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
-                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
+            if self.__kimage_vaddr_var_va is not None:
+                kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
+                if kaslr_offset != None:
+                    kimage_voffset = self.__kimage_vaddr_var_va  + kaslr_offset - kimage_vaddr_var_phy
                 else:
-                    raise Exception("!!! Determine kaslr_voffset failed")
+                    kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
+                    if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
+                        kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
+                        kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
+                    else:
+                        raise Exception("!!! Determine kaslr_offset, kimage_voffset failed")
+            else:
+                kimage_voffset_va = self.address_of('kimage_voffset')
+                if kimage_voffset_va:
+                    kimage_voffset_pa = self.phys_offset + kimage_voffset_va - self.get_kimage_vaddr()
+                    kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+                    if kimage_voffset_tmp is not None:
+                        kimage_voffset = kimage_voffset_tmp
+                        kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                        if kimage_voffset_va_kaslr >= kimage_voffset_va:
+                            kaslr_offset = kimage_voffset_va_kaslr - kimage_voffset_va
+                        else:
+                            raise Exception("!!! Determine kimage_voffset failed")
+                if kimage_voffset is None:
+                    raise Exception("!!! Determine kimage_voffset failed")
         else:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
@@ -3671,14 +3686,14 @@ class RamDump():
         var_type, vsize, temp_name = self.__get_type_info(the_type)
         if vsize is None:
             vsize = size
-        data = self.__get_bin_data(addr, vsize)
+        data = self.get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
             return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
             return self.__object_value(var_type, data, 0, temp_name, addr)
 
-    def __get_bin_data(self, addr, size):
+    def get_bin_data(self, addr, size):
         """
         Function to return binary data of 'size' bytes read
         from the given address.
