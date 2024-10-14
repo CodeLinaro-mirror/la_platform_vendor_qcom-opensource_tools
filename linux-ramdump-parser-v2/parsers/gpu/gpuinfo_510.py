@@ -204,18 +204,24 @@ class GpuParser_510(RamParser):
         soptimestamp = dump.read_s32(hostptr + ctx_memstr_offset)
         eoptimestamp = dump.read_s32(hostptr + ctx_memstr_offset + 8)
 
+        ctxt_queue = dump.struct_field_addr(ctx_addr, 'struct adreno_context',
+                                            'gmu_context_queue')
+        gmuaddr = dump.read_structure_field(ctxt_queue, 'struct kgsl_memdesc',
+                                            'gmuaddr')
+
         self.writeln(format_str.format(context_id, str(upid), comm,
                      strhex(ctx_addr), kgsl_ctx_type[ctx_type], strhex(flags),
                      str(is_secure), priv_str, str(ktimeline_last_ts),
-                     str(soptimestamp), str(eoptimestamp)))
+                     str(soptimestamp), str(eoptimestamp), str(gmuaddr)))
 
     def parse_context_data(self, dump):
         format_str = '{0:10} {1:10} {2:20} {3:28} {4:12} ' + \
-                     '{5:12} {6:12} {7:14} {8:16} {9:14} {10:14}'
+                     '{5:12} {6:12} {7:14} {8:16} {9:14} {10:14} {11:30}'
         self.writeln(format_str.format("CTX_ID", "PID", "PROCESS_NAME",
                                        "ADRENO_DRAWCTX_PTR", "CTX_TYPE",
                                        "FLAGS", "IS_SECURE", "PRIV",
-                                       "TIMELINE_LST_TS", "SOP_TS", "EOP_TS"))
+                                       "TIMELINE_LST_TS", "SOP_TS", "EOP_TS",
+                                       "CTXQ_GMU_ADDR"))
         context_idr = dump.struct_field_addr(self.devp, 'struct kgsl_device',
                                              'context_idr')
         self.rtw.walk_radix_tree(context_idr,
@@ -227,11 +233,12 @@ class GpuParser_510(RamParser):
 
     def parse_active_context_data(self, dump):
         format_str = '{0:10} {1:10} {2:20} {3:28} {4:12} ' + \
-                     '{5:12} {6:12} {7:14} {8:16} {9:14} {10:14}'
+                     '{5:12} {6:12} {7:14} {8:16} {9:14} {10:14} {11:14}'
         self.writeln(format_str.format("CTX_ID", "PID", "PROCESS_NAME",
                                        "ADRENO_DRAWCTX_PTR", "CTX_TYPE",
                                        "FLAGS", "IS_SECURE", "PRIV",
-                                       "TIMELINE_LST_TS", "SOP_TS", "EOP_TS"))
+                                       "TIMELINE_LST_TS", "SOP_TS", "EOP_TS",
+                                       "CTXQ_GMU_ADDR"))
         node_addr = dump.struct_field_addr(self.devp, 'struct adreno_device',
                                            'active_list')
         list_elem_offset = dump.field_offset('struct adreno_context',
