@@ -1839,7 +1839,7 @@ class RamDump():
                 self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset, __kaslr_offset)
             except:
                 print_out_str("Traverse DDR to find out correct kaslr_offset and phys_offset, it may take a little time to do!!")
-                hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset(__kaslr_offset)
+                hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset()
                 if hasFound:
                     self.kaslr_offset = kaslr_offset
                     self.kimage_voffset = kimage_voffset
@@ -1849,7 +1849,7 @@ class RamDump():
                     self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
 
-    def determine_phys_offset(self, __kaslr_offset):
+    def determine_phys_offset(self):
         fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
         bfiles = []
         if self.reduceddump:
@@ -1879,7 +1879,7 @@ class RamDump():
         self.executor = futures.ThreadPoolExecutor(max_workers)
         self.enable_multithread(max_workers, self.executor._thread_name_prefix)
         lock = threading.Lock()
-        threads = [self.executor.submit(self.traverse_file_thread, __kaslr_offset, _bfile, lock) for _bfile in bfiles]
+        threads = [self.executor.submit(self.traverse_file_thread, _bfile, lock) for _bfile in bfiles]
 
         for future in futures.as_completed(threads):
             isFound, kaslr_offset, kimage_voffset, phys_offset  = future.result()
@@ -1898,7 +1898,7 @@ class RamDump():
 
       read data from physical address is allowed.
     '''
-    def traverse_file_thread(self, __kaslr_offset, _bfile, thread_lock):
+    def traverse_file_thread(self, _bfile, thread_lock):
         '''
         traverse DDR file with min_image_align
         to find out correct kaslr_offset and kimage_voffset
@@ -1916,7 +1916,7 @@ class RamDump():
                     pass
 
                 try:
-                    kaslr_offset, kimage_voffset = self.validate_phys_offset(kimage_load_addr, __kaslr_offset)
+                    kaslr_offset, kimage_voffset = self.validate_phys_offset(kimage_load_addr)
                     with thread_lock:
                         self.__kaslr_found = True
                     return True, kaslr_offset, kimage_voffset, kimage_load_addr
