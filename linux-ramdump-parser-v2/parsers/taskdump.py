@@ -444,8 +444,6 @@ def do_dump_task_timestamps(ramdump):
         print_out_str('---wrote tasks to tasks_sched_stats{0}.txt'.format(i))
 
 def dump_thread_group_timestamps(ramdump, task_addr):
-    offset_thread_group = ramdump.field_offset(
-        'struct task_struct', 'thread_group')
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
     offset_task = ramdump.field_offset('struct thread_info', 'task')
