@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -61,6 +61,10 @@ class Constants:
 
     NS_PER_SEC = 1000000000
 
+    # if logd buffer size was set larger than 40M
+    # then logcat_v3 parser only parsed the last 2 chunks
+    # instead of fully parsed
+    LIMIT_LOGD_BUFFER_SZIE = 40 * 1024 * 1024
     def filter_pri_to_char(self, pri) :
         if pri == self.ANDROID_LOG_VERBOSE:
             return 'V'
@@ -523,14 +527,16 @@ class Logcat_base(RamParser, Constants):
             if filename is None:
                 return
             log_file = self.ramdump.open_file(filename)
+            write_head = False
             for section in sorted(sections.keys()):
                 if sections[section] and len(sections[section]) >= 0:
-                    if section ==0 or len(sections[section]) == 1:
+                    if not write_head:
                         head = "{} log buffer used: {}k   Max size:{}k\n".format(
                             self.LOG_NAME[log_id],
                             round(self.sizeUsed[log_id]/1024,1),
                             round(self.maxSize[log_id]/1024,1))
                         log_file.write(head)
+                        write_head = True
                     head="--------- beginning of {} section: {}\n".format(
                         self.LOG_NAME[log_id], str(section))
                     log_file.write(head)
@@ -641,11 +647,33 @@ class Logcat_base(RamParser, Constants):
                 #the first element of std::list<SerializedLogChunk>
                 first_node_addr = self.read_bytes(_addr + self.addr_length, self.addr_length)
                 list_count = self.read_bytes(_addr + self.addr_length *2, self.addr_length )
-                section = 0;
+                if not list_count or list_count <= 0:
+                    log_id += 1
+                    continue
+
+                ##### find out log buffer size
+                tail_node_addr = self.read_bytes(_addr, self.addr_length)
+                current_node = tail_node_addr + self.addr_length * 2 #-->SerializedLogChunk
+                _data_size = self.read_bytes(current_node + self.addr_length, self.addr_length)
+                self.maxSize[log_id] = _data_size * 4
+
+                print_out_str(f"Log_id:{log_id} buffer size set to {self.maxSize[log_id]/1024:.1f} KB")
+                huge_buffersize = False
+                if self.maxSize[log_id] > self.LIMIT_LOGD_BUFFER_SZIE:
+                    huge_buffersize = True
+                    print_out_str(f"      !!! WARN: Log_id:{log_id} buffer size over than " \
+                                    f"{self.LIMIT_LOGD_BUFFER_SZIE/1024:.0f} kb, will only parser last 2 chunks")
+                ##### find out log buffer size
+
                 next_node_addr = first_node_addr
                 self.sizeUsed[log_id] = 0
-                self.maxSize[log_id] = 0
+                section = 0
                 while (section < list_count):
+                    if huge_buffersize:
+                        if section < list_count - 2:
+                            section = section + 1 # next loop
+                            next_node_addr = self.read_bytes(next_node_addr + self.addr_length, self.addr_length)
+                            continue
                     current_node = next_node_addr + self.addr_length * 2 #-->SerializedLogChunk
                     write_offset = self.read_bytes(current_node + 0x10, 4) #--write_offset_
                     write_active = self.read_bytes(current_node + 0x18, 1) #--write_active_
@@ -662,7 +690,6 @@ class Logcat_base(RamParser, Constants):
                         _data_addr = self.read_bytes(current_node, self.addr_length)
                         _data_size = self.read_bytes(current_node + self.addr_length, self.addr_length)
                         self.sizeUsed[log_id] = self.sizeUsed[log_id] + write_offset
-                        self.maxSize[log_id] = _data_size * 4
                         # write_offset is data size for uncompressed secion
                         _data = self.read_binary(_data_addr, write_offset)
                     if _data:
