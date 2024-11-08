@@ -775,18 +775,35 @@ class FtraceParser_Event(object):
                         temp_data = "Error parsing bprint event entry"
                         return
         elif event_name == "print":
-                #print("ftrace_raw_entry = {0}".format(hex(ftrace_raw_entry)))
                 print_entry_ip_offset = self.ramdump.field_offset('struct print_entry' , "ip")
                 print_entry_buf_offset = self.ramdump.field_offset('struct print_entry', "buf")
-                #print_entry_fmt_offset = self.ramdump.field_offset('struct print_entry', "fmt")
                 print_ip = self.ramdump.read_word(ftrace_raw_entry + print_entry_ip_offset)
                 print_buffer = self.ramdump.read_cstring(ftrace_raw_entry + print_entry_buf_offset)
-                #print_entry_fmt = self.ramdump.read_u64(ftrace_raw_entry + print_entry_fmt_offset)
-                #print_entry_fmt_data = self.ramdump.read_cstring(print_entry_fmt)
-                #print_ip_func = self.ramdump.read_cstring(print_ip)
-
-                function = self.ramdump.get_symbol_info1(print_ip)
-                temp_data = " {4}   {0} {5}  {1:.6f}:   print:        {2} {3}\n".format(self.cpu, local_timestamp , function, print_buffer, curr_comm, lat_fmt)
+                function_lookup = self.ramdump.unwind_lookup(print_ip)
+                if function_lookup is not None:
+                    function, offset = function_lookup
+                else:
+                    function = "unknown"
+                temp_data = " {4}   {0} {5}  {1:.6f}:   print:        {2}: {3}".format(self.cpu,
+                    local_timestamp, function, print_buffer, curr_comm, lat_fmt)
+                if not print_buffer.endswith("\n"):
+                    temp_data += "\n"
+                self.ftrace_time_data[local_timestamp].append(temp_data)
+        elif event_name == "bputs":
+                entry_ip_offset = self.ramdump.field_offset('struct bputs_entry' , "ip")
+                entry_str_offset = self.ramdump.field_offset('struct bputs_entry', "str")
+                ip = self.ramdump.read_word(ftrace_raw_entry + entry_ip_offset)
+                str_addr = self.ramdump.read_pointer(ftrace_raw_entry + entry_str_offset)
+                str_buffer = self.ramdump.read_cstring(str_addr)
+                function_lookup = self.ramdump.unwind_lookup(ip)
+                if function_lookup is not None:
+                    function, offset = function_lookup
+                else:
+                    function = "unknown"
+                temp_data = " {4}   {0} {5}  {1:.6f}:   bputs:        {2}: {3}".format(self.cpu,
+                    local_timestamp, function, str_buffer, curr_comm, lat_fmt)
+                if not str_buffer.endswith("\n"):
+                    temp_data += "\n"
                 self.ftrace_time_data[local_timestamp].append(temp_data)
         else:
             event_data = self.fromat_event_map[event_name]
