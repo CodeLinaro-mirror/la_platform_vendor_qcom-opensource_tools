@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 
 import re
 import struct
@@ -260,7 +260,7 @@ class StructParser:
 
     def read_struct(self, struct_addr, type_name, attr_list=None):
         size = self.ramdump.sizeof(type_name)
-        data = getattr(self.ramdump, "_RamDump__get_bin_data")(struct_addr, size)
+        data = self.ramdump.get_bin_data(struct_addr, size)
         if not data:
             raise Exception("Error!! read_struct get None data from address 0x{} with size {}".format(
                             struct_addr, size))

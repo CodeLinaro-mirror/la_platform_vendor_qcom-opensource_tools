@@ -82,6 +82,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
 
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
+    offset_tgid = ramdump.field_offset('struct task_struct', 'tgid')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
     if ramdump.kernel_version >= (5, 14, 0):
         offset_state = ramdump.field_offset('struct task_struct', '__state')
@@ -112,6 +113,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
     for next_thread_start in ramdump.for_each_thread(task_addr):
         next_thread_comm = next_thread_start + offset_comm
         next_thread_pid = next_thread_start + offset_pid
+        next_thread_tgid = next_thread_start + offset_tgid
         next_thread_prio = next_thread_start + offset_prio
         if offset_schedinfo is not None:
             next_thread_last_arrival = next_thread_start + offset_last_arrival
@@ -137,6 +139,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
         # Task prio is an integer and it can be -1 for DL tasks.
         thread_task_prio = ctypes.c_int(thread_task_prio).value
         thread_task_pid = ramdump.read_int(next_thread_pid)
+        next_thread_tgid = ramdump.read_int(next_thread_tgid)
         if thread_task_pid is None:
             error = 1
             return
@@ -199,7 +202,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
                 panic_task_list.append([addr_stack, thread_task_name])
             task_cpu = ramdump.get_task_cpu(next_thread_start, threadinfo)
             #thread_line = thread_task_pid + task_cpu + task_state_str+ next_thread_start+thread_task_name
-            thread_line = "PID %6d cpu %1d  state %16s hex 0x%06x start 0x%x comm %32s\n" %(thread_task_pid, task_cpu,
+            thread_line = "PID %6d TGID %6d cpu %1d  state %16s hex 0x%06x start 0x%x comm %32s\n" %(thread_task_pid, next_thread_tgid, task_cpu,
                 task_state_str, task_state, next_thread_start, thread_task_name)
             if task_state != 1:
                 if not first:
@@ -226,13 +229,13 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
                 task_out.write(
                     '=====================================================\n')
                 first = 1
-            task_out.write('    Task name: {0} [affinity: 0x{11:x}] pid: {1} cpu: {2} prio: {7} start: {'
+            task_out.write('    Task name: {0:16} [affinity: 0x{11:x}] pid: {1:6} tgid: {12:6} cpu: {2} prio: {7} start: 0x{'
                            '6:x}\n    state: 0x{3:x}[{8}] exit_state: 0x{4:x}'
                            ' stack base: 0x{5:x}\n'
                            '    Last_enqueued_ts:{9:18.9f} Last_sleep_ts:{10:18.9f}\n'.format(
-                thread_task_name, thread_task_pid, task_cpu, task_state,
+                thread_task_name, thread_task_pid,  task_cpu, task_state,
                 task_exit_state, addr_stack, next_thread_start, thread_task_prio, task_state_str,
-                task_last_enqueued_ts/1000000000.0, task_last_sleep_ts/1000000000.0,thread_task_affine))
+                task_last_enqueued_ts/1000000000.0, task_last_sleep_ts/1000000000.0,thread_task_affine, next_thread_tgid))
             if task_on_cpu == 1:
                 taskhighlight_out.write("Task currently running on CPU. Please check dmesg_tz for callstack")
             else:
@@ -444,8 +447,6 @@ def do_dump_task_timestamps(ramdump):
         print_out_str('---wrote tasks to tasks_sched_stats{0}.txt'.format(i))
 
 def dump_thread_group_timestamps(ramdump, task_addr):
-    offset_thread_group = ramdump.field_offset(
-        'struct task_struct', 'thread_group')
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
     offset_task = ramdump.field_offset('struct thread_info', 'task')
