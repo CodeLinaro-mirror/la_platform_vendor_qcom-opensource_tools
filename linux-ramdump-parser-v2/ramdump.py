@@ -1970,14 +1970,7 @@ class RamDump():
                 ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
                 ## kaslr_offset=None need to be calculated
                 kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
-            elif self.__kimage_vaddr_var_va != None:
-                ## calculte depends on kimage_vaddr variable which should exist
-                kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
-                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
-                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
-                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
-                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
-            elif self.__kimage_voffset_var_va != None:
+            if self.__kimage_voffset_var_va != None and kaslr_offset == None:
                 ## calculte depends on kimage_voffset variable which should exist
                 kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
                 kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
@@ -1986,6 +1979,13 @@ class RamDump():
                     kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
                     if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
                         kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+            if self.__kimage_vaddr_var_va != None and kaslr_offset == None:
+                ## calculte depends on kimage_vaddr variable which should exist
+                kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
+                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
+                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
+                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
+                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
         else:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
