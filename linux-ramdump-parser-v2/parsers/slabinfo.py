@@ -170,6 +170,24 @@ class Slabinfo(RamParser):
     def __init__(self, *args):
         super(Slabinfo, self).__init__(*args)
         self.stackdepot = StackDepot(self.ramdump)
+        self.update_slab_flags()
+        return
+
+    def update_slab_flags(self):
+        if self.ramdump.kernel_version >= (6, 9):
+            global SLAB_RED_ZONE
+            global SLAB_POISON
+            global SLAB_STORE_USER
+            global OBJECT_POISON
+            slab_flag_list = self.ramdump.gdbmi.get_enum_lookup_table('_slab_flag_bits', 23)
+            try:
+                SLAB_RED_ZONE = 1 << slab_flag_list.index('_SLAB_RED_ZONE')
+                SLAB_POISON = 1 << slab_flag_list.index('_SLAB_POISON')
+                SLAB_STORE_USER = 1 << slab_flag_list.index('_SLAB_STORE_USER')
+                OBJECT_POISON = 1 << slab_flag_list.index('_SLAB_OBJECT_POISON')
+            except ValueError as e:
+                print_out_str("{}\n".format(str(e)))
+                pass
         return
 
     def get_free_pointer(self, ramdump, s, obj):
@@ -674,10 +692,16 @@ class Slabinfo(RamParser):
 
 
 @register_parser('--slabpoison', 'check slab poison', optional=True)
-class Slabpoison(Slabinfo):
+class Slabpoison(RamParser):
     """Note that this will NOT find any slab errors which are printed out by the
     kernel, because the slab object is removed from the freelist while being
     processed"""
+
+    def __init__(self, *args):
+        super(Slabpoison, self).__init__(*args)
+        slabinfo = Slabinfo(self.ramdump)
+        slabinfo.update_slab_flags()
+        return
 
     def print_section(self, text, addr, length, out_file):
         out_file.write('{}\n'.format(text))
