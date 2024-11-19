@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022,2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -221,7 +221,7 @@ def snapshot_gmu_mem_section(devp, dump, gpurev, file, hdr_type):
     mem_hdr.gpuaddr = gmu_mem_gpuaddr
     file.write(mem_hdr)
 
-    data = dump.read_binarystring(gmu_mem_hostptr, gmu_mem_size)
+    data = dump.get_bin_data(gmu_mem_hostptr, gmu_mem_size)
     file.write(data)
 
 
@@ -293,7 +293,7 @@ def snapshot_rb_section(devp, dump, file, rb_type):
     rb_header.id = rb_id
     file.write(rb_header)
 
-    data = dump.read_binarystring(rb_hostptr, rb_size)
+    data = dump.get_bin_data(rb_hostptr, rb_size)
     file.write(data)
 
 
