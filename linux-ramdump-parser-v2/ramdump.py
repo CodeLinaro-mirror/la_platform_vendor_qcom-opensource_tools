@@ -996,7 +996,13 @@ class RamDump():
             else: # for arm32
                 self.va_bits = 32
         try:
-            self.page_shift = int(self.get_config_val("CONFIG_ARM64_PAGE_SHIFT"))
+            page_shift_config = self.get_config_val("CONFIG_PAGE_SHIFT")
+            if page_shift_config is None:
+                page_shift_config = self.get_config_val("CONFIG_ARM64_PAGE_SHIFT")
+            if page_shift_config is not None:
+                self.page_shift = int(page_shift_config)
+            else:
+                self.page_shift = 12
         except:
             self.page_shift = 12
         try:
@@ -1833,7 +1839,7 @@ class RamDump():
                 self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset, __kaslr_offset)
             except:
                 print_out_str("Traverse DDR to find out correct kaslr_offset and phys_offset, it may take a little time to do!!")
-                hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset(__kaslr_offset)
+                hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset()
                 if hasFound:
                     self.kaslr_offset = kaslr_offset
                     self.kimage_voffset = kimage_voffset
@@ -1843,7 +1849,7 @@ class RamDump():
                     self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
 
-    def determine_phys_offset(self, __kaslr_offset):
+    def determine_phys_offset(self):
         fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
         bfiles = []
         if self.reduceddump:
@@ -1873,7 +1879,7 @@ class RamDump():
         self.executor = futures.ThreadPoolExecutor(max_workers)
         self.enable_multithread(max_workers, self.executor._thread_name_prefix)
         lock = threading.Lock()
-        threads = [self.executor.submit(self.traverse_file_thread, __kaslr_offset, _bfile, lock) for _bfile in bfiles]
+        threads = [self.executor.submit(self.traverse_file_thread, _bfile, lock) for _bfile in bfiles]
 
         for future in futures.as_completed(threads):
             isFound, kaslr_offset, kimage_voffset, phys_offset  = future.result()
@@ -1892,7 +1898,7 @@ class RamDump():
 
       read data from physical address is allowed.
     '''
-    def traverse_file_thread(self, __kaslr_offset, _bfile, thread_lock):
+    def traverse_file_thread(self, _bfile, thread_lock):
         '''
         traverse DDR file with min_image_align
         to find out correct kaslr_offset and kimage_voffset
@@ -1910,7 +1916,7 @@ class RamDump():
                     pass
 
                 try:
-                    kaslr_offset, kimage_voffset = self.validate_phys_offset(kimage_load_addr, __kaslr_offset)
+                    kaslr_offset, kimage_voffset = self.validate_phys_offset(kimage_load_addr)
                     with thread_lock:
                         self.__kaslr_found = True
                     return True, kaslr_offset, kimage_voffset, kimage_load_addr
@@ -1985,6 +1991,16 @@ class RamDump():
             if not self.__kimage_voffset_var_va:
                 #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
+            else:
+                ## calculte depends on kimage_voffset variable which should exist
+                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+                if kimage_voffset_tmp is not None:
+                    kimage_voffset = kimage_voffset_tmp
+                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
+                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+
         if kimage_voffset is None or kaslr_offset is None:
             raise Exception("!!! Determine kimage_voffset failed")
         ###********* First step end *********
@@ -2381,9 +2397,14 @@ class RamDump():
                 ###
                 if (sym_name is None or mod_tbl_ent.name is None):
                     continue
-                if sym_addr:
-                    # when sym_addr is 0, it means the symbol is undefined
-                    # will not add undefined symbols here to avoid address 0x0
+                """
+                see include/uapi/linux/elf.h
+                #define STT_FUNC    2
+                ...
+                #define ELF_ST_TYPE(x)		((x) & 0xf)
+                """
+                if st_info & 0xf == 2:
+                    # only add FUNC type symbols to avoid built-in symbols
                     # being treated as belonging to a particular kernel module
                     mod_tbl_ent.kallsyms_table.append(
                         (sym_addr, sym_name + '[' + mod_tbl_ent.name + ']', sym_type, i,
