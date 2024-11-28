@@ -1015,6 +1015,9 @@ class RamDump():
             self.pgtable_levels = int(self.get_config_val("CONFIG_PGTABLE_LEVELS"))
         except:
             self.pgtable_levels = 3
+        self.vabits_actual = self.get_vabits_actual()
+        print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
+
         self.pfn_range = None
         self.vmemmap = None
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
@@ -1149,6 +1152,23 @@ class RamDump():
         self.set_available_cores()
         self.arm_smmu_v12 = self.is_arm_smmu_v12()
 
+    def pgtable_l5_enabled(self):
+        return self.pgtable_levels == 5 and self.vabits_actual == self.va_bits
+
+    def read_tcr(self):
+        '''
+        T1SZ, bits [21:16] The size offset of the memory region addressed by TTBR1_EL1.
+        The region size is 2(64-T1SZ) bytes.
+        '''
+        return 16 << 16
+
+    def get_vabits_actual(self):
+        if self.va_bits > 48:
+            vabits_actual = (64 - ((self.read_tcr() >> 16) & 63))
+        else:
+            vabits_actual = self.va_bits
+
+        return vabits_actual
 
     def get_section_address(self,section):
         """
