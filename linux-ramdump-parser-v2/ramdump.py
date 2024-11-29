@@ -782,6 +782,7 @@ class RamDump():
         self.available_cores = []
         self.skip_TLB_Cache_parse = options.skip_TLB_Cache_parse
         self.module_layout_dict = {}
+        self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -1991,6 +1992,16 @@ class RamDump():
             if not self.__kimage_voffset_var_va:
                 #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
+            else:
+                ## calculte depends on kimage_voffset variable which should exist
+                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+                if kimage_voffset_tmp is not None:
+                    kimage_voffset = kimage_voffset_tmp
+                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
+                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+
         if kimage_voffset is None or kaslr_offset is None:
             raise Exception("!!! Determine kimage_voffset failed")
         ###********* First step end *********
@@ -2524,6 +2535,12 @@ class RamDump():
         sym_dump_file.close()
 
     def address_of(self, symbol):
+        cached_data = self.cached_data['addressof']
+        kaslr_tmp = self.get_kaslr_offset()
+        if kaslr_tmp in cached_data:
+            if symbol in cached_data[kaslr_tmp]:
+                return cached_data[kaslr_tmp][symbol]
+
         """Returns the address of a symbol.
 
         :param symbol: name of the symbol.
@@ -2536,12 +2553,18 @@ class RamDump():
         >>> hex(dump.address_of('linux_banner'))
         '0xffffffc000c7a0a8L'
         """
+        if kaslr_tmp not in cached_data:
+            cached_data[kaslr_tmp] = {}
         try:
-            return self.gdbmi.address_of(symbol)
+            r = self.gdbmi.address_of(symbol)
+            cached_data[kaslr_tmp][symbol] = r
+            return r
         except gdbmi.GdbMIException:
             if self.hyp:
                 try:
-                    return self.gdbmi_hyp.address_of(symbol)
+                    r = self.gdbmi_hyp.address_of(symbol)
+                    cached_data[kaslr_tmp][symbol] = r
+                    return r
                 except gdbmi.GdbMIException:
                     pass
 
@@ -2564,12 +2587,20 @@ class RamDump():
                     pass
 
     def sizeof(self, the_type):
+        cached_data = self.cached_data['sizeof']
+        if the_type in cached_data:
+            return cached_data[the_type]
+
         try:
-            return self.gdbmi.sizeof(the_type)
+            r = self.gdbmi.sizeof(the_type)
+            cached_data[the_type] = r
+            return r
         except gdbmi.GdbMIException:
             if self.hyp:
                 try:
-                    return self.gdbmi_hyp.sizeof(the_type)
+                    r = self.gdbmi_hyp.sizeof(the_type)
+                    cached_data[the_type] = r
+                    return r
                 except gdbmi.GdbMIException:
                     pass
 
@@ -2601,21 +2632,27 @@ class RamDump():
                     pass
 
     def get_symbol_info1(self,addr):
+        cached_data = self.cached_data['addrtosym']
+        if addr in cached_data:
+            return cached_data[addr]
+
         kaslr = self.get_kaslr_offset()
         if kaslr:
             addr1 = addr - kaslr
         else:
             addr1 = addr
-        #print "hex of address in get_symbol_info1 {0}".format(hex(addr1))
         addr1, desc = self.step_through_jump_table(addr1)
         symbol_obj =  self.gdbmi.get_symbol_info(addr1)
         module = symbol_obj.section.split('\\\\')[-1]
         if self.minidump:
             if module == 'vmlinux':
-                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset)
+                symbol_desc = symbol_obj.symbol + desc + " " + str(symbol_obj.offset)
             else:
-                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset) + " [" + module + "]"
-        return symbol_obj.symbol + desc
+                symbol_desc = symbol_obj.symbol + desc + " " + str(symbol_obj.offset) + " [" + module + "]"
+        else:
+            symbol_desc = symbol_obj.symbol + desc
+        cached_data[addr] = symbol_desc
+        return symbol_desc
 
     def type_of(self, symbol):
         """
@@ -2631,6 +2668,11 @@ class RamDump():
             pass
 
     def field_offset(self, the_type, field):
+        cached_data = self.cached_data['fieldoffset']
+        if the_type in cached_data:
+            if field in cached_data[the_type]:
+                return cached_data[the_type][field]
+
         """Gets the offset of a field from the base of its containing struct.
 
         This can be useful when reading struct fields, although you should
@@ -2642,12 +2684,18 @@ class RamDump():
         >>> dump.field_offset('struct device', 'bus')
         168
         """
+        if the_type not in cached_data:
+            cached_data[the_type] = {}
         try:
-            return self.gdbmi.field_offset(the_type, field)
+            r = self.gdbmi.field_offset(the_type, field)
+            cached_data[the_type][field] = r
+            return r
         except gdbmi.GdbMIException:
             if self.hyp:
                 try:
-                    return self.gdbmi_hyp.field_offset(the_type, field)
+                    r = self.gdbmi_hyp.field_offset(the_type, field)
+                    cached_data[the_type][field] = r
+                    return r
                 except gdbmi.GdbMIException:
                     pass
 
