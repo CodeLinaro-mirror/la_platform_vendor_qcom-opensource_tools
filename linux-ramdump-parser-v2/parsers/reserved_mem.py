@@ -46,19 +46,30 @@ def print_reserved_mem(ramdump):
     output_file.close()
 
 def print_tasklet_info(ramdump, core, tasklet):
-    print_out_str("Pending Tasklet info for {0}:".format(tasklet))
     tasklet_vec_addr = ramdump.address_of(tasklet)
     tasklet_head = tasklet_vec_addr + ramdump.per_cpu_offset(core)
     tasklet_head = ramdump.read_word(tasklet_head)
     next_offset = ramdump.field_offset('struct tasklet_struct', 'next')
     func_offset = ramdump.field_offset('struct tasklet_struct', 'func')
+    count_offset = ramdump.field_offset('struct tasklet_struct', 'count')
+    if tasklet_head != 0x0:
+        print_out_str("Pending Tasklet info for {0}:".format(tasklet))
+
     while (tasklet_head != 0x0):
+        print_out_str("struct tasklet_struct: 0x{0:x}:".format(tasklet_head))
         tasklet_func_addr = ramdump.read_word(tasklet_head + func_offset)
         tasklet_func = ramdump.unwind_lookup(tasklet_func_addr)
         if tasklet_func is None:
             tasklet_func = "Dynamic module/symbol not found"
-        print_out_str("{0:x} -> {1}".format(tasklet_func_addr, tasklet_func))
-        tasklet_head = ramdump.read_word(tasklet_head+next_offset)
+        else:
+            tasklet_func = tasklet_func[0]
+        print_out_str("\tfunc : 0x{:<16x} -> {}".format(tasklet_func_addr, tasklet_func))
+        count = ramdump.read_int(tasklet_head + count_offset)
+        if count != 0:
+            print_out_str("\tcount: 0x{:<16x} -> this tasklet is disabled".format(count))
+        else:
+            print_out_str("\tcount: 0x{:<16x} -> this tasklet is enabled".format(count))
+        tasklet_head = ramdump.read_word(tasklet_head + next_offset)
 
 
 def parse_softirq_stat(ramdump):
@@ -78,7 +89,7 @@ def parse_softirq_stat(ramdump):
                                 irq_stat, 'irq_cpustat_t', '__softirq_pending')
         pending = ""
         pos = sofrirq_name_arr_size - 1
-        while pos:
+        while pos >= 0:
             if softirq_pending & (1 << pos):
                 flag_addr = ramdump.read_word(ramdump.array_index(
                     softirq_name_addr, "char *", pos))
@@ -88,9 +99,11 @@ def parse_softirq_stat(ramdump):
             pos = pos - 1
         if pending == "":
             pending = "None"
+        else:
+            pending = pending.rstrip().rstrip("|")
         print_out_str("core {0} : __softirq_pending = {1}".format(
                                 index, pending))
-        if "TASKLET" in pending:
+        if "TASKLET" in pending or "HI" in pending:
             print_tasklet_info(ramdump, index, 'tasklet_vec')
             print_tasklet_info(ramdump, index, 'tasklet_hi_vec')
 
