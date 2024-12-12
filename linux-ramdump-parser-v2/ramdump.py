@@ -1991,6 +1991,16 @@ class RamDump():
             if not self.__kimage_voffset_var_va:
                 #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
+            else:
+                ## calculte depends on kimage_voffset variable which should exist
+                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+                if kimage_voffset_tmp is not None:
+                    kimage_voffset = kimage_voffset_tmp
+                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
+                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+
         if kimage_voffset is None or kaslr_offset is None:
             raise Exception("!!! Determine kimage_voffset failed")
         ###********* First step end *********
