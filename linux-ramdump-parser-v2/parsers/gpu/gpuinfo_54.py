@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -312,7 +312,7 @@ class GpuParser_54(RamParser):
             filename = 'gpu_parser/globals/{0}.bin'.format(
                 name + '_' + hex(kgsl_global_memdesc_base))
             file = dump.open_file(filename, 'wb')
-            data = dump.read_binarystring(hostptr, size)
+            data = dump.get_bin_data(hostptr, size)
             file.write(data)
             file.close()
 
@@ -1379,7 +1379,7 @@ class GpuParser_54(RamParser):
             self.writeln('Dumping ' + str_convert_to_kb(size) +
                          ' starting from ' + strhex(hostptr) +
                          ' to gmu_trace.bin')
-            data = self.ramdump.read_binarystring(hostptr, size)
+            data = self.ramdump.get_bin_data(hostptr, size)
             file.write(data)
             file.close()
 

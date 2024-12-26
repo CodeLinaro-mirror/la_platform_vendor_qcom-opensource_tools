@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -148,6 +148,7 @@ def get_vmemmap(ramdump):
     # kernel/arch/arm64/include/asm/memory.h
     nlevels = ramdump.pgtable_levels
     page_shift = ramdump.page_shift
+    page_offset = ramdump.page_offset
     va_bits = ramdump.va_bits
     pgdir_shift = ramdump.mmu.pgdir_shift
     pud_shift = pgdir_shift
@@ -163,24 +164,35 @@ def get_vmemmap(ramdump):
 
     if (ramdump.kernel_version < (3, 18, 31)):
         # vmalloc_end = 0xFFFFFFBC00000000
-        vmemmap = ramdump.page_offset - pud_size - vmemmap_size
+        vmemmap = page_offset - pud_size - vmemmap_size
     elif (ramdump.kernel_version < (4, 9, 0)):
         # for version >= 3.18.31,
         # vmemmap is shifted to base addr (0x80000000) pfn.
-        vmemmap = (ramdump.page_offset - pud_size - vmemmap_size -
+        vmemmap = (page_offset - pud_size - vmemmap_size -
                    memstart_offset)
-
+    elif ramdump.kernel_version >= (6, 9):
+        SZ_1G = 1 << 30
+        if va_bits > 48:
+            va_bits_min = 47 if page_shift == 14 else 48
+        else:
+            va_bits_min = va_bits
+        page_end = -(1 << (va_bits_min - 1)) % (1 << 64)
+        vmemmap_range = page_end - page_offset
+        vmemmap_size = (vmemmap_range >> page_shift) * spsize
+        vmemmap_end = -(SZ_1G) % (1 << 64)
+        vmemstart = vmemmap_end - vmemmap_size
+        vmemmap = vmemstart - (memstart_addr >> page_shift) * spsize
     elif ramdump.kernel_version >= (5, 15):
         struct_page_max_shift = int(math.log2(spsize))
         vmemmap_shift = page_shift - struct_page_max_shift
         vmemstart = -(1 << (va_bits - vmemmap_shift)) % (1 << 64)
         vmemmap = vmemstart - (memstart_addr >> page_shift)*spsize
-
     elif ramdump.kernel_version >= (5, 10):
         struct_page_max_shift = int(math.log2(spsize))
         SZ_2M = 0x00200000
-        page_end = -(1 << (va_bits - 1)) % (1 << 64)
-        vmemsize = ((page_end - ramdump.page_offset) >> (page_shift - struct_page_max_shift))
+        va_bits_min = 48 if va_bits > 48 else va_bits
+        page_end = -(1 << (va_bits_min - 1)) % (1 << 64)
+        vmemsize = ((page_end - page_offset) >> (page_shift - struct_page_max_shift))
         vmemstart = ((-vmemsize) % (1 << 64)) - SZ_2M
         vmemmap = vmemstart - (memstart_addr >> page_shift)*spsize
     elif ramdump.kernel_version >= (5, 4, 0):
@@ -190,7 +202,7 @@ def get_vmemmap(ramdump):
         # vmemmap_size = ( 1 << (39 - 12 - 1 + 6))
         struct_page_max_shift = int(math.log2(spsize))
         vmemmap_size = ( 1 << (va_bits - page_shift - 1 + struct_page_max_shift))
-        vmemmap = ramdump.page_offset - vmemmap_size - memstart_offset
+        vmemmap = page_offset - vmemmap_size - memstart_offset
 
     ramdump.vmemmap = vmemmap
     return vmemmap
