@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1251,6 +1251,19 @@ class GpuParser_510(RamParser):
                                                         'struct kgsl_device',
                                                         'snapshot_faultcount')
         self.writeln(str(snapshot_faultcount) + ' snapshot fault(s) detected.')
+
+        force_panic_addr = dump.struct_field_addr(self.devp,
+                                                  'struct kgsl_device',
+                                                  'force_panic')
+        force_panic = dump.read_bool(force_panic_addr)
+        gmu_core_addr = dump.struct_field_addr(self.devp,
+                                               'struct kgsl_device',
+                                               'gmu_core')
+        gf_panic = dump.read_structure_field(gmu_core_addr,
+                                             'struct gmu_core_device',
+                                             'gf_panic')
+        self.writeln('force_panic: ' + str(force_panic))
+        self.writeln('gf_panic: ' + str(gf_panic))
 
         if snapshot_faultcount == 0:
             self.writeln('No GPU hang, skipping snapshot dumping.')
