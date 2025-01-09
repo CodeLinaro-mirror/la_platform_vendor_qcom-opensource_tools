@@ -1152,9 +1152,11 @@ class GpuParser_510(RamParser):
             return
 
         gpucore = dump.read_structure_field(self.devp,
-                                        'struct adreno_device', 'gpucore')
+                                            'struct adreno_device',
+                                            'gpucore')
         gpurev = dump.read_structure_field(gpucore,
-                                       'struct adreno_gpu_core', 'gpurev')
+                                           'struct adreno_gpu_core',
+                                           'gpurev')
         if gpurev >= 0x80000:
             gmu_device = 'struct gen8_gmu_device'
             gmu_dev_addr = dump.sibling_field_addr(self.devp,
