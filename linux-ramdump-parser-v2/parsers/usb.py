@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 
 import re
 
@@ -352,8 +352,24 @@ class UsbReader(RamParser):
         """
         usb_bus = self.ramdump.read('usb_bus_type')
         usb_type = self.ramdump.read('usb_device_type')
-        p = self.ramdump.read_pointer(
-            self.ramdump.struct_field_addr(usb_bus, 'struct bus_type', 'p'))
+        bus_type = self.ramdump.struct_field_addr(usb_bus, 'struct bus_type', 'p')
+        if bus_type == None:
+            kobj_offset = self.ramdump.field_offset('struct kobject', 'entry')
+            kset_offset = self.ramdump.field_offset('struct kset', 'kobj')
+            p_offset = self.ramdump.field_offset('struct subsys_private', 'subsys')
+            subsys_bus_offset = self.ramdump.field_offset('struct subsys_private', 'bus')
+            bus_kset_entry = self.ramdump.struct_field_addr(self.ramdump.read('bus_kset'), 'struct kset', 'list')
+            bus_next_entry = self.ramdump.read_pointer(bus_kset_entry)
+            while bus_kset_entry != bus_next_entry:
+                kobj = bus_next_entry - kobj_offset
+                kset = kobj - kset_offset
+                subsys = kset - p_offset
+                bus = self.ramdump.read_pointer(subsys + subsys_bus_offset)
+                if bus == usb_bus:
+                    bus_type = subsys
+                    break
+                bus_next_entry = self.ramdump.read_pointer(bus_next_entry)
+        p = self.ramdump.read_pointer(bus_type)
         list_h = self.ramdump.struct_field_addr(self.ramdump.struct_field_addr(
             p, 'struct subsys_private', 'klist_devices'), 'struct klist', 'k_list')
         next_dv = self.ramdump.read_pointer(list_h)
@@ -879,6 +895,7 @@ class UsbReader(RamParser):
                                                                    'wTotalLength')
             xhci_cmd_ring_offset = self.ramdump.field_offset('struct xhci_hcd', 'cmd_ring')
             xhci_evt_ring_offset = self.ramdump.field_offset('struct xhci_hcd', 'event_ring')
+
             xhci_devs_offset = self.ramdump.field_offset('struct xhci_hcd', 'devs')
             xhci_virt_eps_offset = self.ramdump.field_offset('struct xhci_virt_device', 'eps')
             xhci_virt_udev_offset = self.ramdump.field_offset('struct xhci_virt_device', 'udev')
@@ -893,7 +910,14 @@ class UsbReader(RamParser):
             for xhci in xhci_addrs:
                 # Command Ring and Event Ring summaries. If in verbose mode, also print the rings
                 cmd_ring = self.ramdump.read_pointer(xhci + xhci_cmd_ring_offset)
-                event_ring = self.ramdump.read_pointer(xhci + xhci_evt_ring_offset)
+                if xhci_evt_ring_offset == None:
+                    interrupter = self.ramdump.read_pointer(self.ramdump.read_pointer(
+                        self.ramdump.struct_field_addr(xhci, 'struct xhci_hcd', 'interrupters')))
+                    xhci_evt_ring_offset = self.ramdump.field_offset('struct xhci_interrupter', 'event_ring')
+
+                    event_ring = self.ramdump.read_pointer(interrupter + xhci_evt_ring_offset)
+                else:
+                    event_ring = self.ramdump.read_pointer(xhci + xhci_evt_ring_offset)
                 print(f"xchi_hcd: {hex(xhci)}\n", file=self.outfile)
 
                 if cmd_ring != 0:
