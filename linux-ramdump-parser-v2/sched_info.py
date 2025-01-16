@@ -198,7 +198,6 @@ def dump_cpufreq_data(ramdump):
         gov = ramdump.read_structure_field(cpu_data_addr, 'struct cpufreq_policy', 'governor')
         gov_name = ramdump.read_cstring(gov + ramdump.field_offset('struct cpufreq_governor', 'name'))
 
-        cap_orig = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity_orig')
         curr_cap = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity')
         # thermal_pressure is architecture(ARM/ARM64) and kconfig(CONFIG_ARM_CPU_TOPOLOGY) related
         if (ramdump.kernel_version >= (5, 10, 0)):
@@ -228,6 +227,12 @@ def dump_cpufreq_data(ramdump):
             anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
         try:
             arch_scale = ramdump.read_int(ramdump.address_of('cpu_scale') + ramdump.per_cpu_offset(i))
+            cap_orig = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity_orig')
+            # INFO: Since kernel v6.7 merged the upstream kernel commit 7bc263840bc3 ("sched/topology: Consolidate
+            #       and clean up access to a CPU's max compute capacity"), cpu_capacity_orig has been removed from
+            #       rq and replaced by arch_scale_cpu_capacity.
+            if cap_orig is None:
+                cap_orig = arch_scale
             print_out_str("\tCapacity: capacity_orig:{0}, cur_cap:{1}, arch_scale:{2}\n".format(cap_orig, curr_cap, arch_scale))
         except Exception as err:
             print(err)
