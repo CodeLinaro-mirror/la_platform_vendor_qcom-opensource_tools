@@ -616,9 +616,10 @@ class CheckForPanic(RamParser):
     def parse(self):
         global panic_task_list
         addr = self.ramdump.address_of('in_panic')
+        if addr is None:
+            return;
 
         result = self.ramdump.read_word(addr)
-
         if result == 1:
             print_out_str('-------------------------------------------------')
             print_out_str('[!] KERNEL PANIC detected!')
