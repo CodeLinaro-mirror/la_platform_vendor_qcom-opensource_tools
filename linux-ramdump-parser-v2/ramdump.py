@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -39,6 +39,8 @@ from mm import mm_init
 from register import Register
 from collections import namedtuple
 import shlex
+import glob
+
 SP = 13
 LR = 14
 PC = 15
@@ -62,6 +64,13 @@ primary_types = ["int", "unsigned", "unsigned int", "signed", "signed int",
                  "s8", "s16", "s32", "s64", "uint8_t", "uint16_t", "uint64_t", "__u32", "size_t", "_Bool", "boolean"
                  ]
 storage_classes = ["static", "volatile", "extern", "register", "auto", "const"]
+
+SVM_ID   = 45
+OEMVM_ID = 49
+VCPU_CMM_FILES = [
+    "corevcpu*_vm_%d_regs.cmm" % SVM_ID,
+    "corevcpu*_vm_%d_regs.cmm" % OEMVM_ID
+]
 
 class InvalidDatatype(Exception):
     """
@@ -962,23 +971,30 @@ class RamDump():
         if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
-            hyp_dump.determine_kaslr()
-            self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
-            hyp_dump.get_trace_phy()
-            if hyp_dump.ttbr1 is None:
-                print_out_str('!!! Could not find {}'.format(self.svm))
-                print_out_str('!!! Exiting now')
-                sys.exit(1)
-            self.ttbr = hyp_dump.ttbr1
-            self.vttbr = hyp_dump.vttbr
-            self.TTBR0_EL1 = hyp_dump.TTBR0_EL1
-            self.SCTLR_EL1 = hyp_dump.SCTLR_EL1
-            self.TCR_EL1 = hyp_dump.TCR_EL1
-            self.VTCR_EL2 = hyp_dump.VTCR_EL2
-            self.HCR_EL2 = hyp_dump.HCR_EL2
-            self.ttbr_data = hyp_dump.ttbr1_data_info
-            self.vttbr_data = hyp_dump.vttbr_el2_data
-            self.s2_walk = True
+            try:
+                hyp_dump.determine_kaslr()
+                self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
+                hyp_dump.get_trace_phy()
+                self.ttbr = hyp_dump.ttbr1
+                self.vttbr = hyp_dump.vttbr
+                self.TTBR0_EL1 = hyp_dump.TTBR0_EL1
+                self.SCTLR_EL1 = hyp_dump.SCTLR_EL1
+                self.TCR_EL1 = hyp_dump.TCR_EL1
+                self.VTCR_EL2 = hyp_dump.VTCR_EL2
+                self.HCR_EL2 = hyp_dump.HCR_EL2
+                self.ttbr_data = hyp_dump.ttbr1_data_info
+                self.vttbr_data = hyp_dump.vttbr_el2_data
+                self.s2_walk = True
+                print_out_str("read vttbr from elf")
+            except:
+                pass
+            if self.vttbr is None:
+                ## read vttbr from cmm
+                self.read_from_cmm()
+                if self.vttbr is None:
+                    print_out_str('!!! Could not find {}'.format(self.svm))
+                    print_out_str('!!! Exiting now')
+                    sys.exit(1)
 
         self.config = []
         self.config_dict = {}
@@ -1151,7 +1167,6 @@ class RamDump():
         mm_init(self)
         self.set_available_cores()
         self.arm_smmu_v12 = self.is_arm_smmu_v12()
-
     def pgtable_l5_enabled(self):
         return self.pgtable_levels == 5 and self.vabits_actual == self.va_bits
 
@@ -1170,6 +1185,41 @@ class RamDump():
 
         return vabits_actual
 
+    def for_cmm_file(self):
+        for regex_file in VCPU_CMM_FILES:
+            ## find in dump folder
+            cmm_files = glob.glob(os.path.join(self.autodump, regex_file))
+            for cf in cmm_files:
+                yield cf
+
+            cmm_files = glob.glob(os.path.join(self.outdir, "host", regex_file))
+            for cf in cmm_files:
+                yield cf
+
+    def read_from_cmm(self):
+        for cmm_file in self.for_cmm_file():
+            with open(cmm_file) as f:
+                for line in f.readlines():
+                    if "Data.Set SPR:0x30200" in line:
+                        self.TTBR0_EL1 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x30100" in line:
+                        self.SCTLR_EL1 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x30202" in line:
+                        self.TCR_EL1 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x34212" in line:
+                        self.VTCR_EL2 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x34110" in line:
+                        self.HCR_EL2 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x30201" in line:
+                        self.ttbr_data = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x34210" in line:
+                        self.vttbr_data = int(eval(line.split()[-1]))
+
+                self.ttbr  = self.ttbr_data  & 0xffff_ffff_fff0
+                self.vttbr = self.vttbr_data & 0xffff_ffff_fff0
+                self.s2_walk = True
+            print_out_str("read vttbr from %s" % os.path.basename(cmm_file))
+            break
     def get_section_address(self,section):
         """
         Function to return address and size corresponding to the section name in elf files.
