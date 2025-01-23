@@ -105,7 +105,7 @@ def nt_type_to_str(type):
     except:
         return "Unknown note type"
 
-@register_parser('--coredump', 'output coredump')
+@register_parser('--coredump', 'output coredump', optional=True)
 class coredump(RamParser):
     '''
     generate coredump of userspace process
