@@ -1672,7 +1672,10 @@ class RamDump():
         kaslr_offset = self.get_kaslr_offset()
         if kaslr_offset != 0:
             where += ' 0x{0:x}'.format(kaslr_offset)
-        dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+        if not self.minidump:
+            dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+        else:
+            dloadelf = 'data.load.elf {}\n'.format(where)
         startup_script.write(dloadelf)
 
         if self.arm64 and not self.minidump:
