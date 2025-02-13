@@ -1,6 +1,6 @@
 """
 Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
-Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
 met:
@@ -85,15 +85,19 @@ def get_dmabuf_heap_names(self, ramdump, ion_info):
 
 def ion_buffer_info(self, ramdump, ion_info):
     ion_info = ramdump.open_file('ionbuffer.txt')
-    db_list = ramdump.address_of('db_list')
-    if db_list is None:
-        ion_info.write("NOTE: 'db_list' list not found to extract the ion "
+    head_offset = 0
+    if ramdump.address_of('debugfs_list'):
+        db_list = ramdump.address_of('debugfs_list')
+    elif ramdump.address_of('db_list'):
+        db_list = ramdump.address_of('db_list')
+        head_offset = ramdump.field_offset('struct dma_buf_list', 'head')
+    else:
+        ion_info.write("NOTE: DMA list is not found to extract the "
                        "buffer information")
         return
     total_dma_heap = 0
     total_dma_info = ramdump.open_file('total_dma_heap.txt')
     ion_info.write("*****Parsing dma buf info for ion leak debugging*****\n\n")
-    head_offset = ramdump.field_offset('struct dma_buf_list', 'head')
     head = ramdump.read_word(db_list + head_offset)
     next_offset = ramdump.field_offset('struct list_head', 'next')
     prev_offset = ramdump.field_offset('struct list_head', 'prev')
