@@ -680,20 +680,17 @@ class RamDump():
 
        return r;
 
-    def pac_ignore(self,data):
-        pac_check = self.createMask(self.va_bits, 63)
-        top_bit_ignore = 0xff00000000000000
+    def pac_ignore(self, data):
+        kernel_pac_mask = self.createMask(self.vabits_actual, 63)
         if data is None or not self.arm64:
             return data
-        if (data & pac_check) == pac_check or (data & pac_check) == 0:
+        if (data & kernel_pac_mask) == kernel_pac_mask or (data & kernel_pac_mask) == 0:
             return data
         # When address tagging is used
-        # The PAC field is Xn[54:bottom_PAC_bit].
+        # The PAC field is Kernel[63:bottom_PAC_bit],User[54:bottom_PAC_bit].
         # In the PAC field definitions, bottom_PAC_bit == 64-TCR_ELx.TnSZ,
         # TCR_ELx.TnSZ is set to 25. so 64-25=39
-        pac_mack = self.createMask(self.va_bits, 54)
-        result = pac_mack | data
-        result = result | top_bit_ignore
+        result = kernel_pac_mask | data
         return result
 
     def load_phys_range(self, path):
@@ -1175,14 +1172,18 @@ class RamDump():
         T1SZ, bits [21:16] The size offset of the memory region addressed by TTBR1_EL1.
         The region size is 2(64-T1SZ) bytes.
         '''
-        return 16 << 16
+        tcr_value = 16 << 16
+        try:
+            tcr_value = self.TCR_EL1
+        except:
+            pass
+        return tcr_value
 
     def get_vabits_actual(self):
         if self.va_bits > 48:
             vabits_actual = (64 - ((self.read_tcr() >> 16) & 63))
         else:
             vabits_actual = self.va_bits
-
         return vabits_actual
 
     def for_cmm_file(self):
