@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1152,9 +1152,11 @@ class GpuParser_510(RamParser):
             return
 
         gpucore = dump.read_structure_field(self.devp,
-                                        'struct adreno_device', 'gpucore')
+                                            'struct adreno_device',
+                                            'gpucore')
         gpurev = dump.read_structure_field(gpucore,
-                                       'struct adreno_gpu_core', 'gpurev')
+                                           'struct adreno_gpu_core',
+                                           'gpurev')
         if gpurev >= 0x80000:
             gmu_device = 'struct gen8_gmu_device'
             gmu_dev_addr = dump.sibling_field_addr(self.devp,
@@ -1174,6 +1176,29 @@ class GpuParser_510(RamParser):
                                                  gmu_device, 'preallocations')
             preallocations = dump.read_bool(preall_addr)
 
+        gmu_logs = dump.read_structure_field(gmu_dev_addr, gmu_device,
+                                             'gmu_log')
+        hostptr = dump.read_structure_field(gmu_logs,
+                                            'struct kgsl_memdesc', 'hostptr')
+        size = dump.read_structure_field(gmu_logs,
+                                         'struct kgsl_memdesc', 'size')
+
+        self.writeln('\nTrace Details:')
+        self.writeln('\tStart Address: ' + strhex(hostptr))
+        self.writeln('\tSize: ' + str_convert_to_kb(size))
+
+        if size == 0:
+            self.writeln('Invalid size. Aborting gmu trace dump.')
+            return
+        else:
+            file = self.ramdump.open_file('gpu_parser/gmu_trace.bin', 'wb')
+            self.writeln('Dumping ' + str_convert_to_kb(size) +
+                         ' starting from ' + strhex(hostptr) +
+                         ' to gmu_trace.bin')
+            data = self.ramdump.get_bin_data(hostptr, size)
+            file.write(data)
+            file.close()
+
         log_stream_addr = dump.struct_field_addr(gmu_dev_addr,
                                                  gmu_device,
                                                  'log_stream_enable')
@@ -1189,6 +1214,7 @@ class GpuParser_510(RamParser):
         cm3_fault = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                               'cm3_fault')
 
+        self.writeln()
         self.writeln('GMU Firmware Version: ' + strhex(gmu_fw_ver))
         self.writeln('Power Firmware Version: ' + strhex(pwr_fw_ver))
         self.writeln()
@@ -1223,34 +1249,24 @@ class GpuParser_510(RamParser):
         self.writeln('num_clks: ' + str(num_clks))
         self.writeln('clock consumer ID: ' + str(clk_id))
 
-        gmu_logs = dump.read_structure_field(gmu_dev_addr, gmu_device,
-                                             'gmu_log')
-        hostptr = dump.read_structure_field(gmu_logs,
-                                            'struct kgsl_memdesc', 'hostptr')
-        size = dump.read_structure_field(gmu_logs,
-                                         'struct kgsl_memdesc', 'size')
-
-        self.writeln('\nTrace Details:')
-        self.writeln('\tStart Address: ' + strhex(hostptr))
-        self.writeln('\tSize: ' + str_convert_to_kb(size))
-
-        if size == 0:
-            self.writeln('Invalid size. Aborting gmu trace dump.')
-            return
-        else:
-            file = self.ramdump.open_file('gpu_parser/gmu_trace.bin', 'wb')
-            self.writeln('Dumping ' + str_convert_to_kb(size) +
-                         ' starting from ' + strhex(hostptr) +
-                         ' to gmu_trace.bin')
-            data = self.ramdump.get_bin_data(hostptr, size)
-            file.write(data)
-            file.close()
-
     def dump_gpu_snapshot(self, dump):
         snapshot_faultcount = dump.read_structure_field(self.devp,
                                                         'struct kgsl_device',
                                                         'snapshot_faultcount')
         self.writeln(str(snapshot_faultcount) + ' snapshot fault(s) detected.')
+
+        force_panic_addr = dump.struct_field_addr(self.devp,
+                                                  'struct kgsl_device',
+                                                  'force_panic')
+        force_panic = dump.read_bool(force_panic_addr)
+        gmu_core_addr = dump.struct_field_addr(self.devp,
+                                               'struct kgsl_device',
+                                               'gmu_core')
+        gf_panic = dump.read_structure_field(gmu_core_addr,
+                                             'struct gmu_core_device',
+                                             'gf_panic')
+        self.writeln('force_panic: ' + str(force_panic))
+        self.writeln('gf_panic: ' + str(gf_panic))
 
         if snapshot_faultcount == 0:
             self.writeln('No GPU hang, skipping snapshot dumping.')

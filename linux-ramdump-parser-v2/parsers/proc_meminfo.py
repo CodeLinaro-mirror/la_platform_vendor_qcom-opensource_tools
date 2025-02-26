@@ -22,13 +22,13 @@ class ProcMeminfo(RamParser):
     def pages_to_kb(self, pages):
         val = 0
         if pages != None and pages != 0:
-            val = (pages * 4)
+            val = (pages * self.ramdump.get_page_size()) >> 10
         return val
 
     def bytes_to_kb(self, bytes):
         val = 0
         if bytes != None and bytes != 0:
-            val = (bytes // 1024)
+            val = (bytes >> 10)
         return val
 
     def getTotalMemKB(self):
@@ -42,8 +42,17 @@ class ProcMeminfo(RamParser):
 
         return self.pages_to_kb(total_mem)
 
-    def global_node_page_state_KB (self, index, default = None):
+    def global_node_page_state (self, index, default = None):
         stat_pages = self.ramdump.read_word('vm_node_stat[{}]'.format(index))
+        if stat_pages != None:
+            # print("vm_node_stat[{}] = {}".format(index, stat_pages))
+            return stat_pages
+
+        # print("global_node_page_state_KB returning default {} for {}".format(default, index))
+        return default
+
+    def global_node_page_state_KB (self, index, default = None):
+        stat_pages = self.global_node_page_state(index, default)
         if stat_pages != None:
             # print("vm_node_stat[{}] = {}".format(index, stat_pages))
             return self.pages_to_kb(stat_pages)
@@ -108,20 +117,20 @@ class ProcMeminfo(RamParser):
         wmark_low = self.get_low_wmark()
         # wmark_low += low_wmark_pages(zone);
         available = self.global_zone_page_state_KB("NR_FREE_PAGES", default = 0)
-        available -= self.ramdump.read_word('totalreserve_pages');
+        available -= self.ramdump.read_word('totalreserve_pages')
 
         pagecache = self.getVmStatKB("NR_ACTIVE_FILE",   default = 0)
         pagecache += self.getVmStatKB("NR_INACTIVE_FILE", default = 0)
-        pagecache -= min(pagecache // 2, wmark_low);
+        pagecache -= min(pagecache // 2, wmark_low)
 
         available += pagecache
 
         (slab_rec, slab_unrec) = self.get_slab_rec_unrec()
         reclaimable = slab_rec
         reclaimable += self.global_node_page_state_KB("NR_KERNEL_MISC_RECLAIMABLE", default = 0)
-        reclaimable -= min(reclaimable // 2, wmark_low);
+        reclaimable -= min(reclaimable // 2, wmark_low)
 
-        available += reclaimable;
+        available += reclaimable
 
         if (available < 0):
             return 0
@@ -189,7 +198,7 @@ class ProcMeminfo(RamParser):
             # Dirty:               304 kB
             print("Dirty:           {:>8} kB".format(self.global_node_page_state_KB("NR_FILE_DIRTY", default = 0)), file = out_meminfo)
             # Writeback:             0 kB
-            print("Writeback:       {:>8} kB".format(self.global_node_page_state_KB("NR_WRITEBACK", default = 0)), file = out_meminfo)
+            print("Writeback:       {:>8} kB".format(self.global_zone_page_state_KB("NR_WRITEBACK", default = 0)), file = out_meminfo)
             # AnonPages:        364372 kB
             anon = self.global_node_page_state_KB("NR_ANON_MAPPED", default = vmstat_active_anon + vmstat_inactive_anon)
             print("AnonPages:       {:>8} kB".format(anon), file = out_meminfo)
@@ -209,11 +218,11 @@ class ProcMeminfo(RamParser):
             print("SUnreclaim:      {:>8} kB".format(slab_unrec), file = out_meminfo)
 
             # KernelStack:       49408 kB
-            print("KernelStack:     {:>8} kB".format(self.global_node_page_state_KB("NR_KERNEL_STACK_KB", default = 0)), file = out_meminfo)
+            print("KernelStack:     {:>8} kB".format(self.global_node_page_state("NR_KERNEL_STACK_KB", default = 0)), file = out_meminfo)
 
             if self.ramdump.is_config_defined('CONFIG_SHADOW_CALL_STACK'):
                 # ShadowCallStack:   12384 kB
-                print("ShadowCallStack: {:>8} kB".format(self.global_node_page_state_KB("NR_KERNEL_SCS_KB", default = 0)), file = out_meminfo)
+                print("ShadowCallStack: {:>8} kB".format(self.global_node_page_state("NR_KERNEL_SCS_KB", default = 0)), file = out_meminfo)
 
             # PageTables:       109156 kB
             print("PageTables:      {:>8} kB".format(self.global_node_page_state_KB("NR_PAGETABLE", default = 0)), file = out_meminfo)
