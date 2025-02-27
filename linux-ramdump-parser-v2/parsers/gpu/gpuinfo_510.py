@@ -1226,7 +1226,11 @@ class GpuParser_510(RamParser):
         self.writeln('log_stream_enable: ' + str(log_stream_enable))
         self.writeln('cm3_fault: ' + str(cm3_fault))
 
-        domain = dump.read_structure_field(gmu_dev_addr, gmu_device, 'domain')
+        domain = dump.read_structure_field(gmu_core, 'struct gmu_core_device',
+                                           'domain')
+        if domain is None:
+            domain = dump.read_structure_field(gmu_dev_addr,
+                                               gmu_device, 'domain')
         arm_smmu = dump.container_of(domain,
                                      'struct arm_smmu_domain', 'domain')
         pgtbl_ops = dump.read_structure_field(arm_smmu,
