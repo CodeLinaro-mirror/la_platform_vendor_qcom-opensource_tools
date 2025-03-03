@@ -1204,13 +1204,31 @@ class GpuParser_510(RamParser):
                                                  'log_stream_enable')
         log_stream_enable = dump.read_bool(log_stream_addr)
 
-        gmu_fw_ver = dump.read_u32(gmu_dev_addr)
-        pwr_fw_ver = dump.read_u32(gmu_dev_addr + 8)
+        gmu_fw_ver = dump.read_structure_field(gmu_core,
+                                               'struct gmu_core_device',
+                                               'ver.core')
+        if gmu_fw_ver is None:
+            gmu_fw_ver = dump.read_u32(gmu_dev_addr)
+
+        pwr_fw_ver = dump.read_structure_field(gmu_core,
+                                               'struct gmu_core_device',
+                                               'ver.pwr')
+        if pwr_fw_ver is None:
+            pwr_fw_ver = dump.read_u32(gmu_dev_addr + 8)
+
         flags = dump.read_structure_field(gmu_dev_addr, gmu_device, 'flags')
+
         idle_level = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                                'idle_level')
-        global_entries = dump.read_structure_field(gmu_dev_addr, gmu_device,
+
+        global_entries = dump.read_structure_field(gmu_core,
+                                                   'struct gmu_core_device',
                                                    'global_entries')
+        if global_entries is None:
+            global_entries = dump.read_structure_field(gmu_dev_addr,
+                                                       gmu_device,
+                                                       'global_entries')
+
         cm3_fault = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                               'cm3_fault')
 
