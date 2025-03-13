@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -64,7 +64,7 @@ class DevicesList(RamParser):
         return self.device_lists
 
     def parse(self):
-        fout = open(self.ramdump.outdir + "/devices.txt", "w")
-        print("v.v (struct device)  name                                                                                                 bus_name         driver_data                       v.v (struct cma)    dma_ops \n", file=self.f)
+        fout = self.ramdump.open_file('devices.txt')
+        print("v.v (struct device)  name                                                                                                 bus_name         driver_data                       v.v (struct cma)    dma_ops \n", file=fout)
         self.get_device_list(fout)
         fout.close()

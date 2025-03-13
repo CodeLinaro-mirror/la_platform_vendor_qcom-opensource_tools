@@ -1176,55 +1176,6 @@ class GpuParser_510(RamParser):
                                                  gmu_device, 'preallocations')
             preallocations = dump.read_bool(preall_addr)
 
-        log_stream_addr = dump.struct_field_addr(gmu_dev_addr,
-                                                 gmu_device,
-                                                 'log_stream_enable')
-        log_stream_enable = dump.read_bool(log_stream_addr)
-
-        gmu_fw_ver = dump.read_u32(gmu_dev_addr)
-        pwr_fw_ver = dump.read_u32(gmu_dev_addr + 8)
-        flags = dump.read_structure_field(gmu_dev_addr, gmu_device, 'flags')
-        idle_level = dump.read_structure_field(gmu_dev_addr, gmu_device,
-                                               'idle_level')
-        global_entries = dump.read_structure_field(gmu_dev_addr, gmu_device,
-                                                   'global_entries')
-        cm3_fault = dump.read_structure_field(gmu_dev_addr, gmu_device,
-                                              'cm3_fault')
-
-        self.writeln('GMU Firmware Version: ' + strhex(gmu_fw_ver))
-        self.writeln('Power Firmware Version: ' + strhex(pwr_fw_ver))
-        self.writeln()
-        self.writeln('idle_level: ' + str(idle_level))
-        self.writeln('internal gmu flags: ' + strhex(flags))
-        self.writeln('global_entries: ' + str(global_entries))
-        if gpurev < 0x70000:
-            self.writeln('preallocations: ' + str(preallocations))
-        self.writeln('log_stream_enable: ' + str(log_stream_enable))
-        self.writeln('cm3_fault: ' + str(cm3_fault))
-
-        domain = dump.read_structure_field(gmu_dev_addr, gmu_device, 'domain')
-        arm_smmu = dump.container_of(domain,
-                                     'struct arm_smmu_domain', 'domain')
-        pgtbl_ops = dump.read_structure_field(arm_smmu,
-                                              'struct arm_smmu_domain',
-                                              'pgtbl_ops')
-        pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
-                                            'struct io_pgtable', 'ops', 'cfg')
-        ttbr0_val = dump.read_structure_field(pgtbl_cfg,
-                                              'struct io_pgtable_cfg',
-                                              'arm_lpae_s1_cfg.ttbr')
-        self.writeln('ttbr0: ' + strhex(ttbr0_val))
-
-        num_clks = dump.read_structure_field(gmu_dev_addr, gmu_device,
-                                             'num_clks')
-        clks = dump.read_structure_field(gmu_dev_addr, gmu_device, 'clks')
-        clk_id_addr = dump.read_structure_field(clks,
-                                                'struct clk_bulk_data', 'id')
-        clk_id = dump.read_cstring(clk_id_addr)
-
-        self.writeln('num_clks: ' + str(num_clks))
-        self.writeln('clock consumer ID: ' + str(clk_id))
-
         gmu_logs = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                              'gmu_log')
         hostptr = dump.read_structure_field(gmu_logs,
@@ -1247,6 +1198,60 @@ class GpuParser_510(RamParser):
             data = self.ramdump.get_bin_data(hostptr, size)
             file.write(data)
             file.close()
+
+        log_stream_addr = dump.struct_field_addr(gmu_dev_addr,
+                                                 gmu_device,
+                                                 'log_stream_enable')
+        log_stream_enable = dump.read_bool(log_stream_addr)
+
+        gmu_fw_ver = dump.read_u32(gmu_dev_addr)
+        pwr_fw_ver = dump.read_u32(gmu_dev_addr + 8)
+        flags = dump.read_structure_field(gmu_dev_addr, gmu_device, 'flags')
+        idle_level = dump.read_structure_field(gmu_dev_addr, gmu_device,
+                                               'idle_level')
+        global_entries = dump.read_structure_field(gmu_dev_addr, gmu_device,
+                                                   'global_entries')
+        cm3_fault = dump.read_structure_field(gmu_dev_addr, gmu_device,
+                                              'cm3_fault')
+
+        self.writeln()
+        self.writeln('GMU Firmware Version: ' + strhex(gmu_fw_ver))
+        self.writeln('Power Firmware Version: ' + strhex(pwr_fw_ver))
+        self.writeln()
+        self.writeln('idle_level: ' + str(idle_level))
+        self.writeln('internal gmu flags: ' + strhex(flags))
+        self.writeln('global_entries: ' + str(global_entries))
+        if gpurev < 0x70000:
+            self.writeln('preallocations: ' + str(preallocations))
+        self.writeln('log_stream_enable: ' + str(log_stream_enable))
+        self.writeln('cm3_fault: ' + str(cm3_fault))
+
+        domain = dump.read_structure_field(gmu_core, 'struct gmu_core_device',
+                                           'domain')
+        if domain is None:
+            domain = dump.read_structure_field(gmu_dev_addr,
+                                               gmu_device, 'domain')
+        arm_smmu = dump.container_of(domain,
+                                     'struct arm_smmu_domain', 'domain')
+        pgtbl_ops = dump.read_structure_field(arm_smmu,
+                                              'struct arm_smmu_domain',
+                                              'pgtbl_ops')
+        pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
+                                            'struct io_pgtable', 'ops', 'cfg')
+        ttbr0_val = dump.read_structure_field(pgtbl_cfg,
+                                              'struct io_pgtable_cfg',
+                                              'arm_lpae_s1_cfg.ttbr')
+        self.writeln('ttbr0: ' + strhex(ttbr0_val))
+
+        num_clks = dump.read_structure_field(gmu_dev_addr, gmu_device,
+                                             'num_clks')
+        clks = dump.read_structure_field(gmu_dev_addr, gmu_device, 'clks')
+        clk_id_addr = dump.read_structure_field(clks,
+                                                'struct clk_bulk_data', 'id')
+        clk_id = dump.read_cstring(clk_id_addr)
+
+        self.writeln('num_clks: ' + str(num_clks))
+        self.writeln('clock consumer ID: ' + str(clk_id))
 
     def dump_gpu_snapshot(self, dump):
         snapshot_faultcount = dump.read_structure_field(self.devp,
