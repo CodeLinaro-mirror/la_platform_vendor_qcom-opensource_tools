@@ -421,12 +421,12 @@ class Workqueues(RamParser):
                 idle_list_addr = worker_pool_i + pool_idle_offset
 
                 idle_list_walker = linux_list.ListWalker(ram_dump, idle_list_addr, worker_entry_offset)
-                idle_list_walker.walk(self.ramdump.read_word(idle_list_addr), self.walk_workers, 'IDLE')
+                idle_list_walker.walk(self.walk_workers, 'IDLE')
 
                 worklist_addr = worker_pool_i + pending_work_offset
 
                 pending_list = linux_list.ListWalker(ram_dump, worklist_addr, work_entry_offset)
-                pending_list.walk(self.ramdump.read_word(worklist_addr), self.pending_list_walk)
+                pending_list.walk(self.pending_list_walk)
 
     def get_workqueues_func(self, workqueue_struct_base):
         name_offset = self.ramdump.field_offset('struct workqueue_struct', 'name')
@@ -449,7 +449,7 @@ class Workqueues(RamParser):
         workqueues = self.ramdump.address_of('workqueues')
         list_offset = self.ramdump.field_offset('struct workqueue_struct', 'list')
         list_walker = linux_list.ListWalker(self.ramdump, workqueues, list_offset)
-        list_walker.walk(workqueues, self.get_workqueues_func)
+        list_walker.walk(self.get_workqueues_func)
 
     def get_busy_hash(self, worker_pool_addr):
         busy_hash_offset  = self.ramdump.field_offset('struct worker_pool', 'busy_hash')
@@ -497,7 +497,7 @@ class Workqueues(RamParser):
 
                     list_offset = self.ramdump.field_offset('struct  work_struct', 'entry')
                     list_walker = linux_list.ListWalker(self.ramdump, worklist, list_offset)
-                    list_walker.walk(worklist, self.pending_list_walk)
+                    list_walker.walk(self.pending_list_walk)
                     '''
                     walk the busy_hash
                     '''
