@@ -1,5 +1,5 @@
 # Copyright (c) 2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -51,16 +51,38 @@ class FtraceParser_Event_List(object):
                     event_name_value = self.ramdump.read_u32(event_name + ftrace_event_call_name_offset)
                 #print ("event_name_value +++ {0}".format((event_name_value)))
 
-                event_name1 = self.ramdump.read_cstring(event_name_value)                
+                event_name1 = self.ramdump.read_cstring(event_name_value)
                 event_name2 = self.ramdump.read_cstring(event_name)
-                if "6" == str(event_type):
-                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data), hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
+                if "6" == str(event_type):  #TRACE_BPRINT
+                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
+                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
+                         hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
                     self.ftrace_event_type[str(event_type)] = "bprint"
                     self.ftrace_raw_struct_type[str(event_type)] = "bprint"
                 elif "5" == str(event_type):
-                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data), hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
+                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
+                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
+                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
                     self.ftrace_event_type[str(event_type)] = "print"
                     self.ftrace_raw_struct_type[str(event_type)] = "print"
+                elif '4' == str(event_type):  #TRACE_STACK
+                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
+                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
+                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
+                    self.ftrace_event_type[str(event_type)] = "kernel_stack"
+                    self.ftrace_raw_struct_type[str(event_type)] = "kernel_stack"
+                elif '12' == str(event_type):  #TRACE_USER_STACK
+                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
+                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
+                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
+                    self.ftrace_event_type[str(event_type)] = "user_stack"
+                    self.ftrace_raw_struct_type[str(event_type)] = "user_stack"
+                elif "14" == str(event_type):
+                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
+                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
+                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
+                    self.ftrace_event_type[str(event_type)] = "bputs"
+                    self.ftrace_raw_struct_type[str(event_type)] = "bputs"
                 else:
                     self.ftrace_event_type[str(event_type)] = str(event_name1)
                     self.ftrace_raw_struct_type[str(event_type)] = "trace_event_raw_" + str(event_name1)

@@ -1,5 +1,5 @@
 # Copyright (c) 2017-2022, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -10,7 +10,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-import re
+import os,re
 from collections import OrderedDict
 
 from parser_util import register_parser, RamParser
@@ -30,19 +30,15 @@ class FtraceParser(RamParser):
         self.format_event_field_map = OrderedDict()
         self.event_call = 'struct trace_event_call'
         self.event_class = 'struct trace_event_class'
-        self.trace_names = ["binder", "bootreceiver", "clock_reg", "kgsl-fence",
-                            "memory", "mmc", "rproc_qcom", "suspend", "ufs",
-                            "usb", "wifi", "rwmmio"]
-        self.whitelisted_trace_names =[]
+        self.whitelisted_trace_names = []
         self.ftrace_buffer_size_kb = None
         self.per_cpu_buffer_pages = None
         self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
-
         if len(self.ramdump.ftrace_args):
             self.whitelisted_trace_names = self.ramdump.ftrace_args
-
         if self.ramdump.ftrace_max_size:
-            self.per_cpu_buffer_pages = self.ramdump.ftrace_max_size / 4
+            self.per_cpu_buffer_pages = int(self.ramdump.ftrace_max_size / (self.ramdump.get_page_size() >> 10))
+        self.trace_buffers = {}
 
     def ftrace_field_func(self, common_list, ram_dump):
         name_offset = ram_dump.field_offset('struct ftrace_event_field', 'name')
@@ -59,7 +55,10 @@ class FtraceParser(RamParser):
         offset = ram_dump.read_u32(common_list + field_offset)
         size = ram_dump.read_u32(common_list + size_offset)
         signed = ram_dump.read_u32(common_list + signed_offset)
-
+        if type_str == None or field_name == None:
+            str_error =  'v.v (struct ftrace_event_field)0x{0:x} type_str or field_name is None'.format(common_list)
+            print_out_str(str_error)
+            return
         if re.match('(.*)\[(.*)', type_str) and not (re.match('__data_loc', type_str)):
             s = re.split('\[', type_str)
             s[1] = '[' + s[1]
@@ -77,9 +76,7 @@ class FtraceParser(RamParser):
         else:
             self.formats_out.write(
                 "\tfield:{0} {1};\toffset:{2};\tsize:{3};\tsigned:{4};\n".format(type_str, field_name, offset, size,
-
                                                                                  signed))
-            #self.format_event_field_map = {}
 
             if "common_type" == field_name or "common_flags" == field_name or "common_preempt_count" == field_name or "common_pid" == field_name:
                 temp = 0
@@ -125,8 +122,6 @@ class FtraceParser(RamParser):
         self.formats_out.write("ID: {0}\n".format(event_id))
         self.formats_out.write("format:\n")
 
-        #self.format_event_map[name_str] = format_event_field_map
-
         list_walker = llist.ListWalker(ram_dump, common_field_list, field_next_offset)
         list_walker.walk_prev(common_field_list, self.ftrace_field_func, ram_dump)
         self.formats_out.write("\n")
@@ -146,7 +141,6 @@ class FtraceParser(RamParser):
     def ftrace_get_format(self):
         self.formats_out = self.ramdump.open_file('formats.txt')
         fevent_list = FtraceParser_Event_List(self.ramdump)
-        #print(fevent_list.ftrace_raw_struct_type)
 
         ftrace_events_list = self.ramdump.address_of('ftrace_events')
         next_offset = self.ramdump.field_offset(self.event_call, 'list')
@@ -155,39 +149,34 @@ class FtraceParser(RamParser):
         self.formats_out.close()
         return fevent_list
 
-    def ftrace_extract(self):
-        #ftrace_event_time = 0
-        #post_ftrace_event_time = 0
-        #taskdump_time = 0
-        #parse_trace_entry_time = 0
-        global_trace_data_org = self.ramdump.address_of('ftrace_trace_arrays')
-        global_trace_data_offset = self.ramdump.field_offset(
-            'struct list_head ', 'next')
-        global_trace_data_next = self.ramdump.read_pointer(global_trace_data_org + global_trace_data_offset)
+    def ftrace_get_buffers(self, trace_buffer, trace_buffer_name_offset):
+        trace_buffer_name = self.ramdump.read_word(trace_buffer + trace_buffer_name_offset)
+        if not (trace_buffer_name):
+            trace_name = None
+        else:
+            trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
+        if trace_name is None or trace_name == 0x0 or trace_name == "0x0" or trace_name == "None" or trace_name == "null" or len(trace_name) < 1:
+            trace_name = "global"
+        trace_buffer_info = {}
+        trace_buffer_info['addr'] = trace_buffer
+        self.trace_buffers[trace_name] = trace_buffer_info
+        return
+
+    def ftrace_get_buffer_pages(self):
         if self.ramdump.kernel_version >= (5, 10):
             trace_buffer_offset = self.ramdump.field_offset(
                 'struct trace_array', 'array_buffer')
+            ring_trace_buffer_ptr = self.ramdump.field_offset(
+                'struct array_buffer', 'buffer')
+            ring_trace_buffer_base_addr = self.ramdump.field_offset(
+                'struct trace_buffer', 'buffers')
+            cpu_offset = self.ramdump.field_offset(
+                'struct trace_buffer', 'cpus')
         else:
             trace_buffer_offset = self.ramdump.field_offset(
                 'struct trace_array', 'trace_buffer')
-        trace_buffer_name_offset = self.ramdump.field_offset(
-            'struct trace_array', 'name')
-        if self.ramdump.kernel_version >= (5, 10):
-            ring_trace_buffer_ptr = self.ramdump.field_offset(
-                'struct array_buffer', 'buffer')
-        else:
             ring_trace_buffer_ptr = self.ramdump.field_offset(
                 'struct trace_buffer', 'buffer')
-        if self.ramdump.kernel_version >= (5, 10):
-            ring_trace_buffer_cpus_ptr = self.ramdump.field_offset(
-                'struct trace_buffer', 'cpus')
-            ring_trace_buffer_base_addr = self.ramdump.field_offset(
-                'struct trace_buffer', 'buffers')
-        else:
-            ring_trace_buffer_cpus_ptr = self.ramdump.frame_field_offset(
-                'rb_wake_up_waiters','struct ring_buffer', 'cpus')
-            if ring_trace_buffer_cpus_ptr is None:
-                ring_trace_buffer_cpus_ptr = 0x4
             ring_trace_buffer_base_addr = self.ramdump.frame_field_offset(
                 'rb_wake_up_waiters','struct ring_buffer', 'buffers')
             if ring_trace_buffer_base_addr is None:
@@ -198,29 +187,100 @@ class FtraceParser(RamParser):
                     ring_trace_buffer_base_addr = 0x58
                 else:
                     ring_trace_buffer_base_addr = 0x38
+            cpu_offset = self.ramdump.field_offset(
+                'struct ring_buffer', 'cpus')
+
         ring_trace_buffer_nr_pages = self.ramdump.field_offset(
             'struct ring_buffer_per_cpu', 'nr_pages')
-        log_pattern = re.compile(r'\s*(.*)-(\d+)\s*\[(\d+)\]\s*.*')
-        fevent_list = self.ftrace_get_format();
-        while(global_trace_data_org != global_trace_data_next):
-            trace_array = global_trace_data_next
-            #print("v.v (struct trace_array)0x%x" %(trace_array))
-            trace_buffer_name = self.ramdump.read_word(trace_array + trace_buffer_name_offset)
-            if not (trace_buffer_name):
-                trace_name = None
-            else:
-                trace_name = self.ramdump.read_cstring(trace_buffer_name, 256)
 
+        for buffer_name, trace_buffer_info in self.trace_buffers.items():
+            trace_array = trace_buffer_info['addr']
             trace_buffer_ptr_data = self.ramdump.read_pointer(trace_array + trace_buffer_offset)
             ring_trace_buffer_data = trace_buffer_ptr_data + trace_buffer_offset
             ring_trace_buffer_base_data = self.ramdump.read_pointer(ring_trace_buffer_data + ring_trace_buffer_ptr)
             ring_trace_buffer_base_data1 = self.ramdump.read_pointer(ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
+            numcpus = self.ramdump.read_int(ring_trace_buffer_base_data + cpu_offset)
+            numcpus = numcpus if numcpus < 0x10 else 8
 
+            nr_total_buffer_pages = 0
+            trace_buffer_info['parse'] = True
+            trace_buffer_info['sibling'] = None
+            trace_buffer_info['cpus'] = numcpus
+            trace_buffer_info['rb_per_cpu'] = [None] * numcpus
+            trace_buffer_info['nr_pages_per_buffer'] = [None] * numcpus
+            for cpu_idx in range(0, numcpus):
+                array_ptr = (ring_trace_buffer_base_data1 + self.ramdump.sizeof('void *') * cpu_idx)
+                b = self.ramdump.read_pointer(array_ptr)
+                if b is None or b == 0x0:
+                    continue
+                nr_pages =  self.ramdump.read_pointer(b + ring_trace_buffer_nr_pages)
+                if nr_pages is None:
+                    continue
+                if self.per_cpu_buffer_pages and self.per_cpu_buffer_pages < nr_pages:
+                    nr_pages = self.per_cpu_buffer_pages
+                nr_total_buffer_pages = nr_total_buffer_pages +  nr_pages
+                trace_buffer_info['nr_pages_per_buffer'][cpu_idx] = nr_pages
+                trace_buffer_info['rb_per_cpu'][cpu_idx] = b
+            trace_buffer_info['nr_total_buffer_pages'] = nr_total_buffer_pages
+        return
 
-            if trace_name is None or trace_name == 0x0 or trace_name == "0x0" or trace_name == "None" or trace_name == "null" or len(trace_name) < 1:
-                #ftrace_out = self.ramdump.open_file('ftrace.txt','w')
-                fout = self.ramdump.open_file('ftrace.txt','w')
+    def ftrace_main_buffer(self):
+        main_trace_name = "global"
+        if "main" in self.trace_buffers:
+            main_trace_name = "main"
+            if "global" in self.trace_buffers:
+                self.trace_buffers[main_trace_name]['sibling'] = "global"
+                self.trace_buffers['global']['parse'] = False
+        if main_trace_name not in self.whitelisted_trace_names:
+            self.whitelisted_trace_names.append(main_trace_name)
+        return main_trace_name
+
+    def ftrace_parse_buffers(self, trace_buffer_name, ftrace_out, fevent_list):
+        trace_buffer_info = self.trace_buffers[trace_buffer_name]
+        print_out_str("Total pages across cpu trace buffers = {} for {}".format(
+            round(trace_buffer_info['nr_total_buffer_pages']), trace_buffer_name))
+        ftrace_time_data = {}
+        for cpu_idx in range(0, len(trace_buffer_info['rb_per_cpu'])):
+            nrpages_limit = trace_buffer_info['nr_pages_per_buffer'][cpu_idx] if self.per_cpu_buffer_pages else None
+            per_cpu_buffer = trace_buffer_info['rb_per_cpu'][cpu_idx]
+            if per_cpu_buffer is not None:
+                evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,fevent_list.ftrace_event_type,
+                        fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
+                evt.ring_buffer_per_cpu_parsing(per_cpu_buffer, nrpages_limit)
+        return ftrace_time_data
+
+    def ftrace_extract(self):
+        trace_array_list = self.ramdump.address_of('ftrace_trace_arrays')
+        list_offset = self.ramdump.field_offset('struct trace_array', 'list')
+        trace_buffer_name_offset = self.ramdump.field_offset(
+            'struct trace_array', 'name')
+        list_walker = llist.ListWalker(self.ramdump, trace_array_list, list_offset)
+        list_walker.walk_prev(trace_array_list, self.ftrace_get_buffers, trace_buffer_name_offset)
+        if len(self.trace_buffers) == 0:
+            list_walker.walk(trace_array_list, self.ftrace_get_buffers, trace_buffer_name_offset)
+        if len(self.trace_buffers) == 0:
+            print_out_str("A ftrace buffer is not found")
+            return
+        self.ftrace_get_buffer_pages()
+        main_trace = self.ftrace_main_buffer()
+
+        ftrace_event_time = 0
+        post_ftrace_event_time = 0
+        log_pattern = re.compile(r'\s*(.*)-(\d+)\s*\[(\d+)\]\s*.*')
+        fevent_list = self.ftrace_get_format();
+        for trace_buffer_name, trace_buffer_info in self.trace_buffers.items():
+            trace_array = trace_buffer_info['addr']
+            trace_name = trace_buffer_name
+            if trace_name == main_trace:
+                trace_filename = "ftrace"
+            else:
+                trace_filename = os.path.join("ftrace_parser", "ftrace_{}".format(trace_name))
+
+            ftrace_out = None
+            if trace_name in self.whitelisted_trace_names or "all" in self.whitelisted_trace_names:
+                fout = self.ramdump.open_file('{}.txt'.format(trace_filename),'w')
                 ftrace_out = BufferedWrite(fout)
+                """
                 header_data = "# tracer: nop \n" \
                               "#\n" \
                               "# entries-in-buffer/entries-written: 315882/1727030   #P:8\n" \
@@ -233,89 +293,29 @@ class FtraceParser(RamParser):
                               "#           TASK-PID   CPU#  ||||    TIMESTAMP  FUNCTION\n" \
                               "#              | |       |   ||||       |         |\n"
                 ftrace_out.write(header_data)
+                """
             else:
-                if trace_name in self.whitelisted_trace_names or self.whitelisted_trace_names == ["all"]:
-                    #ftrace_out = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
-                    fout = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
-                    ftrace_out = BufferedWrite(fout)
-                else:
-                    global_trace_data_next =  self.ramdump.read_pointer(global_trace_data_next)
-                    continue
-            #    ftrace_out = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '.txt','w')
+                continue
 
-            ftrace_time_data = {}
-            nr_total_buffer_pages = 0
-            rb_per_cpu = []
-            nr_pages_per_buffer = []
-            #taskdump.do_dump_stacks(self.ramdump, 0)
-            for cpu_idx in range(0,8):
-                #array_ptr = self.ramdump.read_u64(ring_trace_buffer_base_data1 + self.ramdump.sizeof('void *') * cpu_idx)
-                array_ptr = (ring_trace_buffer_base_data1 + self.ramdump.sizeof('void *') * cpu_idx)
-                b = self.ramdump.read_pointer(array_ptr)
-                if b is None or b == 0x0:
-                    continue
-                if self.ramdump.arm64:
-                    nr_pages =  self.ramdump.read_u64(
-                        b + ring_trace_buffer_nr_pages)
-                else:
-                    nr_pages =  self.ramdump.read_u32(
-                        b + ring_trace_buffer_nr_pages)
-                if nr_pages is None:
-                    continue
-                if self.per_cpu_buffer_pages and self.per_cpu_buffer_pages < nr_pages:
-                    nr_pages = self.per_cpu_buffer_pages
-
-                nr_total_buffer_pages = nr_total_buffer_pages +  nr_pages
-
-                nr_pages_per_buffer.append(nr_pages)
-                rb_per_cpu.append(b)
-                #print "ring_trace_buffer_cpus nr_pages = %d" % nr_pages
-                #print "cpu_buffer = {0}".format(hex(b))
-
-            print("\nTotal pages across cpu trace buffers = {}".format(round(nr_total_buffer_pages)))
+            if trace_buffer_info['parse'] == False:
+                if ftrace_out:
+                    ftrace_out.close()
+                continue
 
             #start = time.time()
-            for cpu_idx in range(0,len(rb_per_cpu)):
-                nr_pages_per_buffer_item = nr_pages_per_buffer[cpu_idx]
-                per_cpu_buffer = rb_per_cpu[cpu_idx]
-                if per_cpu_buffer is not None:
-                    evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,fevent_list.ftrace_event_type,fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
-                    evt.ring_buffer_per_cpu_parsing(per_cpu_buffer)
-                    #parse_trace_entry_time += evt.parse_trace_entry_time
+            ftrace_time_data = self.ftrace_parse_buffers(trace_buffer_name, ftrace_out, fevent_list)
+            if trace_buffer_info['sibling'] and trace_buffer_info['sibling'] in self.trace_buffers:
+                sibling_ftrace_time_data = self.ftrace_parse_buffers(
+                    trace_buffer_info['sibling'], ftrace_out, fevent_list)
+                if len(sibling_ftrace_time_data):
+                    ftrace_time_data.update(sibling_ftrace_time_data)
             #ftrace_event_time += (time.time()-start)
-            global_trace_data_next =  self.ramdump.read_pointer(global_trace_data_next)
+
             switch_map = {}
             ftrace_file_map = {}
-            if trace_name is None or trace_name == 0x0 or trace_name == "0x0" or trace_name == "None" or trace_name == "null" or len(trace_name) < 1:
-                ftrace_core0_fd = self.ramdump.open_file('ftrace_core0.txt', 'w')
-                ftrace_core1_fd = self.ramdump.open_file('ftrace_core1.txt', 'w')
-                ftrace_core2_fd = self.ramdump.open_file('ftrace_core2.txt', 'w')
-                ftrace_core3_fd = self.ramdump.open_file('ftrace_core3.txt', 'w')
-                ftrace_core4_fd = self.ramdump.open_file('ftrace_core4.txt', 'w')
-                ftrace_core5_fd = self.ramdump.open_file('ftrace_core5.txt', 'w')
-                ftrace_core6_fd = self.ramdump.open_file('ftrace_core6.txt', 'w')
-                ftrace_core7_fd = self.ramdump.open_file('ftrace_core7.txt', 'w')
-            else:
-                if trace_name in self.whitelisted_trace_names or self.whitelisted_trace_names == ["all"]:
-                    ftrace_core0_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core0.txt','w')
-                    ftrace_core1_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core1.txt','w')
-                    ftrace_core2_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core2.txt','w')
-                    ftrace_core3_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core3.txt','w')
-                    ftrace_core4_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core4.txt','w')
-                    ftrace_core5_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core5.txt','w')
-                    ftrace_core6_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core6.txt','w')
-                    ftrace_core7_fd = self.ramdump.open_file('ftrace_parser/' + 'ftrace_' + trace_name + '_core7.txt','w')
-                else:
-                    continue
-
-            ftrace_file_map["000"] = BufferedWrite(ftrace_core0_fd)
-            ftrace_file_map["001"] = BufferedWrite(ftrace_core1_fd)
-            ftrace_file_map["002"] = BufferedWrite(ftrace_core2_fd)
-            ftrace_file_map["003"] = BufferedWrite(ftrace_core3_fd)
-            ftrace_file_map["004"] = BufferedWrite(ftrace_core4_fd)
-            ftrace_file_map["005"] = BufferedWrite(ftrace_core5_fd)
-            ftrace_file_map["006"] = BufferedWrite(ftrace_core6_fd)
-            ftrace_file_map["007"] = BufferedWrite(ftrace_core7_fd)
+            for cpu_idx in range(0, trace_buffer_info['cpus']):
+                ftrace_file_map["{:03d}".format(cpu_idx)] = BufferedWrite(
+                    self.ramdump.open_file('{}_core{}.txt'.format(trace_filename, cpu_idx), 'w'))
 
             #start = time.time()
             sorted_dict = {k: ftrace_time_data[k] for k in sorted(ftrace_time_data)}
@@ -355,11 +355,15 @@ class FtraceParser(RamParser):
                             replaced_line = line.replace("<TBD>", "<...>")
                     ftrace_out.write(replaced_line)
                     ftrace_file_map[str(cpu_number)].write(replaced_line)
+
+            ftrace_out.close()
+            for cpu_idx in range(0, trace_buffer_info['cpus']):
+                ftrace_file_map["{:03d}".format(cpu_idx)].close()
             #post_ftrace_event_time += (time.time()-start)
+
         #print("Ftrace Event Parsing took {} secs".format(ftrace_event_time))
         #print("Post Ftrace Event Sorting and Write took {} secs".format(post_ftrace_event_time))
-        #print("Parse Ftrace Entry function took {} secs".format(parse_trace_entry_time))
-
+        return
 
     def parse(self):
         if self.ramdump.ftrace_limit_time == 0:
