@@ -2042,44 +2042,40 @@ class RamDump():
         Third step:
               check if linux_banner read from DDR == linux_banner from vmlinux
         '''
-        kimage_voffset = None
         ###********* First step, calculate kaslr_offset and kimage_voffset *********
         if self.arm64:
-            if kaslr_offset != None:
-                ## kaslr_offset=0 means kaslr feature was disabled
-                ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
-                ## kaslr_offset=None need to be calculated
-                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
-            if self.__kimage_voffset_var_va != None and kaslr_offset == None:
-                ## calculte depends on kimage_voffset variable which should exist
-                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
-                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
-                if kimage_voffset_tmp is not None:
-                    kimage_voffset = kimage_voffset_tmp
-                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
-                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
-                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
-            if self.__kimage_vaddr_var_va != None and kaslr_offset == None:
-                ## calculte depends on kimage_vaddr variable which should exist
-                kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
-                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
-                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
-                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
-                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
-        else:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
                 #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
+
+        kimage_voffset = None
+        if kaslr_offset != None:
+            ## kaslr_offset=0 means kaslr feature was disabled
+            ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
+            ## kaslr_offset=None need to be calculated
+            if self.arm64:
+                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
             else:
-                ## calculte depends on kimage_voffset variable which should exist
-                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
-                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
-                if kimage_voffset_tmp is not None:
-                    kimage_voffset = kimage_voffset_tmp
-                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
-                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
-                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+                kimage_voffset = self.page_offset - phys_offset
+        ## calculate kaslr_offset via kimage_voffset
+        if self.__kimage_voffset_var_va != None and kaslr_offset == None:
+            ## calculte depends on kimage_voffset variable which should exist
+            kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+            kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+            if kimage_voffset_tmp is not None:
+                kimage_voffset = kimage_voffset_tmp
+                kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
+                    kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+        ## calculate kaslr_offset via kimage_vaddr
+        if self.__kimage_vaddr_var_va != None and kaslr_offset == None:
+            ## calculte depends on kimage_vaddr variable which should exist
+            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
+            kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
+            if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
+                kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
+                kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
 
         if kimage_voffset is None or kaslr_offset is None:
             raise Exception("!!! Determine kimage_voffset failed")
