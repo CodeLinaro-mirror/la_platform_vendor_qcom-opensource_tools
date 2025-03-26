@@ -2043,10 +2043,10 @@ class RamDump():
               check if linux_banner read from DDR == linux_banner from vmlinux
         '''
         ###********* First step, calculate kaslr_offset and kimage_voffset *********
-        if self.arm64:
+        if not self.arm64:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
-                #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
+                print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
 
         kimage_voffset = None
