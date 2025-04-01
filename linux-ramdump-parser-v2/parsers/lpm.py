@@ -157,6 +157,8 @@ class lpm(RamParser):
 
         gpd_offset = self.ramdump.field_offset('struct generic_pm_domain', 'gpd_list_node')
         head = self.ramdump.address_of('gpd_list')
+        if head == None:
+            return
         gpd_walker = linux_list.ListWalker(self.ramdump, head, gpd_offset)
         gpd_walker.walk(self.get_pm_domain_info)
 
@@ -388,22 +390,23 @@ class lpm(RamParser):
     def get_debug_phys(self):
         lpm_debug_phys = self.ramdump.address_of('lpm_debug_phys')
         if lpm_debug_phys is None:
-                self.output.append("NOTE: 'lpm_debug data' not found\n")
-                return
-        lpm_debug_phys = self.ramdump.read_word(lpm_debug_phys, True)
+            self.output.append("NOTE: 'lpm_debug data' not found\n")
+            return
 
+        lpm_debug_phys = self.ramdump.read_word(lpm_debug_phys, True)
+        debug_event = self.ramdump.gdbmi.get_enum_lookup_table('debug_event', 7)
         for i in range(0, 256):
                 debug = []
 
                 addr = lpm_debug_phys + i * self.ramdump.sizeof('struct lpm_debug')
 
                 offset = self.ramdump.field_offset('struct lpm_debug', 'time')
-                time = self.ramdump.read_word(addr + offset, False)
+                time = self.ramdump.read_u64(addr + offset, False)
                 debug.append(time)
 
                 offset = self.ramdump.field_offset('struct lpm_debug', 'evt')
                 evt = self.ramdump.read_int(addr + offset, False)
-                debug.append(evt)
+                debug.append(debug_event[evt])
 
                 offset = self.ramdump.field_offset('struct lpm_debug', 'cpu')
                 cpu = self.ramdump.read_int(addr + offset, False)
@@ -432,22 +435,26 @@ class lpm(RamParser):
         lpm_debug = []
 
         self.output.append("\n")
-        self.output.append("{:16}".format("TimeStamp"))
-        self.output.append("{:8} {:8} {:8} ".format("Event", "CPU", "arg1"))
-        self.output.append("{:16}{:16}{:16}\n".format("arg2", "arg3", "arg4"))
+        self.output.append("{:<16}{:<16}".format("TimeStamp", "Seconds"))
+        self.output.append("{:<16}{:<16}{:<16}".format("Event", "CPU", "arg1"))
+        self.output.append("{:<16}{:<16}{:<16}\n".format("arg2", "arg3", "arg4"))
         self.output.append("{}{}".format("-" * 120, "\n"))
 
         lpm_debug = sorted(self.lpm_debug, key=itemgetter(0))
-
         for i in range(len(lpm_debug)):
-                debug = lpm_debug[i]
-                for j in range(len(debug)):
-                        if j == 0 or j > 3:
-                                self.output.append("{:16}".format(hex(debug[j]).rstrip("L")))
-                        else:
-                                self.output.append("{}{:8}".format(debug[j], ""))
+            debug = lpm_debug[i]
+            for j in range(len(debug)):
+                if j != 1:
+                    self.output.append("{:<16}".format(hex(debug[j])))
+                else:
+                    self.output.append("{:<16}".format(debug[j]))
+                # add one more item to show the sec transformed from qtimer
+                if j == 0:
+                    sec = float(debug[0])/19200000.0
+                    self.output.append("{:<16.6f}".format(sec))
 
-                self.output.append("\n")
+            self.output.append("\n")
+        self.output.append("\n")
 
     def get_cpuidle_usage_details(self, state_usage_addr):
         usage_stats = OrderedDict()
