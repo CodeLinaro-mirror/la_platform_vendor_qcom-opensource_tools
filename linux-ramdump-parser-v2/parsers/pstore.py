@@ -216,7 +216,6 @@ class PStore(RamParser):
                         pmsg_out.write("\n")
                 else:
                     priority = struct.unpack('<b', pmsg[next_addr+18:next_addr + 19])[0]
-                    print(priority)
                     if priority < 0 or priority >= 9:
                         next_addr += len
                         continue
@@ -240,7 +239,6 @@ class PStore(RamParser):
         tagidx = struct.unpack('<I', _data[pos : pos + self.SIZEOF_HEADER_T])[0] #4 bytes
         pos = pos + self.SIZEOF_HEADER_T
         evt_type, tmpmsg, length = self.get_evt_data(_data, pos)
-        print("evt_type",evt_type, "tmpmsg",tmpmsg, len(_data))
         pos = pos + length
         if evt_type == -1:
             return None, None
