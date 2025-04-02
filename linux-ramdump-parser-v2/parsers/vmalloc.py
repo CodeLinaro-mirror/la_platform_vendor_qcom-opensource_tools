@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2015,2017 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -80,24 +80,23 @@ class Vmalloc:
             if not vmlist:
                 continue
             list_walker = llist.ListWalker(self.ramdump, vmlist, next_offset)
-            list_walker.walk(vmlist, vmap_func)
+            list_walker.walk(vmap_func)
         return
 
     def vmap_nodes(self, vmhead_list):
         vmap_nodes_addr = self.ramdump.read_pointer('vmap_nodes')
         if vmap_nodes_addr:
             nr_vmap_nodes = self.ramdump.read_int('nr_vmap_nodes')
-            vmap_nodes = self.ramdump.read_datatype(vmap_nodes_addr, 'struct vmap_node[{}]' \
-                            .format(nr_vmap_nodes))
             for vn_idx in range(0, nr_vmap_nodes):
-                vn = vmap_nodes[vn_idx].busy.head.next
+                __vmap_nodes_addr = vmap_nodes_addr + vn_idx * self.ramdump.sizeof('struct vmap_node')
+                vn = self.ramdump.struct_field_addr(__vmap_nodes_addr, 'struct vmap_node', 'busy.head')
                 vmhead_list.append(vn)
         return
 
     def vmap_area_list(self, vmhead_list):
         vmap_area_list_addr = self.ramdump.address_of('vmap_area_list')
         if vmap_area_list_addr:
-            vn = self.ramdump.read_structure_field(vmap_area_list_addr, 'struct list_head', 'next')
+            vn = vmap_area_list_addr
             vmhead_list.append(vn)
         return
 

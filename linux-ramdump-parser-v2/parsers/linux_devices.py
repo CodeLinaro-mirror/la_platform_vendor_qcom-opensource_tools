@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -56,15 +56,15 @@ class DevicesList(RamParser):
         self.device_lists.append([device, name, bus_name, driver_data, archdata])
 
     def get_device_list(self, fout = None):
-        devices_kset_addr = self.ramdump.address_of('devices_kset')
-        list_head = devices_kset_addr
+        devices_kset = self.ramdump.read_pointer('devices_kset')
+        list_head = devices_kset + self.ramdump.field_offset('struct kset', 'list')
         list_offset = self.kobj_offset + self.entry_offset
         list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
-        list_walker.walk(list_head, self.list_func, fout)
+        list_walker.walk(self.list_func, fout)
         return self.device_lists
 
     def parse(self):
-        fout = open(self.ramdump.outdir + "/devices.txt", "w")
-        print("v.v (struct device)  name                                                                                                 bus_name         driver_data                       v.v (struct cma)    dma_ops \n", file=self.f)
+        fout = self.ramdump.open_file('devices.txt')
+        print("v.v (struct device)  name                                                                                                 bus_name         driver_data                       v.v (struct cma)    dma_ops \n", file=fout)
         self.get_device_list(fout)
         fout.close()

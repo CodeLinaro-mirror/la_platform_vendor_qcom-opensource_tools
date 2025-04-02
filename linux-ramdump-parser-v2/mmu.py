@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -43,8 +43,12 @@ class MMU(object):
         self.ramdump = ramdump
         self.s2_walk = self.ramdump.s2_walk
         if self.s2_walk:
+            self._tlbv1 = {}
             self._tlbv2 = {}
-            self.ttbr = self.ramdump.ttbr
+            if ttbr:
+                self.ttbr = ttbr
+            else:
+                self.ttbr = self.ramdump.ttbr
             self.vttbr = self.ramdump.vttbr
         else:
             if ttbr is not None:
@@ -110,6 +114,9 @@ class MMU(object):
         raise NotImplementedError
 
     def get_pgtable_index(self):
+        return None
+
+    def virt_to_physel1(self):
         return None
 
 class Armv7MMU(MMU):
@@ -790,15 +797,26 @@ class Armv8MMU(MMU):
 
     def page_table_walk(self, virt):
         virt_r = Register(virt,
-            zl_index=(self.max_vabits-1,self.l0_index),
-            fl_index=(self.l0_index-1,self.l1_index),
-            sl_index=(self.l1_index-1,self.l2_index),
-            tl_index=(self.l2_index-1,self.l3_index),
+            nl_index=self.ln1,
+            zl_index=self.l0,
+            fl_index=self.l1,
+            sl_index=self.l2,
+            tl_index=self.l3,
             page_index=(self.l3_index-1,0))
 
         base = Register(base=(self.max_vabits-1, self.l3_index))
         base.value = self.ttbr
+        if self.ramdump.pgtable_levels >= 5 and self.ramdump.pgtable_l5_enabled():
+            try:
+              zl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.nl_index, self.l3_index, self.ln1_index)
+            except:
+                return None
 
+            if zl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
+                r = self.zl_block_desc_2_phys(zl_desc, virt_r)
+                return r
+
+            base.base = zl_desc.next_level_base_addr_upper
         if self.ramdump.pgtable_levels >= 4:
             try:
               zl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.zl_index, self.l3_index, self.l0_index)
@@ -842,14 +860,26 @@ class Armv8MMU(MMU):
 
     def page_table_walk_to_get_swap_pte(self, virt):
         virt_r = Register(virt,
-            zl_index=(self.max_vabits-1,self.l0_index),
-            fl_index=(self.l0_index-1,self.l1_index),
-            sl_index=(self.l1_index-1,self.l2_index),
-            tl_index=(self.l2_index-1,self.l3_index),
+            nl_index=self.ln1,
+            zl_index=self.l0,
+            fl_index=self.l1,
+            sl_index=self.l2,
+            tl_index=self.l3,
             page_index=(self.l3_index-1,0))
 
         base = Register(base=(self.max_vabits-1, self.l3_index))
         base.value = self.ttbr
+        if self.ramdump.pgtable_levels >= 5 and self.ramdump.pgtable_l5_enabled():
+            try:
+              zl_desc = self.do_fl_sl_level_lookup(base.value, virt_r.nl_index, self.l3_index, self.ln1_index)
+            except:
+                return None
+
+            if zl_desc.dtype == Armv8MMU.DESCRIPTOR_BLOCK:
+                r = self.zl_block_desc_2_phys(zl_desc, virt_r)
+                return r
+
+            base.base = zl_desc.next_level_base_addr_upper
 
         if self.ramdump.pgtable_levels >= 4:
             try:
@@ -925,6 +955,29 @@ class Armv8MMU(MMU):
         r = self.tl_page_desc_2_physel2(tl_desc, virt_r)
         return r
 
+    def virt_to_physel1(self, addr, skip_tlb=False, save_in_tlb=True):
+        """Do a virtual to physical address lookup and possibly cache the
+        result in the "TLB".
+
+        """
+        if addr is None:
+            return None
+
+        page_addr = (addr >> self.ramdump.page_shift) << self.ramdump.page_shift
+        page_offset = addr & ((1 << self.ramdump.page_shift) - 1)
+
+        if not skip_tlb:
+            if page_addr in self._tlbv1:
+                return self._tlbv1[page_addr] + page_offset
+
+        phys_addr = self.page_table_walk(page_addr)
+        if phys_addr is None:
+            return None
+
+        if save_in_tlb:
+            self._tlbv1[page_addr] = phys_addr
+        return phys_addr + page_offset
+
     def virt_to_physel2(self, addr, skip_tlb=False, save_in_tlb=True):
         """Do a virtual to physical address lookup and possibly cache the
         result in the "TLB".
@@ -963,16 +1016,44 @@ class Armv8MMU(MMU):
         self.l2_index = self.pmd_shift = self.pgtable_level_shift(2)
         self.pud_shift = self.pgtable_level_shift(1)
         self.pgdir_shift = self.pgtable_level_shift(4 - self.ramdump.pgtable_levels)
-        if self.ramdump.pgtable_levels >= 4:
-            self.l1_index = self.pud_shift
-            self.l0_index = self.pgdir_shift
-        else:
-            self.l1_index = self.pgdir_shift
-            self.l0_index = self.ramdump.va_bits
+        self.p4d_shift = self.pgtable_level_shift(0)
+        self.pte_shift = self.ramdump.page_shift
+        per_ptrs = self.ramdump.page_shift - 3
+
         self.max_vabits = 48
         if self.ramdump.va_bits > self.max_vabits:
-            self.max_vabits = self.ramdump.va_bits
-        return
+            self.max_vabits = self.ramdump.vabits_actual
+
+        per_ptrs = self.ramdump.page_shift - 3
+        self.ln1 = (self.ramdump.va_bits-1, self.pgdir_shift)
+        self.ln1_index = self.pgdir_shift
+
+        if self.ramdump.pgtable_levels > 4:
+            self.p4d_shift = self.pgtable_level_shift(0)
+            self.l0 = (per_ptrs + self.p4d_shift-1, self.p4d_shift)
+            self.l0_index = self.p4d_shift
+        else:
+            self.l0 = self.ln1
+            self.l0_index = self.ln1_index
+
+        if self.ramdump.pgtable_levels > 3:
+            self.pud_shift = self.pgtable_level_shift(1)
+            self.l1 = (per_ptrs + self.pud_shift-1, self.pud_shift)
+            self.l1_index = self.pud_shift
+        else:
+            self.l1 = self.ln1
+            self.l1_index = self.ln1_index
+
+        if self.ramdump.pgtable_levels > 2:
+            self.pmd_shift = self.pgtable_level_shift(2)
+            self.l2 = (per_ptrs + self.pmd_shift-1, self.pmd_shift)
+            self.l2_index = self.pmd_shift
+        else:
+            self.l2 = self.ln1
+            self.l2_index = self.ln1_index
+
+        self.l3 = (per_ptrs + self.pte_shift-1, self.pte_shift)
+        self.l3_index = self.pte_shift
 
     def pgtable_level_shift(self, n):
         return ((self.ramdump.page_shift - 3) * (4 - (n)) + 3)
