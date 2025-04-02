@@ -1,4 +1,5 @@
 # Copyright (c) 2015-2017, 2020 The Linux Foundation. All rights reserved.
+# Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -19,7 +20,6 @@ CPRH_CTRL_TYPE = 2
 class CPR3Info(RamParser):
     def __init__(self, *args):
         super(CPR3Info, self).__init__(*args)
-        self.head = ''
         self.cprinfo_fields = ['speed_bin', 'cpr_fuse_revision',
                                'cpr_fuse_map_match', 'num_fuse_corners',
                                'num_corners', 'corner']
@@ -30,7 +30,6 @@ class CPR3Info(RamParser):
         self.value_list = defaultdict(list)
         self.attr_list = defaultdict(list)
         self.output = []
-        self.consumer_head = ''
 
     def get_cpr(self):
         # Return if the cpr3_regulator_list is not available
@@ -41,12 +40,10 @@ class CPR3Info(RamParser):
                 "not found to extract cpr information")
             return
 
-        head = self.ramdump.read_word(cpr)
-        self.head = cpr
         node_offset = self.ramdump.field_offset('struct cpr3_controller',
                                                 'list')
-        c_w = linux_list.ListWalker(self.ramdump, head, node_offset)
-        c_w.walk(head, self.cpr_walker)
+        c_w = linux_list.ListWalker(self.ramdump, cpr, node_offset)
+        c_w.walk(self.cpr_walker)
 
     def get_kryo(self):
         kryo_addr = self.ramdump.address_of('kryo_regulator_list')
@@ -55,16 +52,15 @@ class CPR3Info(RamParser):
                 "NOTE: 'kryo_regulator_list' list " +
                 "not found to extract kryo_addr information")
             return
-        head = self.ramdump.read_word(kryo_addr)
-        self.head = kryo_addr
+
         node_offset = self.ramdump.field_offset('struct kryo_regulator',
                                                 'link')
-        k_w = linux_list.ListWalker(self.ramdump, head, node_offset)
+        k_w = linux_list.ListWalker(self.ramdump, kryo_addr, node_offset)
         tmp = "=" * 80 + "\n"
         tmp += "Kryo Regulator (LDO/BHS management)\n"
         tmp += "=" * 80 + "\n"
         self.output.append(tmp)
-        k_w.walk(head, self.kryo_walker)
+        k_w.walk(self.kryo_walker)
 
     def dump_cpr3_regulator_voltages(self, vreg_addr):
         corner_count = self.ramdump.read_int(
@@ -387,8 +383,6 @@ class CPR3Info(RamParser):
             self.dump_cpr3_regulator_state(vreg_addr + i * size_reg, ctrl_type)
 
     def cpr_walker(self, ctrl_addr):
-        if ctrl_addr == self.head:
-            return
         cpr_controller_name_addr = self.ramdump.read_word(
             ctrl_addr + self.ramdump.field_offset('struct cpr3_controller',
                                                   'name'))
@@ -489,9 +483,6 @@ class CPR3Info(RamParser):
         self.output.append(tmp)
 
     def kryo_walker(self, kryo_addr):
-        if kryo_addr == self.head:
-            return
-
         retention_mode = self.ramdump.read_int(
             kryo_addr +
             self.ramdump.field_offset(
@@ -591,15 +582,11 @@ class CPR3Info(RamParser):
                                            "Max_Uv")
         self.output.append(tmp)
         node_offset = self.ramdump.field_offset('struct regulator', 'list')
-        self.consumer_head = consumer_head
         c_w = linux_list.ListWalker(self.ramdump, consumer_head, node_offset)
-        c_w.walk(consumer_head, self.consumer_walker)
+        c_w.walk(self.consumer_walker)
         self.output.append("\n")
 
     def consumer_walker(self, reg_addr):
-        if reg_addr + self.ramdump.field_offset('struct regulator', 'list') \
-           == self.consumer_head:
-            return
         min_uV = self.ramdump.read_int(
             reg_addr +
             self.ramdump.field_offset('struct regulator', 'min_uV'))
