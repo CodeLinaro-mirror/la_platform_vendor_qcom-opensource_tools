@@ -1,5 +1,5 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 
 import linux_list as llist
 from parser_util import register_parser, RamParser, cleanupString
@@ -73,12 +73,11 @@ class iostat(RamParser):
             self.output.write("ERROR: 'block_class' not found\n")
             return
         if self.ramdump.field_offset('struct class', 'p') is None:
-            classkset_ptr = self.ramdump.read_pointer('class_kset')
-            classkset_list_ptr = self.ramdump.read_structure_field(classkset_ptr, 'struct kset', 'list.next')
+            classkset_list_ptr = self.ramdump.read_pointer('class_kset') + self.ramdump.field_offset('struct kset', 'list')
             kobj_offset = self.ramdump.field_offset('struct kobject', 'entry')
             sp_buf = []
             class_subsys_walker = llist.ListWalker(self.ramdump, classkset_list_ptr, kobj_offset)
-            class_subsys_walker.walk(classkset_list_ptr, self.get_class_to_subsys, block_class, sp_buf)
+            class_subsys_walker.walk(self.get_class_to_subsys, block_class, sp_buf)
             if bool(sp_buf):
                 p = sp_buf[0]
         else:
@@ -89,9 +88,7 @@ class iostat(RamParser):
         list_offset = self.ramdump.field_offset('struct klist_node', 'n_node')
 
         init_list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
-        if not init_list_walker.is_empty():
-            init_list_walker.walk(init_list_walker.next() + list_offset,
-                                self.block_class_init_walker)
+        init_list_walker.walk(self.block_class_init_walker)
 
         sorted_list = sorted(self.list_ouput, key=lambda l: l[6], reverse=True)
         print("MAJOR     gendisk          NAME       request_queue      TOTAL     ASYNC     SYNC \n", file = self.f)
