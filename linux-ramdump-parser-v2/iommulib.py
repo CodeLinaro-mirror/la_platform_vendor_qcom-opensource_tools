@@ -1,5 +1,5 @@
 # Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -384,8 +384,7 @@ class IommuLib(object):
                 'struct msm_iommu_priv', 'list_attached')
 
         if list_attached_offset is not None:
-            list_attached = self.ramdump.read_word(priv_ptr +
-                                                   list_attached_offset)
+            list_attached = priv_ptr + list_attached_offset
         else:
             list_attached = None
 
@@ -425,7 +424,7 @@ class IommuLib(object):
                 self.ramdump, list_attached,
                 self.ramdump.field_offset('struct msm_iommu_ctx_drvdata',
                                           'attached_elm'))
-            list_walker.walk(list_attached, self._iommu_list_func, ctx_list)
+            list_walker.walk(self._iommu_list_func, ctx_list)
 
             if (self.ramdump.is_config_defined('CONFIG_IOMMU_AARCH64')):
                 domain_create = Domain(pg_table, redirect, ctx_list, client_name,
