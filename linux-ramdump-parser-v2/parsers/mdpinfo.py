@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -2726,7 +2726,7 @@ class MDPinfo(RamParser):
                         continue
 
                 contents_list.reverse()
-                self.outfile=open('evtlog_stage_2.txt',"w")
+                self.outfile=self.ramdump.open_file('evtlog_stage_2.txt',"w")
                 for i in range(len(contents_list)) :
                     for j in range(len(contents_list[i])):
                         self.outfile.write(contents_list[i][j])
