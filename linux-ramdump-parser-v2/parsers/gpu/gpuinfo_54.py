@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -269,8 +269,7 @@ class GpuParser_54(RamParser):
                                              'active_node')
         active_context_list_walker = linux_list.ListWalker(dump, node_addr,
                                                            list_elem_offset)
-        active_context_list_walker.walk(node_addr,
-                                        self.print_context_data, format_str)
+        active_context_list_walker.walk(self.print_context_data, format_str)
         self.writeln('\nPriv key:')
         for (bit, char, prop) in kgsl_ctx_priv:
             self.write('\'' + char + '\'' + ': ' + prop + ', ')
@@ -286,7 +285,7 @@ class GpuParser_54(RamParser):
                                              'node')
         globals_list_walker = linux_list.ListWalker(dump, node_addr,
                                                     list_elem_offset)
-        globals_list_walker.walk(node_addr, self.__print_global_memdesc,
+        globals_list_walker.walk(self.__print_global_memdesc,
                                  format_str)
 
     def __print_global_memdesc(self, kgsl_global_memdesc_base, format_str):
@@ -354,13 +353,13 @@ class GpuParser_54(RamParser):
                                        "MEMDESC_SIZE", "GPUADDR", "FLAGS",
                                        "USAGE", "PENDING_FREE"))
 
-        node_addr = dump.read('kgsl_driver.process_list.next')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
             dump, node_addr, list_elem_offset)
         open_process_list_walker.walk(
-            node_addr, self.__walk_process_mementry, dump, format_str)
+            self.__walk_process_mementry, dump, format_str)
 
     def __walk_process_mementry(self, kgsl_private_base_addr, dump,
                                 format_str):
@@ -1204,12 +1203,12 @@ class GpuParser_54(RamParser):
                                        "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
                                        "CTX_CNT", "CMDLINE STRING"))
 
-        node_addr = dump.read('kgsl_driver.process_list.next')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
                                     dump, node_addr, list_elem_offset)
-        open_process_list_walker.walk(node_addr, self.walk_process_private,
+        open_process_list_walker.walk(self.walk_process_private,
                                       dump, format_str)
 
     def walk_process_private(self, kgsl_private_base_addr, dump, format_str):
@@ -1253,12 +1252,12 @@ class GpuParser_54(RamParser):
         self.writeln(format_str.format("PID", "pt_base", "ttbr0",
                                        "ctxidr", "attached"))
 
-        node_addr = dump.read('kgsl_driver.pagetable_list.next')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'pagetable_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_pagetable', 'list')
         pagetable_list_walker = linux_list.ListWalker(
                                     dump, node_addr, list_elem_offset)
-        pagetable_list_walker.walk(node_addr, self.walk_pagetable,
+        pagetable_list_walker.walk(self.walk_pagetable,
                                    dump, format_str)
 
     def walk_pagetable(self, kgsl_pagetable_base_addr, dump, format_str):
@@ -1299,6 +1298,31 @@ class GpuParser_54(RamParser):
 
         a6xx_gmu_dev = dump.sibling_field_addr(self.devp, 'struct a6xx_device',
                                                'adreno_dev', 'gmu')
+
+        gmu_logs = dump.read_structure_field(a6xx_gmu_dev,
+                                             'struct a6xx_gmu_device',
+                                             'gmu_log')
+        hostptr = dump.read_structure_field(gmu_logs,
+                                            'struct gmu_memdesc', 'hostptr')
+        size = dump.read_structure_field(gmu_logs,
+                                         'struct gmu_memdesc', 'size')
+
+        self.writeln('\nTrace Details:')
+        self.writeln('\tStart Address: ' + strhex(hostptr))
+        self.writeln('\tSize: ' + str_convert_to_kb(size))
+
+        if size == 0:
+            self.writeln('Invalid size. Aborting gmu trace dump.')
+            return
+        else:
+            file = self.ramdump.open_file('gpu_parser/gmu_trace.bin', 'wb')
+            self.writeln('Dumping ' + str_convert_to_kb(size) +
+                         ' starting from ' + strhex(hostptr) +
+                         ' to gmu_trace.bin')
+            data = self.ramdump.get_bin_data(hostptr, size)
+            file.write(data)
+            file.close()
+
         gmu_fw_ver = dump.read_u32(a6xx_gmu_dev)
         pwr_fw_ver = dump.read_u32(a6xx_gmu_dev + 8)
         flags = dump.read_structure_field(a6xx_gmu_dev,
@@ -1321,6 +1345,7 @@ class GpuParser_54(RamParser):
                                               'struct a6xx_gmu_device',
                                               'cm3_fault')
 
+        self.writeln()
         self.writeln('GMU Firmware Version: ' + strhex(gmu_fw_ver))
         self.writeln('Power Firmware Version: ' + strhex(pwr_fw_ver))
         self.writeln()
@@ -1358,30 +1383,6 @@ class GpuParser_54(RamParser):
 
         self.writeln('num_clks: ' + str(num_clks))
         self.writeln('clock consumer ID: ' + str(clk_id))
-
-        gmu_logs = dump.read_structure_field(a6xx_gmu_dev,
-                                             'struct a6xx_gmu_device',
-                                             'gmu_log')
-        hostptr = dump.read_structure_field(gmu_logs,
-                                            'struct gmu_memdesc', 'hostptr')
-        size = dump.read_structure_field(gmu_logs,
-                                         'struct gmu_memdesc', 'size')
-
-        self.writeln('\nTrace Details:')
-        self.writeln('\tStart Address: ' + strhex(hostptr))
-        self.writeln('\tSize: ' + str_convert_to_kb(size))
-
-        if size == 0:
-            self.writeln('Invalid size. Aborting gmu trace dump.')
-            return
-        else:
-            file = self.ramdump.open_file('gpu_parser/gmu_trace.bin', 'wb')
-            self.writeln('Dumping ' + str_convert_to_kb(size) +
-                         ' starting from ' + strhex(hostptr) +
-                         ' to gmu_trace.bin')
-            data = self.ramdump.get_bin_data(hostptr, size)
-            file.write(data)
-            file.close()
 
     def dump_gpu_snapshot(self, dump):
         snapshot_faultcount = dump.read_structure_field(self.devp,

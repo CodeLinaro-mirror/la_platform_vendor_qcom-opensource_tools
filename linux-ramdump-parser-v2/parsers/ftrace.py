@@ -1,5 +1,5 @@
 # Copyright (c) 2017-2022, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -55,7 +55,10 @@ class FtraceParser(RamParser):
         offset = ram_dump.read_u32(common_list + field_offset)
         size = ram_dump.read_u32(common_list + size_offset)
         signed = ram_dump.read_u32(common_list + signed_offset)
-
+        if type_str == None or field_name == None:
+            str_error =  'v.v (struct ftrace_event_field)0x{0:x} type_str or field_name is None'.format(common_list)
+            print_out_str(str_error)
+            return
         if re.match('(.*)\[(.*)', type_str) and not (re.match('__data_loc', type_str)):
             s = re.split('\[', type_str)
             s[1] = '[' + s[1]
@@ -120,13 +123,13 @@ class FtraceParser(RamParser):
         self.formats_out.write("format:\n")
 
         list_walker = llist.ListWalker(ram_dump, common_field_list, field_next_offset)
-        list_walker.walk_prev(common_field_list, self.ftrace_field_func, ram_dump)
+        list_walker.walk_prev(self.ftrace_field_func, ram_dump)
         self.formats_out.write("\n")
 
         event_class = ram_dump.read_word(ftrace_list + class_offset)
         field_list = event_class + fields_offset
         list_walker = llist.ListWalker(ram_dump, field_list, field_next_offset)
-        list_walker.walk_prev(field_list, self.ftrace_field_func, ram_dump)
+        list_walker.walk_prev(self.ftrace_field_func, ram_dump)
         self.formats_out.write("\n")
         self.formats_out.write("print fmt: {0}\n".format(fmt_str))
         fmt_list = []
@@ -142,7 +145,7 @@ class FtraceParser(RamParser):
         ftrace_events_list = self.ramdump.address_of('ftrace_events')
         next_offset = self.ramdump.field_offset(self.event_call, 'list')
         list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
-        list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
+        list_walker.walk_prev(self.ftrace_events_func, self.ramdump)
         self.formats_out.close()
         return fevent_list
 
@@ -252,9 +255,9 @@ class FtraceParser(RamParser):
         trace_buffer_name_offset = self.ramdump.field_offset(
             'struct trace_array', 'name')
         list_walker = llist.ListWalker(self.ramdump, trace_array_list, list_offset)
-        list_walker.walk_prev(trace_array_list, self.ftrace_get_buffers, trace_buffer_name_offset)
+        list_walker.walk_prev(self.ftrace_get_buffers, trace_buffer_name_offset)
         if len(self.trace_buffers) == 0:
-            list_walker.walk(trace_array_list, self.ftrace_get_buffers, trace_buffer_name_offset)
+            list_walker.walk(self.ftrace_get_buffers, trace_buffer_name_offset)
         if len(self.trace_buffers) == 0:
             print_out_str("A ftrace buffer is not found")
             return
