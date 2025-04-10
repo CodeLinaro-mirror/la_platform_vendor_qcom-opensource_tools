@@ -1,4 +1,5 @@
 # Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+# Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -18,7 +19,6 @@ from collections import defaultdict
 class CPRInfo(RamParser):
     def __init__(self, *args):
         super(CPRInfo, self).__init__(*args)
-        self.head = ''
         self.cprinfo_fields = ['speed_bin', 'cpr_fuse_revision', 'cpr_fuse_map_match', 'num_fuse_corners', 'num_corners', 'corner']
         self.voltages = ['ceiling_volt', 'open_loop_volt', 'last_volt', 'floor_volt']
         self.corner_info = ['cpr_fuse_target_quot', 'quot_adjust', 'corner_map']
@@ -68,11 +68,9 @@ class CPRInfo(RamParser):
             self.output_file.write("NOTE: 'cpr_regulator_list' list not found to extract cpr information")
             return
 
-        head = self.ramdump.read_word(cpr)
-        self.head = cpr
         node_offset = self.ramdump.field_offset('struct cpr_regulator', 'list')
-        cpr_walker = linux_list.ListWalker(self.ramdump, head, node_offset)
-        cpr_walker.walk(head, self.cpr_walker)
+        cpr_walker = linux_list.ListWalker(self.ramdump, cpr, node_offset)
+        cpr_walker.walk(self.cpr_walker)
 
     def get_cpr_fuse_ro_sel(self, node):
         entry_offset = self.ramdump.sibling_field_addr(node, 'struct cpr_regulator', 'list', 'cpr_fuse_ro_sel')
@@ -113,9 +111,6 @@ class CPRInfo(RamParser):
             self.output.append(tmp)
 
     def cpr_walker(self, node):
-        if node == self.head:
-            return
-
         rdesc_addr = self.ramdump.sibling_field_addr(node, 'struct cpr_regulator', 'list', 'rdesc')
         rdesc_ptr = self.ramdump.read_word(rdesc_addr + self.ramdump.field_offset('struct regulator_desc', 'name'))
         cpr_name = self.ramdump.read_cstring(rdesc_ptr, 48)
