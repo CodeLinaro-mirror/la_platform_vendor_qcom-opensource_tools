@@ -1,5 +1,5 @@
 # Copyright (c) 2012, 2014-2018, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022, 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -635,11 +635,11 @@ class QDSSDump():
         self.f = open(self.ramdump.outdir + "/ATID.txt", "w")
         print("{:<50} {}".format("Source Name", "ATID"), file = self.f)
         print("{}".format("=" * 60), file = self.f)
-        devices_kset_addr = self.ramdump.address_of('devices_kset')
-        list_head = devices_kset_addr
+        devices_kset = self.ramdump.read_pointer('devices_kset')
+        list_head = devices_kset + self.ramdump.field_offset('struct kset', 'list')
         list_offset = self.kobj_offset + self.entry_offset
         list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
-        list_walker.walk(list_head, self.list_qdss_atid)
+        list_walker.walk(self.list_qdss_atid)
         self.f.close()
 
     def dump_standard(self, ram_dump):
