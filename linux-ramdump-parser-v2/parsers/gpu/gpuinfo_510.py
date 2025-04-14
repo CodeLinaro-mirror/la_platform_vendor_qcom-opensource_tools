@@ -245,8 +245,7 @@ class GpuParser_510(RamParser):
                                              'active_node')
         active_context_list_walker = linux_list.ListWalker(dump, node_addr,
                                                            list_elem_offset)
-        active_context_list_walker.walk(node_addr,
-                                        self.print_context_data, format_str)
+        active_context_list_walker.walk(self.print_context_data, format_str)
         self.writeln('\nPriv key:')
         for (bit, char, prop) in kgsl_ctx_priv:
             self.write('\'' + char + '\'' + ': ' + prop + ', ')
@@ -262,7 +261,7 @@ class GpuParser_510(RamParser):
                                              'node')
         globals_list_walker = linux_list.ListWalker(dump, node_addr,
                                                     list_elem_offset)
-        globals_list_walker.walk(node_addr, self.__print_global_memdesc,
+        globals_list_walker.walk(self.__print_global_memdesc,
                                  format_str)
 
     def __print_global_memdesc(self, kgsl_global_memdesc_base, format_str):
@@ -330,13 +329,13 @@ class GpuParser_510(RamParser):
                                        "MEMDESC_SIZE", "GPUADDR", "FLAGS",
                                        "USAGE", "PENDING_FREE", "PRIV"))
 
-        node_addr = dump.read('kgsl_driver.process_list.next')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
             dump, node_addr, list_elem_offset)
         open_process_list_walker.walk(
-            node_addr, self.__walk_process_mementry, dump, format_str)
+            self.__walk_process_mementry, dump, format_str)
 
     def __walk_process_mementry(self, kgsl_private_base_addr, dump,
                                 format_str):
@@ -1068,12 +1067,12 @@ class GpuParser_510(RamParser):
                                        "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
                                        "CTX_CNT", "STATE", "CMDLINE STRING"))
 
-        node_addr = dump.read('kgsl_driver.process_list.next')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
                                     dump, node_addr, list_elem_offset)
-        open_process_list_walker.walk(node_addr, self.walk_process_private,
+        open_process_list_walker.walk(self.walk_process_private,
                                       dump, format_str)
 
     def walk_process_private(self, kgsl_private_base_addr, dump, format_str):
@@ -1118,12 +1117,12 @@ class GpuParser_510(RamParser):
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20}'
         self.writeln(format_str.format("PID", "pt_base", "ttbr0"))
-        node_addr = dump.read('kgsl_driver.pagetable_list.next')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'pagetable_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_pagetable', 'list')
         pagetable_list_walker = linux_list.ListWalker(
                                     dump, node_addr, list_elem_offset)
-        pagetable_list_walker.walk(node_addr, self.walk_pagetable,
+        pagetable_list_walker.walk(self.walk_pagetable,
                                    dump, format_str)
 
     def walk_pagetable(self, pt_base_addr, dump, format_str):

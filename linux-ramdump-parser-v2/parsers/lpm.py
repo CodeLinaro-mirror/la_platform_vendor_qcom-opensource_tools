@@ -1,5 +1,5 @@
 # Copyright (c) 2015-2018, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,6 @@ from collections import OrderedDict
 class lpm(RamParser):
     def __init__(self, *args):
         super(lpm, self).__init__(*args)
-        self.head = ''
         self.output = []
         self.clusters = []
         self.cpu_possible_bits = None
@@ -152,23 +151,18 @@ class lpm(RamParser):
         self.output.append("\n")
 
     def lpm_walker(self, lpm_cluster):
-        if lpm_cluster == self.head:
-                return
         self.clusters.append(lpm_cluster)
 
     def get_pm_domains(self):
 
         gpd_offset = self.ramdump.field_offset('struct generic_pm_domain', 'gpd_list_node')
-        head = self.ramdump.read_word(self.ramdump.address_of('gpd_list'), True)
-        self.head = head
-
+        head = self.ramdump.address_of('gpd_list')
+        if head == None:
+            return
         gpd_walker = linux_list.ListWalker(self.ramdump, head, gpd_offset)
-        gpd_walker.walk(head, self.get_pm_domain_info)
+        gpd_walker.walk(self.get_pm_domain_info)
 
     def get_pm_domain_info(self, node):
-        if node == self.head:
-            return
-
         name_offset = self.ramdump.field_offset('struct generic_pm_domain', 'name')
         name = self.ramdump.read_cstring(self.ramdump.read_word(node + name_offset))
         if not name:
@@ -228,12 +222,10 @@ class lpm(RamParser):
         self.clusters.append(lpm_root_node)
 
         offset = self.ramdump.field_offset('struct lpm_cluster', 'child')
-        lpm_cluster = self.ramdump.read_word(lpm_root_node + offset, True)
-        self.head = lpm_root_node + offset
-
+        lpm_cluster = lpm_root_node + offset
         offset = self.ramdump.field_offset('struct lpm_cluster', 'list')
         lpm_walker = linux_list.ListWalker(self.ramdump, lpm_cluster, offset)
-        lpm_walker.walk(lpm_cluster, self.lpm_walker)
+        lpm_walker.walk(self.lpm_walker)
 
 
     def get_cpu_level_info(self, cpu_cluster_base, cpu, cpu_level):
@@ -398,22 +390,23 @@ class lpm(RamParser):
     def get_debug_phys(self):
         lpm_debug_phys = self.ramdump.address_of('lpm_debug_phys')
         if lpm_debug_phys is None:
-                self.output.append("NOTE: 'lpm_debug data' not found\n")
-                return
-        lpm_debug_phys = self.ramdump.read_word(lpm_debug_phys, True)
+            self.output.append("NOTE: 'lpm_debug data' not found\n")
+            return
 
+        lpm_debug_phys = self.ramdump.read_word(lpm_debug_phys, True)
+        debug_event = self.ramdump.gdbmi.get_enum_lookup_table('debug_event', 7)
         for i in range(0, 256):
                 debug = []
 
                 addr = lpm_debug_phys + i * self.ramdump.sizeof('struct lpm_debug')
 
                 offset = self.ramdump.field_offset('struct lpm_debug', 'time')
-                time = self.ramdump.read_word(addr + offset, False)
+                time = self.ramdump.read_u64(addr + offset, False)
                 debug.append(time)
 
                 offset = self.ramdump.field_offset('struct lpm_debug', 'evt')
                 evt = self.ramdump.read_int(addr + offset, False)
-                debug.append(evt)
+                debug.append(debug_event[evt])
 
                 offset = self.ramdump.field_offset('struct lpm_debug', 'cpu')
                 cpu = self.ramdump.read_int(addr + offset, False)
@@ -442,22 +435,26 @@ class lpm(RamParser):
         lpm_debug = []
 
         self.output.append("\n")
-        self.output.append("{:16}".format("TimeStamp"))
-        self.output.append("{:8} {:8} {:8} ".format("Event", "CPU", "arg1"))
-        self.output.append("{:16}{:16}{:16}\n".format("arg2", "arg3", "arg4"))
+        self.output.append("{:<16}{:<16}".format("TimeStamp", "Seconds"))
+        self.output.append("{:<16}{:<16}{:<16}".format("Event", "CPU", "arg1"))
+        self.output.append("{:<16}{:<16}{:<16}\n".format("arg2", "arg3", "arg4"))
         self.output.append("{}{}".format("-" * 120, "\n"))
 
         lpm_debug = sorted(self.lpm_debug, key=itemgetter(0))
-
         for i in range(len(lpm_debug)):
-                debug = lpm_debug[i]
-                for j in range(len(debug)):
-                        if j == 0 or j > 3:
-                                self.output.append("{:16}".format(hex(debug[j]).rstrip("L")))
-                        else:
-                                self.output.append("{}{:8}".format(debug[j], ""))
+            debug = lpm_debug[i]
+            for j in range(len(debug)):
+                if j != 1:
+                    self.output.append("{:<16}".format(hex(debug[j])))
+                else:
+                    self.output.append("{:<16}".format(debug[j]))
+                # add one more item to show the sec transformed from qtimer
+                if j == 0:
+                    sec = float(debug[0])/19200000.0
+                    self.output.append("{:<16.6f}".format(sec))
 
-                self.output.append("\n")
+            self.output.append("\n")
+        self.output.append("\n")
 
     def get_cpuidle_usage_details(self, state_usage_addr):
         usage_stats = OrderedDict()
@@ -541,7 +538,7 @@ class lpm(RamParser):
                         if state_count < 10: # CPUIDLE_STATE_MAX
                             temp = kobjs_base + state_idx * self.ramdump.sizeof('void*')
                             cpuidle_state_usage_base = self.ramdump.read_u64(kobjs_base + state_idx * self.ramdump.sizeof('void*'))
-                            if cpuidle_state_usage_base != 0x0:                               
+                            if cpuidle_state_usage_base != 0x0:
                                 state_usage_offset = cpuidle_state_usage_base + self.ramdump.field_offset('struct cpuidle_state_kobj','state_usage')
                                 state_usage_addr = self.ramdump.read_u64(state_usage_offset)
                                 cpuidle_drv_offset = cpuidle_state_usage_base + self.ramdump.field_offset('struct cpuidle_state_kobj','state')
