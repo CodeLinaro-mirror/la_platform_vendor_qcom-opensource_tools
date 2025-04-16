@@ -1,5 +1,5 @@
 # Copyright (c) 2015-2018, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -19,7 +19,6 @@ from collections import OrderedDict
 class lpm(RamParser):
     def __init__(self, *args):
         super(lpm, self).__init__(*args)
-        self.head = ''
         self.output = []
         self.clusters = []
         self.cpu_possible_bits = None
@@ -152,23 +151,16 @@ class lpm(RamParser):
         self.output.append("\n")
 
     def lpm_walker(self, lpm_cluster):
-        if lpm_cluster == self.head:
-                return
         self.clusters.append(lpm_cluster)
 
     def get_pm_domains(self):
 
         gpd_offset = self.ramdump.field_offset('struct generic_pm_domain', 'gpd_list_node')
-        head = self.ramdump.read_word(self.ramdump.address_of('gpd_list'), True)
-        self.head = head
-
+        head = self.ramdump.address_of('gpd_list')
         gpd_walker = linux_list.ListWalker(self.ramdump, head, gpd_offset)
-        gpd_walker.walk(head, self.get_pm_domain_info)
+        gpd_walker.walk(self.get_pm_domain_info)
 
     def get_pm_domain_info(self, node):
-        if node == self.head:
-            return
-
         name_offset = self.ramdump.field_offset('struct generic_pm_domain', 'name')
         name = self.ramdump.read_cstring(self.ramdump.read_word(node + name_offset))
         if not name:
@@ -228,12 +220,10 @@ class lpm(RamParser):
         self.clusters.append(lpm_root_node)
 
         offset = self.ramdump.field_offset('struct lpm_cluster', 'child')
-        lpm_cluster = self.ramdump.read_word(lpm_root_node + offset, True)
-        self.head = lpm_root_node + offset
-
+        lpm_cluster = lpm_root_node + offset
         offset = self.ramdump.field_offset('struct lpm_cluster', 'list')
         lpm_walker = linux_list.ListWalker(self.ramdump, lpm_cluster, offset)
-        lpm_walker.walk(lpm_cluster, self.lpm_walker)
+        lpm_walker.walk(self.lpm_walker)
 
 
     def get_cpu_level_info(self, cpu_cluster_base, cpu, cpu_level):
@@ -541,7 +531,7 @@ class lpm(RamParser):
                         if state_count < 10: # CPUIDLE_STATE_MAX
                             temp = kobjs_base + state_idx * self.ramdump.sizeof('void*')
                             cpuidle_state_usage_base = self.ramdump.read_u64(kobjs_base + state_idx * self.ramdump.sizeof('void*'))
-                            if cpuidle_state_usage_base != 0x0:                               
+                            if cpuidle_state_usage_base != 0x0:
                                 state_usage_offset = cpuidle_state_usage_base + self.ramdump.field_offset('struct cpuidle_state_kobj','state_usage')
                                 state_usage_addr = self.ramdump.read_u64(state_usage_offset)
                                 cpuidle_drv_offset = cpuidle_state_usage_base + self.ramdump.field_offset('struct cpuidle_state_kobj','state')

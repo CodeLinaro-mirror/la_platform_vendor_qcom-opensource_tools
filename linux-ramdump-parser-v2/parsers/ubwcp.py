@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
-import linux_list
+# Copyright (c) 2022,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+import linux_hlist
 import enum
 from print_out import print_out_str
 from parser_util import RamParser, cleanupString, register_parser
@@ -100,10 +100,8 @@ class Ubwcp(RamParser):
         next_offset = self.ramdump.field_offset('struct hlist_node', 'next')
         for i in range(0, hash_size):
             entry_addr = self.ramdump.array_index(ubwcp_ptr + buf_table_offset, 'struct hlist_head', i)
-            first_entry_addr = self.ramdump.read_word(entry_addr)
-            if first_entry_addr != 0:
-                hash_list = linux_list.ListWalker(self.ramdump, first_entry_addr, next_offset)
-                hash_list.walk(first_entry_addr, self.parse_ubwcp_buffer, i, buffer_list, output_fd)
+            hash_list = linux_hlist.hListWalker(self.ramdump, entry_addr, next_offset)
+            hash_list.walk(self.parse_ubwcp_buffer, i, buffer_list, output_fd)
 
         self.print_output(buffer_list, output_fd)
         return

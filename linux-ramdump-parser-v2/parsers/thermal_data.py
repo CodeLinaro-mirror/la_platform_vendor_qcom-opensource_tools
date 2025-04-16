@@ -1,5 +1,5 @@
 # Copyright (c) 2015, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022,2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -264,7 +264,6 @@ class Thermal_info(RamParser):
             if devdata_off:
                 devdata_off = hex(tz_device_addr + devdata_off)
             tzone_data_dict["devdata"] = devdata_off
-
             node_addr = self.ramdump.struct_field_addr(tz_device_addr,
                                                        "struct thermal_zone_device",
                                                        "thermal_instances")
@@ -280,12 +279,7 @@ class Thermal_info(RamParser):
             if device_list_walker.is_empty():
                 pass
             else:
-                while not device_list_walker.is_empty():
-                    try:
-                        thermal_instance_addr = device_list_walker.next()
-                    except Exception as e:
-                        break
-
+                for thermal_instance_addr in device_list_walker:
                     _trip_data = {}
                     kv = self.ramdump.kernel_version
                     if (kv[0], kv[1]) > (5, 10):
@@ -361,10 +355,10 @@ class Thermal_info(RamParser):
         self.triggered_zones = []
 
         # thermal_zone data
-        thermal_tz_list = self.ramdump.read('thermal_tz_list.next')
+        thermal_tz_list = self.ramdump.address_of('thermal_tz_list')
         list_offset = self.ramdump.field_offset('struct thermal_zone_device', 'node')
         list_walker = llist.ListWalker(self.ramdump, thermal_tz_list, list_offset)
-        list_walker.walk(thermal_tz_list, self.parse_thermal_zone_fields,
+        list_walker.walk(self.parse_thermal_zone_fields,
                          self.tzone_struct_list, self.triggered_zones)
         if len(self.tzone_struct_list) == 0:
             self.writeln("No thermal Zones defined")
@@ -462,10 +456,10 @@ class Thermal_info(RamParser):
     def parse_cooling_device_data(self, dump):
         self.cdev_struct_list = {}
         # thermal_zone data
-        thermal_cdev_list = self.ramdump.read('thermal_cdev_list.next')
+        thermal_cdev_list = self.ramdump.address_of('thermal_cdev_list')
         list_offset = self.ramdump.field_offset('struct thermal_cooling_device', 'node')
         list_walker = llist.ListWalker(self.ramdump, thermal_cdev_list, list_offset)
-        list_walker.walk(thermal_cdev_list, self.parse_cooling_device_fields, self.cdev_struct_list)
+        list_walker.walk(self.parse_cooling_device_fields, self.cdev_struct_list)
         cdev_ids_list = self.cdev_struct_list.keys()
         if not cdev_ids_list:
             print_out_str("No cooling Devices or exception in parsing")
@@ -503,7 +497,7 @@ class Thermal_info(RamParser):
         tsens_device_list = self.ramdump.address_of('tsens_device_list')
         list_offset = self.ramdump.field_offset('struct tsens_device', 'list')
         list_walker = llist.ListWalker(self.ramdump, tsens_device_list, list_offset)
-        list_walker.walk(tsens_device_list, self.tsens_dbg_parse_fields)
+        list_walker.walk(self.tsens_dbg_parse_fields)
 
     def write(self, string):
         self.out.write(string)

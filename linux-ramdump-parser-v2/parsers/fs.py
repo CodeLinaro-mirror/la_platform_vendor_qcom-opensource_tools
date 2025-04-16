@@ -1,4 +1,5 @@
 # Copyright (c) 2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 #
 # This program is free software; you can redistribute it and/or modify
@@ -17,6 +18,7 @@ import pdb
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from linux_list import ListWalker
+from linux_hlist import hListWalker
 from ramdump import Struct
 from struct_print import struct_print_class
 
@@ -60,8 +62,8 @@ class fs_parser_class(RamParser):
         if name not in ['proc', 'sysfs', 'tmpfs', 'debugfs', 'tracefs']:
             fs_supers = shc.get_val('fs_supers')
             s_instance_offset = self.ramdump.field_offset('struct super_block', 's_instances')
-            list_walker = ListWalker(self.ramdump, fs_supers, s_instance_offset)
-            list_walker.walk(fs_supers, self.fs_sb_list_func)
+            list_walker = hListWalker(self.ramdump, fs_supers, s_instance_offset)
+            list_walker.walk(self.fs_sb_list_func)
         next_ptr = shc.get_val('next')
         self.file_systems_struct(next_ptr)
 
@@ -86,12 +88,12 @@ class fs_parser_class(RamParser):
         s_inodes = shc.get_val('s_inodes')
         s_inodes_offset = self.ramdump.field_offset('struct inode', 'i_sb_list')
         list_walker = ListWalker(self.ramdump, s_inodes, s_inodes_offset)
-        list_walker.walk(s_inodes, self.fs_inode_list_func)
+        list_walker.walk(self.fs_inode_list_func)
 
         s_inodes_wb = shc.get_val('s_inodes_wb')
         s_inodes_wb_offset = self.ramdump.field_offset('struct inode', 'i_wb_list')
         list_walker = ListWalker(self.ramdump, s_inodes_wb, s_inodes_wb_offset)
-        list_walker.walk(s_inodes_wb, self.fs_inode_list_func)
+        list_walker.walk(self.fs_inode_list_func)
 
     def fs_inode_list_func(self, inode_vaddr):
         self.inode_vaddr_list.append(inode_vaddr)
