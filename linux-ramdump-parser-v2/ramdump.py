@@ -757,6 +757,7 @@ class RamDump():
         self.ebi_pa_name_map = {}
         self.md_dict = {}
         self.phys_offset = None
+        self.ipa_addr = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
         self.ebi_start = 0
@@ -1030,6 +1031,17 @@ class RamDump():
             self.pgtable_levels = 3
         self.vabits_actual = self.get_vabits_actual()
         print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
+
+        if self.s2_walk and self.ipa_addr is not None:
+            early_s2mmu = Armv8MMU(self)
+            self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+            if self.phys_offset is not None:
+                print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
+            else:
+                print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
+                        hex(self.phys_offset)))
+                print_out_str('!!! Exiting now')
+                sys.exit(1)
 
         self.pfn_range = None
         self.vmemmap = None
@@ -2243,6 +2255,8 @@ class RamDump():
             'TZ address: {0:x}'.format(board.wdog_addr))
         if board.phys_offset is not None:
             self.phys_offset = board.phys_offset
+        if hasattr(board, 'ipa_addr'):
+            self.ipa_addr = board.ipa_addr
         self.tz_addr = board.wdog_addr
         self.ebi_start = board.ram_start
         self.tz_start = board.imem_start
