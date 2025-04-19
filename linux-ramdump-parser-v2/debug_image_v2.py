@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -553,13 +553,13 @@ class DebugImage_v2():
         self.formats_out.write("format:\n")
 
         list_walker = llist.ListWalker(ram_dump, common_field_list, field_next_offset)
-        list_walker.walk_prev(common_field_list, self.ftrace_field_func, ram_dump)
+        list_walker.walk_prev(self.ftrace_field_func, ram_dump)
         self.formats_out.write("\n")
 
         event_class = ram_dump.read_word(ftrace_list + class_offset)
         field_list =  event_class + fields_offset
         list_walker = llist.ListWalker(ram_dump, field_list, field_next_offset)
-        list_walker.walk_prev(field_list, self.ftrace_field_func, ram_dump)
+        list_walker.walk_prev(self.ftrace_field_func, ram_dump)
         self.formats_out.write("\n")
         self.formats_out.write("print fmt: {0}\n".format(fmt_str))
 
@@ -569,7 +569,7 @@ class DebugImage_v2():
         ftrace_events_list = ram_dump.address_of('ftrace_events')
         next_offset = ram_dump.field_offset(self.event_call, 'list')
         list_walker = llist.ListWalker(ram_dump, ftrace_events_list, next_offset)
-        list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, ram_dump)
+        list_walker.walk_prev(self.ftrace_events_func, ram_dump)
 
         self.formats_out.close
 
