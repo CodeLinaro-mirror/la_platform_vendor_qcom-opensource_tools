@@ -91,7 +91,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
     offset_prio = ramdump.field_offset('struct task_struct', 'prio')
     if ramdump.is_config_defined('CONFIG_SMP'):
         offset_oncpu = ramdump.field_offset('struct task_struct', 'on_cpu')
-    if ramdump.sizeof('struct sched_info') != 0:
+    if ramdump.sizeof('struct sched_info') != 0 and ramdump.sizeof('struct sched_info') != None:
         offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
         offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
         offset_last_rundelay = offset_schedinfo + ramdump.field_offset('struct sched_info', 'run_delay')
@@ -465,7 +465,7 @@ def dump_thread_group_timestamps(ramdump, task_addr):
     offset_task = ramdump.field_offset('struct thread_info', 'task')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
     offset_prio = ramdump.field_offset('struct task_struct', 'prio')
-    if ramdump.sizeof('struct sched_info') != 0:
+    if ramdump.sizeof('struct sched_info') != 0 and ramdump.sizeof('struct sched_info') != None:
         offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
         offset_last_arrival = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_arrival')
         offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
