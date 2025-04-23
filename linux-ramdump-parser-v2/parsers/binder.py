@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
 
 import linux_list
 import rb_tree
@@ -36,8 +36,6 @@ class BinderParser(RamParser) :
 
 
     def transactions_walker(self, work):
-        if work == self.work_head:
-            return
         transaction_work_offset = self.ramdump.field_offset('struct binder_transaction', 'work')
         trans = work - transaction_work_offset
 
@@ -64,13 +62,11 @@ class BinderParser(RamParser) :
 
         # Walk binder_thread.todo list.
         todo_head = thread + thread_todo_offset
-        fist_node = self.ramdump.read_word(todo_head)
-        works_walker = linux_list.ListWalker(self.ramdump, fist_node, self.work_entry_offset)
+        works_walker = linux_list.ListWalker(self.ramdump, todo_head, self.work_entry_offset)
         if works_walker.is_empty():
             print (self.TRANS_FMT1, file=self.outfd)
         else:
-            self.work_head = todo_head - self.work_entry_offset
-            works_walker.walk(fist_node, self.transactions_walker)
+            works_walker.walk(self.transactions_walker)
 
 
     # Parse binder_thread node one by one.
@@ -89,13 +85,11 @@ class BinderParser(RamParser) :
 
         # Walk binder_node.async_todo list.
         todo_head = bnode + bnode_todo_offset
-        fist_node = self.ramdump.read_word(todo_head)
-        works_walker = linux_list.ListWalker(self.ramdump, fist_node, self.work_entry_offset)
+        works_walker = linux_list.ListWalker(self.ramdump, todo_head, self.work_entry_offset)
         if works_walker.is_empty():
             print (self.TRANS_FMT1, file=self.outfd)
         else:
-            self.work_head = todo_head - self.work_entry_offset
-            works_walker.walk(fist_node, self.transactions_walker)
+            works_walker.walk(self.transactions_walker)
 
 
     # Parse binder_ref node one by one.
@@ -183,14 +177,11 @@ class BinderParser(RamParser) :
             print (self.PROC_OUTPUT_FMT.format(proc_pid, task_name, proc, requested, requested_started, is_dead), file=self.outfd)
             # Walk binder_proc.todo list.
             todo_head = proc + proc_todo_offset
-
-            fist_node = self.ramdump.read_word(todo_head)
-            works_walker = linux_list.ListWalker(self.ramdump, fist_node, self.work_entry_offset)
+            works_walker = linux_list.ListWalker(self.ramdump, todo_head, self.work_entry_offset)
             if works_walker.is_empty():
                 print (self.TRANS_FMT1, file=self.outfd)
             else:
-                self.work_head = todo_head - self.work_entry_offset
-                works_walker.walk(fist_node, self.transactions_walker)
+                works_walker.walk(self.transactions_walker)
 
             print (self.SEPARATOR_SUB2, file=self.outfd)
             print (self.TITLE_THREAD, file=self.outfd)
