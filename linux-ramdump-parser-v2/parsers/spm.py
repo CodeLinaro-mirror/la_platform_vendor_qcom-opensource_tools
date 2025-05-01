@@ -1,4 +1,5 @@
 # Copyright (c) 2015, The Linux Foundation. All rights reserved.
+# Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -16,7 +17,6 @@ from parser_util import register_parser, RamParser
 class spm(RamParser):
     def __init__(self, *args):
         super(spm, self).__init__(*args)
-        self.head = ''
         self.output = []
         self.spm_shadow_reg = ('MSM_SPM_REG_SAW2_CFG',
             'MSM_SPM_REG_SAW2_AVS_CTL',
@@ -48,9 +48,6 @@ class spm(RamParser):
             'MSM_SPM_REG_SAW2_VERSION')
 
     def spm_walker(self, spm):
-        if spm == self.head:
-                return
-
         offset = self.ramdump.field_offset('struct msm_spm_device', 'initialized')
         if self.ramdump.read_bool(spm + offset) is False:
                 return
@@ -95,13 +92,10 @@ class spm(RamParser):
         lpm_dev = self.ramdump.read_word(lpm_root_node + offset, True)
 
         offset = self.ramdump.field_offset('struct low_power_ops', 'spm')
-        spm = self.ramdump.read_word(lpm_dev + offset, True)
-
-        self.head = lpm_dev + offset
-
+        spm = lpm_dev + offset
         offset = self.ramdump.field_offset('struct msm_spm_device', 'list')
         spm_walker = linux_list.ListWalker(self.ramdump, spm, offset)
-        spm_walker.walk(spm, self.spm_walker)
+        spm_walker.walk(self.spm_walker)
 
     def parse(self):
         self.output_file = self.ramdump.open_file('spm.txt')
