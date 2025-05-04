@@ -1,4 +1,5 @@
 # Copyright (c) 2015,2017-2018 The Linux Foundation. All rights reserved.
+# Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -22,7 +23,6 @@ class ClockDumps(RamParser):
         self.enabled_clocks = []
         self.disabled_clocks = []
         self.prepared_clocks = []
-        self.head = ''
 
     def print_header(self, type, title):
         if type == 'CLK_PROVIDERS':
@@ -64,16 +64,11 @@ class ClockDumps(RamParser):
             self.output_file.write("NOTE: 'clocks' list not found to extract the clocks information")
             return
 
-        head = self.ramdump.read_word(clocks, True)
-        self.head = clocks
         node_offset = self.ramdump.field_offset('struct clk_lookup', 'node')
-        clocks_walker = linux_list.ListWalker(self.ramdump, head, node_offset)
-        clocks_walker.walk(head, self.clocks_walker)
+        clocks_walker = linux_list.ListWalker(self.ramdump, clocks, node_offset)
+        clocks_walker.walk(self.clocks_walker)
 
     def clocks_walker(self, node):
-        if node == self.head:
-            return
-
         devid_address = node + self.ramdump.field_offset('struct clk_lookup', 'dev_id')
         devid = self.ramdump.read_cstring(self.ramdump.read_word(devid_address, True), 48)
         conid_address = node + self.ramdump.field_offset('struct clk_lookup', 'con_id')
@@ -97,6 +92,12 @@ class ClockDumps(RamParser):
         else:
             cur_level = "NULL"
 
+        if devid == None:
+            devid = "NULL"
+
+        if conid == None:
+            conid = "NULL"
+
         output = "{0:40} {1:<25} {2:20} {3:<2}/ {4:<17} {5:<25} {6:<10} v.v (struct clk *)0x{7:<20x}\n".format(
             dbg_name, devid, conid, count, prepare_count, rate, cur_level, clk)
 
@@ -116,12 +117,9 @@ class ClockDumps(RamParser):
         self.enabled_clocks = []
         self.disabled_clocks = []
         self.prepared_clocks = []
-        self.head = clocks
-
-        head = self.ramdump.read_word(clocks, True)
         node_offset = self.ramdump.field_offset('struct clk_lookup', 'node')
-        clk_providers_walker = linux_list.ListWalker(self.ramdump, head, node_offset)
-        clk_providers_walker.walk(head, self.clk_providers_walker)
+        clk_providers_walker = linux_list.ListWalker(self.ramdump, clocks, node_offset)
+        clk_providers_walker.walk(self.clk_providers_walker)
 
     def print_clk_of_msm_provider_data(self, data):
         table_address = data + self.ramdump.field_offset('struct of_msm_provider_data', 'table')
@@ -323,8 +321,6 @@ class ClockDumps(RamParser):
             self.dump_clock(clk_core, clk_name)
 
     def clk_providers_walker(self, node):
-        if node == self.head:
-            return
         data_address = node + self.ramdump.field_offset(
                                     'struct of_clk_provider', 'data')
         data = self.ramdump.read_word(data_address, True)
@@ -350,7 +346,7 @@ class ClockDumps(RamParser):
         getfunc = self.ramdump.unwind_lookup(getfunc)
         if "of_clk_src_simple_get" in getfunc[0]:
             self.print_clk_simple(data)
-        elif self.ramdump.is_config_defined('CONFIG_COMMON_CLK_MSM'):
+        elif self.ramdump.is_config_defined('CONFIG_COMMON_CLK_MSM') or 'of_clk_src_get' in getfunc[0]:
             self.print_clk_of_msm_provider_data(data)
         else:
             self.print_clk_onecell_data(data)
