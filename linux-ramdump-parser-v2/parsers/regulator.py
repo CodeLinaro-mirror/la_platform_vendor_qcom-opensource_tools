@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -346,9 +346,8 @@ class RegulatorDump(RamParser):
             wait_list = self.ramdump.struct_field_addr(mutex, 'struct mutex', 'wait_list')
             offset = self.ramdump.field_offset('struct mutex_waiter', 'list')
             wait_list_walker = llist.ListWalker(self.ramdump, wait_list, offset)
-            if not wait_list_walker.is_empty():
-                wait_list_walker.walk(wait_list_walker.next() + offset, self.mutex_map_gen_walker,
-                    mutex, mutex_owner, lock_name)
+            wait_list_walker.walk(self.mutex_map_gen_walker,
+                        mutex, mutex_owner, lock_name)
 
     def consumer_init_walker(self, regulator, rdev):
         self.consumer[rdev].append(regulator)
@@ -372,14 +371,11 @@ class RegulatorDump(RamParser):
 
         mutex = self.ramdump.struct_field_addr(rdev, 'struct regulator_dev', 'mutex')
         self.store_mutex_waiters(mutex, 'rdev->mutex (' + name + ')')
-
         consumer_list = self.ramdump.struct_field_addr(rdev, 'struct regulator_dev',
                                                         'consumer_list')
         offset = self.ramdump.field_offset('struct regulator', 'list')
         consumer_list_walker = llist.ListWalker(self.ramdump, consumer_list, offset)
-        if not consumer_list_walker.is_empty():
-            consumer_list_walker.walk(consumer_list_walker.next() + offset,
-                                      self.consumer_init_walker, rdev)
+        consumer_list_walker.walk(self.consumer_init_walker, rdev)
 
     def get_class_to_subsys(self, kobj_addr, regulator_addr, found_sp:list):
         if not bool(found_sp):
@@ -397,12 +393,11 @@ class RegulatorDump(RamParser):
             self.output.write("ERROR: 'regulator_class' not found\n")
             return
         if self.ramdump.field_offset('struct class', 'p') is None:
-            classkset_ptr = self.ramdump.read_pointer('class_kset')
-            classkset_list_ptr = self.ramdump.read_structure_field(classkset_ptr, 'struct kset', 'list.next')
+            classkset_list_ptr = self.ramdump.read_pointer('class_kset') + self.ramdump.field_offset('struct kset', 'list')
             kobj_offset = self.ramdump.field_offset('struct kobject', 'entry')
             sp_buf = []
             class_subsys_walker = llist.ListWalker(self.ramdump, classkset_list_ptr, kobj_offset)
-            class_subsys_walker.walk(classkset_list_ptr, self.get_class_to_subsys, regulator_class, sp_buf)
+            class_subsys_walker.walk(self.get_class_to_subsys, regulator_class, sp_buf)
             if bool(sp_buf):
                 p = sp_buf[0]
         else:
@@ -411,11 +406,8 @@ class RegulatorDump(RamParser):
         list_head = (p + self.ramdump.field_offset('struct subsys_private', 'klist_devices')
                     + self.ramdump.field_offset('struct klist', 'k_list'))
         list_offset = self.ramdump.field_offset('struct klist_node', 'n_node')
-
         init_list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
-        if not init_list_walker.is_empty():
-            init_list_walker.walk(init_list_walker.next() + list_offset,
-                                  self.regulator_init_walker)
+        init_list_walker.walk(self.regulator_init_walker)
 
     def init_regulator_top_level(self):
         for (mutex_symbol, mutex_label) in self.global_mutexes:
