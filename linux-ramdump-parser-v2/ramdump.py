@@ -1602,9 +1602,6 @@ class RamDump():
             ebi_path = os.path.abspath(ram[3])
             startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
                 ebi_path, ram[1]))
-        if self.minidump:
-            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
-            startup_script.write(dload_ram_elf)
         # Check to include Reduced dump elf's
         if self.elf_addr:
             for file in self.elf_addr:
@@ -1689,6 +1686,9 @@ class RamDump():
         else:
             dloadelf = 'data.load.elf {}\n'.format(where)
         startup_script.write(dloadelf)
+        if self.minidump:
+            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
+            startup_script.write(dload_ram_elf)
 
         if self.arm64 and not self.minidump:
             startup_script.write('TRANSlation.COMMON NS:0xF000000000000000--0xffffffffffffffff\n')
