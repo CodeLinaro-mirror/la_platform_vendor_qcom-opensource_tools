@@ -1,4 +1,5 @@
 # Copyright (c) 2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -35,7 +36,7 @@ class SmmuParser(RamParser):
         # Write output to a file
 
         file_name = "smmu_s1_fault.txt"
-        file = open(file_name,"w")
+        file = self.ramdump.open_file(file_name,"w")
         file.write(parsed_text)
         file.close()
 

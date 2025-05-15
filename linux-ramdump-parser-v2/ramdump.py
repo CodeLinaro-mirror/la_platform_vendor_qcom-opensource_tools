@@ -757,6 +757,7 @@ class RamDump():
         self.ebi_pa_name_map = {}
         self.md_dict = {}
         self.phys_offset = None
+        self.ipa_addr = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
         self.ebi_start = 0
@@ -1030,6 +1031,17 @@ class RamDump():
             self.pgtable_levels = 3
         self.vabits_actual = self.get_vabits_actual()
         print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
+
+        if self.s2_walk and self.ipa_addr is not None:
+            early_s2mmu = Armv8MMU(self)
+            self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+            if self.phys_offset is not None:
+                print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
+            else:
+                print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
+                        hex(self.phys_offset)))
+                print_out_str('!!! Exiting now')
+                sys.exit(1)
 
         self.pfn_range = None
         self.vmemmap = None
@@ -1672,7 +1684,10 @@ class RamDump():
         kaslr_offset = self.get_kaslr_offset()
         if kaslr_offset != 0:
             where += ' 0x{0:x}'.format(kaslr_offset)
-        dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+        if not self.minidump:
+            dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+        else:
+            dloadelf = 'data.load.elf {}\n'.format(where)
         startup_script.write(dloadelf)
 
         if self.arm64 and not self.minidump:
@@ -1925,6 +1940,12 @@ class RamDump():
                     self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
                     self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
+                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                        if self.uefi_magic_offset:
+                            uefi_magic = self.read_u32(self.uefi_magic_offset, False)
+                            if uefi_magic == 0x75656669:
+                                print_out_str("!!!look like early boot crash")
+                                sys.exit(1)
 
     def determine_phys_offset(self):
         fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
@@ -2039,44 +2060,40 @@ class RamDump():
         Third step:
               check if linux_banner read from DDR == linux_banner from vmlinux
         '''
-        kimage_voffset = None
         ###********* First step, calculate kaslr_offset and kimage_voffset *********
-        if self.arm64:
-            if kaslr_offset != None:
-                ## kaslr_offset=0 means kaslr feature was disabled
-                ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
-                ## kaslr_offset=None need to be calculated
-                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
-            if self.__kimage_voffset_var_va != None and kaslr_offset == None:
-                ## calculte depends on kimage_voffset variable which should exist
-                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
-                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
-                if kimage_voffset_tmp is not None:
-                    kimage_voffset = kimage_voffset_tmp
-                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
-                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
-                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
-            if self.__kimage_vaddr_var_va != None and kaslr_offset == None:
-                ## calculte depends on kimage_vaddr variable which should exist
-                kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
-                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
-                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
-                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
-                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
-        else:
+        if not self.arm64:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
-                #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
+                print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
+
+        kimage_voffset = None
+        if kaslr_offset != None:
+            ## kaslr_offset=0 means kaslr feature was disabled
+            ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
+            ## kaslr_offset=None need to be calculated
+            if self.arm64:
+                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
             else:
-                ## calculte depends on kimage_voffset variable which should exist
-                kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
-                kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
-                if kimage_voffset_tmp is not None:
-                    kimage_voffset = kimage_voffset_tmp
-                    kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
-                    if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
-                        kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+                kimage_voffset = self.page_offset - phys_offset
+        ## calculate kaslr_offset via kimage_voffset
+        if self.__kimage_voffset_var_va != None and kaslr_offset == None:
+            ## calculte depends on kimage_voffset variable which should exist
+            kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+            kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+            if kimage_voffset_tmp is not None:
+                kimage_voffset = kimage_voffset_tmp
+                kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
+                    kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+        ## calculate kaslr_offset via kimage_vaddr
+        if self.__kimage_vaddr_var_va != None and kaslr_offset == None:
+            ## calculte depends on kimage_vaddr variable which should exist
+            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
+            kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
+            if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
+                kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
+                kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
 
         if kimage_voffset is None or kaslr_offset is None:
             raise Exception("!!! Determine kimage_voffset failed")
@@ -2244,6 +2261,8 @@ class RamDump():
             'TZ address: {0:x}'.format(board.wdog_addr))
         if board.phys_offset is not None:
             self.phys_offset = board.phys_offset
+        if hasattr(board, 'ipa_addr'):
+            self.ipa_addr = board.ipa_addr
         self.tz_addr = board.wdog_addr
         self.ebi_start = board.ram_start
         self.tz_start = board.imem_start
@@ -2264,6 +2283,10 @@ class RamDump():
             self.kaslr_addr = board.kaslr_addr
         else:
             self.kaslr_addr = None
+        if hasattr(board, 'uefi_magic_offset'):
+            self.uefi_magic_offset = board.uefi_magic_offset
+        else:
+            self.uefi_magic_offset = None
         if hasattr(board, 'svm_kaslr_offset'):
             self.svm_kaslr_offset = board.svm_kaslr_offset
         self.board = board
@@ -3227,6 +3250,8 @@ class RamDump():
             return None
 
         addr += self.field_offset(struct_name, field)
+        if size == 1:
+            return self.read_byte(addr, virtual)
         if size == 2:
             return self.read_u16(addr, virtual)
         if size == 4:
