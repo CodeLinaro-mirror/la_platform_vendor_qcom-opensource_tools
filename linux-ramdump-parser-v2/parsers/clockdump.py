@@ -92,6 +92,12 @@ class ClockDumps(RamParser):
         else:
             cur_level = "NULL"
 
+        if devid == None:
+            devid = "NULL"
+
+        if conid == None:
+            conid = "NULL"
+
         output = "{0:40} {1:<25} {2:20} {3:<2}/ {4:<17} {5:<25} {6:<10} v.v (struct clk *)0x{7:<20x}\n".format(
             dbg_name, devid, conid, count, prepare_count, rate, cur_level, clk)
 
@@ -340,7 +346,7 @@ class ClockDumps(RamParser):
         getfunc = self.ramdump.unwind_lookup(getfunc)
         if "of_clk_src_simple_get" in getfunc[0]:
             self.print_clk_simple(data)
-        elif self.ramdump.is_config_defined('CONFIG_COMMON_CLK_MSM'):
+        elif self.ramdump.is_config_defined('CONFIG_COMMON_CLK_MSM') or 'of_clk_src_get' in getfunc[0]:
             self.print_clk_of_msm_provider_data(data)
         else:
             self.print_clk_onecell_data(data)
