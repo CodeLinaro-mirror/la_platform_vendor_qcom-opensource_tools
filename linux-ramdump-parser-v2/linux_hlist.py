@@ -23,6 +23,7 @@ class hListWalker(object):
         self.list_elem_offset = list_elem_offset
         self.list_head_addr = list_head_addr
         self.next_node = None
+        self.seen_nodes = []
 
     def __iter__(self):
         return self
@@ -36,7 +37,12 @@ class hListWalker(object):
             next_node_addr = self.next_node + self.ramdump.field_offset('struct hlist_node', 'next')
             self.next_node = self.ramdump.read_word(next_node_addr)
 
-        if self.next_node is not None and self.next_node != 0:
+        if self.next_node in self.seen_nodes:
+            print_out_str(
+               '[!] WARNING: Cycle found in attach list (0x{:x}). List is corrupted!'.format(self.list_head_addr))
+            raise StopIteration()
+        elif self.next_node is not None and self.next_node != 0:
+            self.seen_nodes.append(self.next_node)
             return self.next_node - self.list_elem_offset
         else:
             raise StopIteration()
@@ -48,6 +54,7 @@ class hListWalker(object):
         if given.
         """
         self.next_node = None
+        self.seen_nodes = []
         for obj in self:
             funcargs = [obj] + list(args)
             func(*funcargs)
