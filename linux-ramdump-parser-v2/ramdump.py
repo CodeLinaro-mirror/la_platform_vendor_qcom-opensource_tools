@@ -1940,6 +1940,12 @@ class RamDump():
                     self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
                     self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
+                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                        if self.uefi_magic_offset:
+                            uefi_magic = self.read_u32(self.uefi_magic_offset, False)
+                            if uefi_magic == 0x75656669:
+                                print_out_str("!!!look like early boot crash")
+                                sys.exit(1)
 
     def determine_phys_offset(self):
         fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
@@ -2277,6 +2283,10 @@ class RamDump():
             self.kaslr_addr = board.kaslr_addr
         else:
             self.kaslr_addr = None
+        if hasattr(board, 'uefi_magic_offset'):
+            self.uefi_magic_offset = board.uefi_magic_offset
+        else:
+            self.uefi_magic_offset = None
         if hasattr(board, 'svm_kaslr_offset'):
             self.svm_kaslr_offset = board.svm_kaslr_offset
         self.board = board
@@ -3240,6 +3250,8 @@ class RamDump():
             return None
 
         addr += self.field_offset(struct_name, field)
+        if size == 1:
+            return self.read_byte(addr, virtual)
         if size == 2:
             return self.read_u16(addr, virtual)
         if size == 4:
