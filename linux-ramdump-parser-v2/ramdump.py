@@ -757,6 +757,7 @@ class RamDump():
         self.ebi_pa_name_map = {}
         self.md_dict = {}
         self.phys_offset = None
+        self.ipa_addr = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
         self.ebi_start = 0
@@ -1030,6 +1031,17 @@ class RamDump():
             self.pgtable_levels = 3
         self.vabits_actual = self.get_vabits_actual()
         print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
+
+        if self.s2_walk and self.ipa_addr is not None:
+            early_s2mmu = Armv8MMU(self)
+            self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+            if self.phys_offset is not None:
+                print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
+            else:
+                print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
+                        hex(self.phys_offset)))
+                print_out_str('!!! Exiting now')
+                sys.exit(1)
 
         self.pfn_range = None
         self.vmemmap = None
@@ -1928,6 +1940,12 @@ class RamDump():
                     self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
                     self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
+                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                        if self.uefi_magic_offset:
+                            uefi_magic = self.read_u32(self.uefi_magic_offset, False)
+                            if uefi_magic == 0x75656669:
+                                print_out_str("!!!look like early boot crash")
+                                sys.exit(1)
 
     def determine_phys_offset(self):
         fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
@@ -2243,6 +2261,8 @@ class RamDump():
             'TZ address: {0:x}'.format(board.wdog_addr))
         if board.phys_offset is not None:
             self.phys_offset = board.phys_offset
+        if hasattr(board, 'ipa_addr'):
+            self.ipa_addr = board.ipa_addr
         self.tz_addr = board.wdog_addr
         self.ebi_start = board.ram_start
         self.tz_start = board.imem_start
@@ -2263,6 +2283,10 @@ class RamDump():
             self.kaslr_addr = board.kaslr_addr
         else:
             self.kaslr_addr = None
+        if hasattr(board, 'uefi_magic_offset'):
+            self.uefi_magic_offset = board.uefi_magic_offset
+        else:
+            self.uefi_magic_offset = None
         if hasattr(board, 'svm_kaslr_offset'):
             self.svm_kaslr_offset = board.svm_kaslr_offset
         self.board = board
@@ -3226,6 +3250,8 @@ class RamDump():
             return None
 
         addr += self.field_offset(struct_name, field)
+        if size == 1:
+            return self.read_byte(addr, virtual)
         if size == 2:
             return self.read_u16(addr, virtual)
         if size == 4:
