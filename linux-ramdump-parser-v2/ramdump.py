@@ -745,6 +745,22 @@ class RamDump():
                            modules_vsize
         return kimage_vaddr
 
+    def get_elf_entry_address(self, header_ptr):
+        e_entry = None
+        e_ident = self.read_u64(header_ptr, virtual=False)
+        e_magic = e_ident & 0xffffffff
+        if e_magic == 0x464c457f:
+            e_class = (e_ident >> (4 * 8)) & 0xff
+            if e_class == 1:
+                e_entry = self.read_u32(header_ptr + 0x18, virtual=False)
+            elif e_class == 2:
+                e_entry = self.read_u64(header_ptr + 0x18, virtual=False)
+            else:
+                print_out_str('!!! Unknonw elf class({}) in the header at {}'.format(e_class, hex(header_ptr)))
+        if e_entry is not None:
+            print_out_str("ELF entry is {}".format(hex(e_entry)))
+        return e_entry
+
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
         ## used for read_physical in multi-thread mode
@@ -1036,16 +1052,20 @@ class RamDump():
         self.vabits_actual = self.get_vabits_actual()
         print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
 
-        if self.s2_walk and self.ipa_addr is not None:
-            early_s2mmu = Armv8MMU(self)
-            self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+        self.elf_entry_offset = None
+        if self.s2_walk:
+            if self.ipa_addr is not None:
+                early_s2mmu = Armv8MMU(self)
+                self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                if self.phys_offset is not None:
+                    print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
+                else:
+                    print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
+                            hex(self.phys_offset)))
+                    print_out_str('!!! Exiting now')
+                    sys.exit(1)
             if self.phys_offset is not None:
-                print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
-            else:
-                print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
-                        hex(self.phys_offset)))
-                print_out_str('!!! Exiting now')
-                sys.exit(1)
+                self.elf_entry_offset = self.get_elf_entry_address(self.phys_offset)
 
         self.pfn_range = None
         self.vmemmap = None
@@ -1908,15 +1928,15 @@ class RamDump():
 
     @parser_util.time_cost
     def determine_kaslr_offset(self):
-        if self.svm and self.svm_kaslr_offset:
-            self.kaslr_offset = self.svm_kaslr_offset
+        if self.svm:
             self.kaslr_addr = None
+            if self.svm_kaslr_offset:
+                self.kaslr_offset = self.svm_kaslr_offset
+            else:
+                self.kaslr_offset = 0
             self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
-            return
-        elif self.svm and not self.svm_kaslr_offset:
-            self.kaslr_offset = 0
-            self.kaslr_addr = None
-            self.kimage_voffset = self.__kimage_vaddr_va - self.phys_offset
+            if self.elf_entry_offset:
+                self.kimage_voffset -= self.elf_entry_offset
             return
         else:
             __kaslr_offset = None
