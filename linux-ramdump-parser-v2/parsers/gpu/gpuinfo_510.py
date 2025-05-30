@@ -108,6 +108,7 @@ class GpuParser_510(RamParser):
         # List of all sub-parsers as (func, info, outfile) tuples.
         self.parser_list = [
             (self.parse_kgsl_data, "KGSL", 'gpuinfo.txt'),
+            (self.parse_features_data, "Features", 'gpuinfo.txt'),
             (self.parse_pwrctrl_data, "KGSL Power", 'gpuinfo.txt'),
             (self.parse_kgsl_mem, "KGSL Memory Stats", 'gpuinfo.txt'),
             (self.parse_rb_inflight_data, "Ringbuffer and Inflight Queues",
@@ -451,6 +452,43 @@ class GpuParser_510(RamParser):
             flags[7] = 'v'
 
         return ''.join(flags)
+
+    def parse_features_data(self, dump):
+        gpucore = dump.read_structure_field(self.devp,
+                                            'struct adreno_device',
+                                            'gpucore')
+        features = dump.read_structure_field(gpucore,
+                                             'struct adreno_gpu_core',
+                                             'features')
+        self.writeln('features: ' + strhex(features))
+        enabled = []
+        disabled = []
+        features_list = ['ADRENO_SPTP_PC', 'ADRENO_CONTENT_PROTECTION',
+                         'ADRENO_PREEMPTION', 'ADRENO_LM',
+                         'ADRENO_CPZ_RETENTION', 'ADRENO_SOFT_FAULT_DETECT',
+                         'ADRENO_IFPC', 'ADRENO_IOCOHERENT', 'ADRENO_ACD',
+                         'ADRENO_COOP_RESET', 'ADRENO_DEPRECATED',
+                         'ADRENO_APRIV', 'ADRENO_BCL', 'ADRENO_L3_VOTE',
+                         'ADRENO_LPA', 'ADRENO_LSR', 'ADRENO_HW_FENCE',
+                         'ADRENO_DMS', 'ADRENO_AQE', 'ADRENO_GMU_WARMBOOT',
+                         'ADRENO_CLX', 'ADRENO_GMU_THERMAL_MITIGATION',
+                         'ADRENO_GMU_BASED_DCVS', 'ADRENO_RT_HINT',
+                         'ADRENO_DEFER_GMEM_ALLOC', 'ADRENO_GMU_MINBW',
+                         'ADRENO_DCVS_PROFILE', ]
+
+        for i, feature in enumerate(features_list):
+            if(features >> i) & 1:
+                enabled.append(feature)
+            else:
+                disabled.append(feature)
+
+        enabled_features = ' '.join(enabled)
+        disabled_features = ' '.join(disabled)
+        self.writeln('Features enabled: ' + str(enabled_features))
+        self.writeln('')
+        self.writeln('Features disabled: ' + str(disabled_features))
+        self.writeln('Last bit used for features is: ' +
+                     str(len(features_list)-1))
 
     def parse_kgsl_data(self, dump):
         open_count = dump.read_structure_field(self.devp, 'struct kgsl_device',
