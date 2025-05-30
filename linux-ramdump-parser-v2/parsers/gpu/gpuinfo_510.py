@@ -453,54 +453,41 @@ class GpuParser_510(RamParser):
         return ''.join(flags)
 
     def parse_kgsl_data(self, dump):
-        open_count = dump.read_structure_field(self.devp, 'struct kgsl_device',
-                                               'open_count')
-        active_cnt = dump.read_structure_field(self.devp, 'struct kgsl_device',
-                                               'active_cnt')
-        state = dump.read_structure_field(self.devp,
-                                          'struct kgsl_device', 'state')
-        requested_state = dump.read_structure_field(self.devp,
-                                                    'struct kgsl_device',
-                                                    'requested_state')
-        ft_policy = dump.read_structure_field(self.devp,
+        adreno_boolean_field = ['long_ib_detect', 'lm_enabled', 'acd_enabled',
+                                'hwcg_enabled', 'throttling_enabled',
+                                'sptp_pc_enabled', 'bcl_enabled',
+                                'clx_enabled', 'dcvs_profile_enabled',
+                                'dms_enabled', 'gmu_ab',
+                                'gpu_llc_slice_enable',
+                                'gpuhtw_llc_slice_enable', 'lpac_enabled',
+                                'perfcounter', ]
+        kgsl_generic_field = ['open_count', 'active_cnt', 'state',
+                              'requested_state', 'speed_bin',
+                              'reset_counter', ]
+        adreno_generic_field = ['ft_policy', 'dcvs_tuning_mingap_lvl',
+                                'dcvs_tuning_numbusy_lvl', 'ifpc_count', ]
+
+        for kgsl_field in kgsl_generic_field:
+            value = dump.read_structure_field(self.devp, 'struct kgsl_device',
+                                              kgsl_field)
+            self.writeln(f'{kgsl_field}: ' + str(value))
+
+        for adreno_field in adreno_boolean_field:
+            addr = dump.struct_field_addr(self.devp,
+                                          'struct adreno_device', adreno_field)
+            value = dump.read_bool(addr)
+            self.writeln(f'{adreno_field}: ' + str(value))
+
+        for adreno_field in adreno_generic_field:
+            value = dump.read_structure_field(self.devp,
                                               'struct adreno_device',
-                                              'ft_policy')
+                                              adreno_field)
+            self.writeln(f'{adreno_field}: ' + str(value))
+
         kgsl_mmu = dump.struct_field_addr(self.devp, 'struct kgsl_device',
                                           'mmu')
         pfpolicy = dump.read_structure_field(kgsl_mmu, 'struct kgsl_mmu',
                                              'pfpolicy')
-        long_ib_addr = dump.struct_field_addr(self.devp,
-                                              'struct adreno_device',
-                                              'long_ib_detect')
-        long_ib_detect = dump.read_bool(long_ib_addr)
-        lm_addr = dump.struct_field_addr(self.devp,
-                                         'struct adreno_device', 'lm_enabled')
-        lm_enabled = dump.read_bool(lm_addr)
-        acd_enabled_addr = dump.struct_field_addr(self.devp,
-                                                  'struct adreno_device',
-                                                  'acd_enabled')
-        acd_enabled = dump.read_bool(acd_enabled_addr)
-        hwcg_enabled_addr = dump.struct_field_addr(self.devp,
-                                                   'struct adreno_device',
-                                                   'hwcg_enabled')
-        hwcg_enabled = dump.read_bool(hwcg_enabled_addr)
-        throttling_addr = dump.struct_field_addr(self.devp,
-                                                 'struct adreno_device',
-                                                 'throttling_enabled')
-        throttling_enabled = dump.read_bool(throttling_addr)
-        sptp_pc_addr = dump.struct_field_addr(self.devp,
-                                              'struct adreno_device',
-                                              'sptp_pc_enabled')
-        sptp_pc_enabled = dump.read_bool(sptp_pc_addr)
-        bcl_enabled_addr = dump.struct_field_addr(self.devp,
-                                                  'struct adreno_device',
-                                                  'bcl_enabled')
-        bcl_enabled = dump.read_bool(bcl_enabled_addr)
-        ifpc_count = dump.read_structure_field(self.devp,
-                                               'struct adreno_device',
-                                               'ifpc_count')
-        speed_bin = dump.read_structure_field(self.devp, 'struct kgsl_device',
-                                              'speed_bin')
         cur_rb = dump.read_structure_field(self.devp,
                                            'struct adreno_device', 'cur_rb')
         next_rb = dump.read_structure_field(self.devp,
@@ -519,22 +506,17 @@ class GpuParser_510(RamParser):
         cp_ucode_ver = dump.read_structure_field(self.devp + firmware_offset,
                                                  'struct adreno_firmware',
                                                  'version')
+        host_based_dcvs_addr = dump.struct_field_addr(self.devp,
+                                                      'struct kgsl_device',
+                                                      'host_based_dcvs')
+        host_based_dcvs = dump.read_bool(host_based_dcvs_addr)
+        l3_vote_addr = dump.struct_field_addr(self.devp,
+                                              'struct kgsl_device',
+                                              'l3_vote')
+        l3_vote = dump.read_bool(l3_vote_addr)
 
-        self.writeln('open_count: ' + str(open_count))
-        self.writeln('active_cnt: ' + str(active_cnt))
-        self.writeln('state: ' + str(state))
-        self.writeln('requested_state: ' + str(requested_state))
-        self.writeln('ft_policy: ' + str(ft_policy))
+        self.writeln('l3_vote: ' + str(l3_vote))
         self.writeln('pfpolicy: ' + str(pfpolicy))
-        self.writeln('long_ib_detect: ' + str(long_ib_detect))
-        self.writeln('lm_enabled: ' + str(lm_enabled))
-        self.writeln('acd_enabled: ' + str(acd_enabled))
-        self.writeln('hwcg_enabled: ' + str(hwcg_enabled))
-        self.writeln('throttling_enabled: ' + str(throttling_enabled))
-        self.writeln('sptp_pc_enabled: ' + str(sptp_pc_enabled))
-        self.writeln('bcl_enabled: ' + str(bcl_enabled))
-        self.writeln('ifpc_count: ' + str(ifpc_count))
-        self.writeln('speed_bin: ' + str(speed_bin))
         self.writeln('cur_rb: ' + strhex(cur_rb))
         self.writeln('cur_rb_id: ' + str(cur_rb_id))
         self.writeln('next_rb: ' + strhex(next_rb))
@@ -542,6 +524,7 @@ class GpuParser_510(RamParser):
         self.writeln('prev_rb: ' + strhex(prev_rb))
         self.writeln('prev_rb_id: ' + str(prev_rb_id))
         self.writeln('CP ucode version: ' + strhex(cp_ucode_ver))
+        self.writeln('host_based_dcvs: ' + str(host_based_dcvs))
 
     def parse_kgsl_mem(self, dump):
         page_alloc = dump.read('kgsl_driver.stats.page_alloc')
@@ -805,48 +788,34 @@ class GpuParser_510(RamParser):
                                            str(queue[8])))
 
     def parse_pwrctrl_data(self, dump):
+        pwrctl_data = ['active_pwrlevel', 'previous_pwrlevel',
+                       'default_pwrlevel', 'thermal_pwrlevel',
+                       'thermal_time', 'power_flags', 'ctrl_flags',
+                       'rt_bus_hint', 'rt_pwrlevel_hint', 'num_pwrlevels',
+                       'min_pwrlevel', 'max_pwrlevel', 'bus_percent_ab',
+                       'bus_width', 'bus_ab_mbytes', 'cur_buslevel',
+                       'interval_timeout', ]
+        pwrctl_data_hex = ['power_flags', 'ctrl_flags']
+
         pwrctrl_address = dump.struct_field_addr(self.devp,
                                                  'struct kgsl_device',
                                                  'pwrctrl')
-        active_pwrlevel = dump.read_structure_field(pwrctrl_address,
-                                                    'struct kgsl_pwrctrl',
-                                                    'active_pwrlevel')
-        prev_pwrlevel = dump.read_structure_field(pwrctrl_address,
+        bus_control_addr = dump.struct_field_addr(self.devp,
                                                   'struct kgsl_pwrctrl',
-                                                  'previous_pwrlevel')
-        default_pwrlevel = dump.read_structure_field(pwrctrl_address,
-                                                     'struct kgsl_pwrctrl',
-                                                     'default_pwrlevel')
-        thermal_pwrlevel = dump.read_structure_field(pwrctrl_address,
-                                                     'struct kgsl_pwrctrl',
-                                                     'thermal_pwrlevel')
-        power_flags = dump.read_structure_field(pwrctrl_address,
-                                                'struct kgsl_pwrctrl',
-                                                'power_flags')
-        ctrl_flags = dump.read_structure_field(pwrctrl_address,
-                                               'struct kgsl_pwrctrl',
-                                               'ctrl_flags')
-        min_pwrlevel = dump.read_structure_field(pwrctrl_address,
-                                                 'struct kgsl_pwrctrl',
-                                                 'min_pwrlevel')
-        max_pwrlevel = dump.read_structure_field(pwrctrl_address,
-                                                 'struct kgsl_pwrctrl',
-                                                 'max_pwrlevel')
-        bus_percent_ab = dump.read_structure_field(pwrctrl_address,
-                                                   'struct kgsl_pwrctrl',
-                                                   'bus_percent_ab')
-        bus_width = dump.read_structure_field(pwrctrl_address,
-                                              'struct kgsl_pwrctrl',
-                                              'bus_width')
-        bus_ab_mbytes = dump.read_structure_field(pwrctrl_address,
-                                                  'struct kgsl_pwrctrl',
-                                                  'bus_ab_mbytes')
-        cur_buslevel = dump.read_structure_field(pwrctrl_address,
-                                                 'struct kgsl_pwrctrl',
-                                                 'cur_buslevel')
-        idle_timer = dump.read_structure_field(pwrctrl_address,
-                                               'struct kgsl_pwrctrl',
-                                               'interval_timeout')
+                                                  'bus_control')
+        bus_control = dump.read_bool(bus_control_addr)
+        self.writeln('pwrctrl_address:  ' + strhex(pwrctrl_address))
+        self.writeln('bus_control: ' + str(bus_control))
+
+        for data in pwrctl_data:
+            value = dump.read_structure_field(pwrctrl_address,
+                                              'struct kgsl_pwrctrl', data)
+            if data in pwrctl_data_hex:
+                self.writeln(f'{data}: ' + strhex(value))
+            else:
+                self.writeln(f'{data}: ' + str(value))
+        self.writeln()
+
         pwr_levels_result = []
         pwrlevels_base_address = pwrctrl_address + \
             dump.field_offset('struct kgsl_pwrctrl', 'pwrlevels')
@@ -874,22 +843,6 @@ class GpuParser_510(RamParser):
             pwr_levels_temp.append(bus_max)
             pwr_levels_temp.append(acd_level)
             pwr_levels_result.append(pwr_levels_temp)
-
-        self.writeln('pwrctrl_address:  ' + strhex(pwrctrl_address))
-        self.writeln('active_pwrlevel:  ' + str(active_pwrlevel))
-        self.writeln('previous_pwrlevel:  ' + str(prev_pwrlevel))
-        self.writeln('default_pwrlevel:  ' + str(default_pwrlevel))
-        self.writeln('thermal_pwrlevel:  ' + str(thermal_pwrlevel))
-        self.writeln('power_flags:  ' + strhex(power_flags))
-        self.writeln('ctrl_flags:  ' + strhex(ctrl_flags))
-        self.writeln('min_pwrlevel:  ' + str(min_pwrlevel))
-        self.writeln('max_pwrlevel:  ' + str(max_pwrlevel))
-        self.writeln('bus_percent_ab:  ' + str(bus_percent_ab))
-        self.writeln('bus_width:  ' + str(bus_width))
-        self.writeln('bus_ab_mbytes:  ' + str(bus_ab_mbytes))
-        self.writeln('cur_buslevel:  ' + str(cur_buslevel))
-        self.writeln('idle_timer:  ' + str(idle_timer))
-        self.writeln()
 
         self.writeln('pwrlevels_base_address:  '
                      + strhex(pwrlevels_base_address))
@@ -1230,6 +1183,10 @@ class GpuParser_510(RamParser):
 
         cm3_fault = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                               'cm3_fault')
+        warmboot_addr = dump.struct_field_addr(gmu_core,
+                                               'struct gmu_core_device',
+                                               'warmboot_enabled')
+        warmboot_enable = dump.read_bool(warmboot_addr)
 
         self.writeln()
         self.writeln('GMU Firmware Version: ' + strhex(gmu_fw_ver))
@@ -1242,6 +1199,7 @@ class GpuParser_510(RamParser):
             self.writeln('preallocations: ' + str(preallocations))
         self.writeln('log_stream_enable: ' + str(log_stream_enable))
         self.writeln('cm3_fault: ' + str(cm3_fault))
+        self.writeln('warmboot_enable: ' + str(warmboot_enable))
 
         domain = dump.read_structure_field(gmu_core, 'struct gmu_core_device',
                                            'domain')
