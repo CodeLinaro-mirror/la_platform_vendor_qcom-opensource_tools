@@ -50,6 +50,10 @@ KGSL_MEMFLAGS_GPUREADONLY = (1 << 24)
 KGSL_MEMFLAGS_USE_CPU_MAP = (1 << 28)
 KGSL_MEMFLAGS_VBO = (1 << 34)
 
+VRB_PREEMPT_COUNT_TOTAL_L0_IDX = 6
+VRB_PREEMPT_COUNT_TOTAL_L1A_IDX = 7
+VRB_PREEMPT_COUNT_TOTAL_L1B_IDX = 8
+
 kgsl_cachemode = ['-', 'u', 't', 'b']
 
 kgsl_ctx_type = ['ANY', 'GL', 'CL', 'C2D', 'RS', 'VK']
@@ -117,6 +121,7 @@ class GpuParser_510(RamParser):
             (self.parse_dispatcher_data, "Dispatcher", 'gpuinfo.txt'),
             (self.parse_mutex_data, "KGSL Mutexes", 'gpuinfo.txt'),
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
+            (self.parse_vrb_info, "VRB", 'gpuinfo.txt'),
             (self.parse_memstore_memory, "Memstore", 'gpuinfo.txt'),
             (self.parse_context_data, "Open Contexts", 'gpuinfo.txt'),
             (self.parse_active_context_data, "Active Contexts", 'gpuinfo.txt'),
@@ -974,6 +979,56 @@ class GpuParser_510(RamParser):
         self.writeln(format_str.format(str(1), str(rptr_1), strhex(ctxt_1)))
         self.writeln(format_str.format(str(2), str(rptr_2), strhex(ctxt_2)))
         self.writeln(format_str.format(str(3), str(rptr_3), strhex(ctxt_3)))
+
+    def parse_vrb_info(self, dump):
+        gpucore = dump.read_structure_field(self.devp,
+                                            'struct adreno_device',
+                                            'gpucore')
+        gpurev = dump.read_structure_field(gpucore,
+                                           'struct adreno_gpu_core',
+                                           'gpurev')
+        if gpurev >= 0x80000:
+            gmu_device = 'struct gen8_gmu_device'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen8_device',
+                                                   'adreno_dev', 'gmu')
+        elif gpurev >= 0x70000:
+            gmu_device = 'struct gen7_gmu_device'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen7_device',
+                                                   'adreno_dev', 'gmu')
+        else:
+            gmu_device = 'struct a6xx_gmu_device'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct a6xx_device',
+                                                   'adreno_dev', 'gmu')
+
+        vrb = dump.read_structure_field(gmu_dev_addr, gmu_device, 'vrb')
+        hostptr = dump.read_structure_field(vrb,
+                                            'struct kgsl_memdesc', 'hostptr')
+        size = dump.read_structure_field(vrb,
+                                         'struct kgsl_memdesc', 'size')
+        gmuaddr = dump.read_structure_field(vrb,
+                                            'struct kgsl_memdesc', 'gmuaddr')
+
+        self.writeln("hostptr: " + strhex(hostptr))
+        self.writeln("size: " + strhex(size))
+        self.writeln("gmuaddr: " + strhex(gmuaddr))
+
+        def add_increment(x, y): return x + 4*y
+
+        addr = add_increment(hostptr, VRB_PREEMPT_COUNT_TOTAL_L0_IDX)
+        preempt_count_total_l0 = dump.read_u32(addr)
+        addr = add_increment(hostptr, VRB_PREEMPT_COUNT_TOTAL_L1A_IDX)
+        preempt_count_total_l1A = dump.read_u32(addr)
+        addr = add_increment(hostptr, VRB_PREEMPT_COUNT_TOTAL_L1B_IDX)
+        preempt_count_total_l1B = dump.read_u32(addr)
+
+        format_str = '{0:20} {1:20}'
+        self.writeln(format_str.format("Preempt_level", "Value"))
+        self.writeln(format_str.format('L0', str(preempt_count_total_l0)))
+        self.writeln(format_str.format('L1A', str(preempt_count_total_l1A)))
+        self.writeln(format_str.format('L1B', str(preempt_count_total_l1B)))
 
     def parse_memstore_memory(self, dump):
         memstore_obj = dump.read_structure_field(self.devp,
