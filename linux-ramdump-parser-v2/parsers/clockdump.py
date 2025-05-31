@@ -320,6 +320,29 @@ class ClockDumps(RamParser):
                 break
             self.dump_clock(clk_core, clk_name)
 
+    def print_clk_rpmh(self, data):
+        size = self.ramdump.read_structure_field(
+                        data, 'struct clk_rpmh_desc', 'num_clks')
+        clks = self.ramdump.read_structure_field(
+                        data, 'struct clk_rpmh_desc', 'clks')
+        sizeof_clk_hw = self.ramdump.sizeof('struct clk_hw *')
+        counter = 0
+        while counter < size:
+            clk = self.ramdump.read_word(clks +
+                                 (sizeof_clk_hw * counter))
+            clk_core = self.ramdump.read_structure_field(
+                                clk, 'struct clk_hw', 'core')
+            if clk_core == 0 or clk_core is None:
+                counter = counter + 1
+                continue
+            clk_name_addr = self.ramdump.read_structure_field(
+                                clk_core, 'struct clk_core', 'name')
+            clk_name = self.ramdump.read_cstring(clk_name_addr, 48)
+            if (clk_name == 0 or clk_name == None):
+                break
+            self.dump_clock(clk_core, clk_name)
+            counter = counter + 1
+
     def clk_providers_walker(self, node):
         data_address = node + self.ramdump.field_offset(
                                     'struct of_clk_provider', 'data')
@@ -339,6 +362,9 @@ class ClockDumps(RamParser):
                 return
             elif "of_clk_hw_virtio_get" in getfunchw[0]:
                 self.print_clk_virtio(data)
+                return
+            elif "of_clk_rpmh_hw_get" in getfunchw[0]:
+                self.print_clk_rpmh(data)
                 return
             else:
                 return
