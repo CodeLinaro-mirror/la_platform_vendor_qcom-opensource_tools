@@ -200,7 +200,7 @@ class FtraceParser(RamParser):
             ring_trace_buffer_base_data = self.ramdump.read_pointer(ring_trace_buffer_data + ring_trace_buffer_ptr)
             ring_trace_buffer_base_data1 = self.ramdump.read_pointer(ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
             numcpus = self.ramdump.read_int(ring_trace_buffer_base_data + cpu_offset)
-            numcpus = numcpus if numcpus < 0x10 else 8
+            numcpus = numcpus if numcpus < 0x20 else 8
 
             nr_total_buffer_pages = 0
             trace_buffer_info['parse'] = True
