@@ -81,10 +81,7 @@ class BaseFs(RamParser):
         self.__show_info(mount)
         return
 
-    def mnt_list(self, mount, mount_list_addr):
-        field_next_offset = self.ramdump.field_offset('struct mount', 'mnt_list')
-        if mount_list_addr == mount + field_next_offset:
-            return
+    def mnt_list(self, mount):
         self.__show_info(mount)
         return
 
@@ -124,7 +121,7 @@ class BaseFs(RamParser):
             mount_list_addr = mnt_ns + mount_list_offset
             field_next_offset = self.ramdump.field_offset('struct mount', 'mnt_list')
             list_walker = llist.ListWalker(self.ramdump, mount_list_addr, field_next_offset)
-            list_walker.walk(mount_list_addr, self.mnt_list, mount_list_addr)
+            list_walker.walk(self.mnt_list)
 
     def print_header(self):
         pass

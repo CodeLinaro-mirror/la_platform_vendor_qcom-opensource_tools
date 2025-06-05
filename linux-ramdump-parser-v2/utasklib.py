@@ -79,7 +79,10 @@ class UTaskLib:
                 return _utask
             pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                 'pgd')
-            pgdp = self.ramdump.virt_to_phys(pgd)
+            if self.ramdump.s2_walk:
+                pgdp = self.ramdump.mmu.virt_to_physel1(pgd)
+            else:
+                pgdp = self.ramdump.virt_to_phys(pgd)
             if self.ramdump.arm64:
                 mmu = Armv8MMU(self.ramdump, pgdp)
             else:
