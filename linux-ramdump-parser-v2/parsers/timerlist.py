@@ -12,7 +12,7 @@
 
 import sys
 import os
-import linux_list
+import linux_list, linux_hlist
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
 import rb_tree
@@ -73,9 +73,6 @@ class TimerList(RamParser) :
             self.timer_69 = True
 
     def timer_list_walker(self, node, type, index, base):
-        if node == self.head:
-            return
-
         remarks = ''
         function_addr = node + self.ramdump.field_offset('struct timer_list', 'function')
         expires_addr = node + self.ramdump.field_offset('struct timer_list', 'expires')
@@ -126,22 +123,19 @@ class TimerList(RamParser) :
         vec_addr = base + self.ramdump.field_offset(self.tvec_base, type)
         for i in range(0, self.vectors[type]):
             index = self.ramdump.array_index(vec_addr, 'struct list_head', i)
-            self.head = index
             node_offset = self.ramdump.field_offset('struct list_head', 'next')
             timer_list_walker = linux_list.ListWalker(self.ramdump, index, node_offset)
-            timer_list_walker.walk(index, self.timer_list_walker, type, i, base)
+            timer_list_walker.walk(self.timer_list_walker, type, i, base)
 
     def iterate_vec_v2(self, type, base):
         vec_addr = base + self.ramdump.field_offset(self.tvec_base, type)
         for i in range(0, self.vectors[type]):
             index = self.ramdump.array_index(vec_addr, 'struct hlist_head', i)
-            self.head = index
-            index = self.ramdump.read_word(index)
             node_offset = self.ramdump.field_offset(
                 'struct hlist_node', 'next')
-            timer_list_walker = linux_list.ListWalker(self.ramdump, index,
+            timer_list_walker = linux_hlist.hListWalker(self.ramdump, index,
                                                       node_offset)
-            timer_list_walker.walk(index, self.timer_list_walker, type, i,
+            timer_list_walker.walk(self.timer_list_walker, type, i,
                                    base)
 
     def print_vec(self, type):
