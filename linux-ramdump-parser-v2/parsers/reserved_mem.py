@@ -57,6 +57,7 @@ def parse_softirq_stat(ramdump):
     softirq_name_addr = ramdump.address_of('softirq_to_name')
     sizeof_softirq_name = ramdump.sizeof('softirq_to_name')
     sofrirq_name_arr_size = sizeof_softirq_name // ramdump.sizeof('char *')
+    softirq_to_name_array =["HI", "TIMER", "NET_TX", "NET_RX", "BLOCK", "IRQ_POLL","TASKLET", "SCHED", "HRTIMER", "RCU"]
     no_of_cpus = ramdump.get_num_cpus()
     index = 0
     size_of_irq_stat = ramdump.sizeof('irq_cpustat_t')
@@ -71,9 +72,12 @@ def parse_softirq_stat(ramdump):
         pos = sofrirq_name_arr_size - 1
         while pos >= 0:
             if softirq_pending & (1 << pos):
-                flag_addr = ramdump.read_word(ramdump.array_index(
+                if ramdump.minidump:
+                    flag = softirq_to_name_array[pos]
+                else:
+                    flag_addr = ramdump.read_word(ramdump.array_index(
                     softirq_name_addr, "char *", pos))
-                flag = ramdump.read_cstring(flag_addr, 48)
+                    flag = ramdump.read_cstring(flag_addr, 48)
                 pending += flag
                 pending += " | "
             pos = pos - 1
@@ -83,9 +87,10 @@ def parse_softirq_stat(ramdump):
             pending = pending.rstrip().rstrip("|")
         print_out_str("core {0} : __softirq_pending = {1}".format(
                                 index, pending))
-        if "TASKLET" in pending or "HI" in pending:
-            print_tasklet_info(ramdump, index, 'tasklet_vec')
-            print_tasklet_info(ramdump, index, 'tasklet_hi_vec')
+        if not ramdump.minidump:
+            if "TASKLET" in pending or "HI" in pending:
+                print_tasklet_info(ramdump, index, 'tasklet_vec')
+                print_tasklet_info(ramdump, index, 'tasklet_hi_vec')
 
 def check_qseecom_invalid_cmds(ramdump):
     invalid_qsecom_cmds_id = ["3", "5", "7", "9", "14", "15", "16", "17", "19", "23" , "29"]
