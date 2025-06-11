@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -43,8 +43,12 @@ class MMU(object):
         self.ramdump = ramdump
         self.s2_walk = self.ramdump.s2_walk
         if self.s2_walk:
+            self._tlbv1 = {}
             self._tlbv2 = {}
-            self.ttbr = self.ramdump.ttbr
+            if ttbr:
+                self.ttbr = ttbr
+            else:
+                self.ttbr = self.ramdump.ttbr
             self.vttbr = self.ramdump.vttbr
         else:
             if ttbr is not None:
@@ -110,6 +114,9 @@ class MMU(object):
         raise NotImplementedError
 
     def get_pgtable_index(self):
+        return None
+
+    def virt_to_physel1(self):
         return None
 
 class Armv7MMU(MMU):
@@ -947,6 +954,29 @@ class Armv8MMU(MMU):
 
         r = self.tl_page_desc_2_physel2(tl_desc, virt_r)
         return r
+
+    def virt_to_physel1(self, addr, skip_tlb=False, save_in_tlb=True):
+        """Do a virtual to physical address lookup and possibly cache the
+        result in the "TLB".
+
+        """
+        if addr is None:
+            return None
+
+        page_addr = (addr >> self.ramdump.page_shift) << self.ramdump.page_shift
+        page_offset = addr & ((1 << self.ramdump.page_shift) - 1)
+
+        if not skip_tlb:
+            if page_addr in self._tlbv1:
+                return self._tlbv1[page_addr] + page_offset
+
+        phys_addr = self.page_table_walk(page_addr)
+        if phys_addr is None:
+            return None
+
+        if save_in_tlb:
+            self._tlbv1[page_addr] = phys_addr
+        return phys_addr + page_offset
 
     def virt_to_physel2(self, addr, skip_tlb=False, save_in_tlb=True):
         """Do a virtual to physical address lookup and possibly cache the

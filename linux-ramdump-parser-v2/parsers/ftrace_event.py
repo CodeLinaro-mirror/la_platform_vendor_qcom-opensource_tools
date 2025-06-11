@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022 The Linux Foundation. All rights reserved.
+# Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
 # Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -645,7 +645,7 @@ class FtraceParser_Event(object):
                         print_buffer.append(self.ramdump.read_u32(print_buffer_offset))
                         print_buffer_offset += self.ramdump.sizeof('float')
                     if replacement != match.group():
-                        print_entry_fmt_data = print_entry_fmt_data.replace(match.group(), replacement)
+                        print_entry_fmt_data = print_entry_fmt_data.replace(match.group(), replacement, 1)
                     length += 1
                     prev_match = match.group()
                     unaligned_print_buffer_offset = print_buffer_offset
