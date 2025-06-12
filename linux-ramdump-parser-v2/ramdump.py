@@ -759,6 +759,9 @@ class RamDump():
                 print_out_str('!!! Unknonw elf class({}) in the header at {}'.format(e_class, hex(header_ptr)))
         if e_entry is not None:
             print_out_str("ELF entry is {}".format(hex(e_entry)))
+        elif self.is_config_defined('CONFIG_PCI'):
+            print_out_str("Force ELF entry to 0x200000")
+            e_entry = 0x200000
         return e_entry
 
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
