@@ -1,5 +1,5 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) 2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
 
 import linux_radix_tree
 from mm import page_address
@@ -318,7 +318,7 @@ class Zram(RamParser):
 
     def list_head_start(self, head):
         list_walker = llist.ListWalker(self.ramdump, head, 0)
-        list_walker.walk(head, self.list_call_back)
+        list_walker.walk(self.list_call_back)
 
     def print_unsigned_long_stat(self, output_file, counter_name, addr, num):
         for i in range(0, num):

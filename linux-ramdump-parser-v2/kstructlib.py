@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 
 import re
 import struct
@@ -345,8 +345,9 @@ class StructParser:
             # a pointer type
             return True
         datalist = self.ramdump.gdbmi.getStructureData(datatype)
-        if datalist[-1].strip() == "} *" and self.ramdump.sizeof(datatype) == 8:
+        if (datalist[-1].strip() == "} *" or "*(*)(" in datalist[-1].strip()) and self.ramdump.sizeof(datatype) == 8:
             # struct pointer type eg: ptype lockdep_map_p
+            # function pointer
             return True
         return len(datalist) == 1
 
@@ -380,7 +381,6 @@ class StructParser:
 
         newclass = type(d_type, (StructObj,), {})
         curr_obj = newclass(d_type, base_offset, obj_size, prefix)
-
         curr_offset = base_offset
         total_size = len(text)
         size = 0

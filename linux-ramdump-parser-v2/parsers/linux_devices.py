@@ -56,11 +56,11 @@ class DevicesList(RamParser):
         self.device_lists.append([device, name, bus_name, driver_data, archdata])
 
     def get_device_list(self, fout = None):
-        devices_kset_addr = self.ramdump.address_of('devices_kset')
-        list_head = devices_kset_addr
+        devices_kset = self.ramdump.read_pointer('devices_kset')
+        list_head = devices_kset + self.ramdump.field_offset('struct kset', 'list')
         list_offset = self.kobj_offset + self.entry_offset
         list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
-        list_walker.walk(list_head, self.list_func, fout)
+        list_walker.walk(self.list_func, fout)
         return self.device_lists
 
     def parse(self):

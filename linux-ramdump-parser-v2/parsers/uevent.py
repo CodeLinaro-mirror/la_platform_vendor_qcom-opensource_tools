@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
-import linux_list
+# Copyright (c) 2022-2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+import linux_list, linux_hlist
 from print_out import print_out_str
 from parser_util import RamParser, cleanupString, register_parser
 
@@ -9,10 +9,10 @@ class Uevent(RamParser):
     def __init__(self, *args):
         super(Uevent, self).__init__(*args)
 
-    def parse_sock(self, node, head, data_list:list, output_fd):
+    def parse_sock(self, node, data_list:list, output_fd):
         data_dict = {}
         data_head = self.ramdump.read_structure_field(node, 'struct sk_buff', 'head')
-        if node != head or data_head != 0:
+        if data_head != 0:
             data_dict['head'] = data_head
             data_len = self.ramdump.read_structure_field(node, 'struct sk_buff', 'len')
             data_len = data_len if data_len < 1000 else 1000
@@ -63,10 +63,9 @@ class Uevent(RamParser):
         data_list = []
         if queue_lenth > 0:
             entry_head = self.ramdump.struct_field_addr(netlink_node, 'struct netlink_sock', 'sk.sk_receive_queue')
-            entry_addr = self.ramdump.read_structure_field(netlink_node, 'struct netlink_sock', 'sk.sk_receive_queue.next')
             node_offset = self.ramdump.field_offset('struct sk_buff', 'next')
-            netlink_list = linux_list.ListWalker(self.ramdump, entry_addr, node_offset)
-            netlink_list.walk(entry_addr, self.parse_sock, entry_head, data_list, output_fd)
+            netlink_list = linux_list.ListWalker(self.ramdump, entry_head, node_offset)
+            netlink_list.walk(self.parse_sock, data_list, output_fd)
 
             for i in range(0, len(data_list)):
                 data_dict = data_list[i]
@@ -86,19 +85,16 @@ class Uevent(RamParser):
 
     def iterate_protocol_node(self, protocol, output_fd):
         table_entry_addr = self.ramdump.array_index(self.ramdump.read_pointer('nl_table'), 'struct netlink_table', protocol)
-        node_entry_addr = self.ramdump.read_structure_field(table_entry_addr, 'struct netlink_table', 'mc_list.first')
+        entry_head = self.ramdump.struct_field_addr(table_entry_addr, 'struct netlink_table', 'mc_list')
 
-        if node_entry_addr != 0:
+        if entry_head != 0:
             node_offset = self.ramdump.field_offset('struct sock', '__sk_common.skc_bind_node')
-            netlink_list = linux_list.ListWalker(self.ramdump, node_entry_addr, node_offset)
-            netlink_list.walk(node_entry_addr, self.parse_bind_node, output_fd)
+            netlink_list = linux_hlist.hListWalker(self.ramdump, entry_head, node_offset)
+            netlink_list.walk(self.parse_bind_node, output_fd)
 
         return
 
-    def parse_uevent(self, node, head, output_fd):
-        if node == head:
-            return
-
+    def parse_uevent(self, node, output_fd):
         uevent_addr = self.ramdump.container_of(node, 'struct uevent_sock', 'list')
 
         sk_addr = self.ramdump.read_structure_field(uevent_addr, 'struct uevent_sock', 'sk')
@@ -120,7 +116,7 @@ class Uevent(RamParser):
         next_offset = self.ramdump.field_offset('struct list_head', 'next')
         if uevent_list_head != 0:
             uevent_list = linux_list.ListWalker(self.ramdump, uevent_list_head, next_offset)
-            uevent_list.walk(uevent_list_head, self.parse_uevent, uevent_list_head, output_fd)
+            uevent_list.walk(self.parse_uevent, output_fd)
 
         output_fd.close()
         return
