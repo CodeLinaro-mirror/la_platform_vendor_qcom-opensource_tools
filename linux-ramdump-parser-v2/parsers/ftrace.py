@@ -123,13 +123,13 @@ class FtraceParser(RamParser):
         self.formats_out.write("format:\n")
 
         list_walker = llist.ListWalker(ram_dump, common_field_list, field_next_offset)
-        list_walker.walk_prev(common_field_list, self.ftrace_field_func, ram_dump)
+        list_walker.walk_prev(self.ftrace_field_func, ram_dump)
         self.formats_out.write("\n")
 
         event_class = ram_dump.read_word(ftrace_list + class_offset)
         field_list = event_class + fields_offset
         list_walker = llist.ListWalker(ram_dump, field_list, field_next_offset)
-        list_walker.walk_prev(field_list, self.ftrace_field_func, ram_dump)
+        list_walker.walk_prev(self.ftrace_field_func, ram_dump)
         self.formats_out.write("\n")
         self.formats_out.write("print fmt: {0}\n".format(fmt_str))
         fmt_list = []
@@ -145,7 +145,7 @@ class FtraceParser(RamParser):
         ftrace_events_list = self.ramdump.address_of('ftrace_events')
         next_offset = self.ramdump.field_offset(self.event_call, 'list')
         list_walker = llist.ListWalker(self.ramdump, ftrace_events_list, next_offset)
-        list_walker.walk_prev(ftrace_events_list, self.ftrace_events_func, self.ramdump)
+        list_walker.walk_prev(self.ftrace_events_func, self.ramdump)
         self.formats_out.close()
         return fevent_list
 
@@ -200,7 +200,7 @@ class FtraceParser(RamParser):
             ring_trace_buffer_base_data = self.ramdump.read_pointer(ring_trace_buffer_data + ring_trace_buffer_ptr)
             ring_trace_buffer_base_data1 = self.ramdump.read_pointer(ring_trace_buffer_base_data + ring_trace_buffer_base_addr)
             numcpus = self.ramdump.read_int(ring_trace_buffer_base_data + cpu_offset)
-            numcpus = numcpus if numcpus < 0x10 else 8
+            numcpus = numcpus if numcpus < 0x20 else 8
 
             nr_total_buffer_pages = 0
             trace_buffer_info['parse'] = True
@@ -255,9 +255,9 @@ class FtraceParser(RamParser):
         trace_buffer_name_offset = self.ramdump.field_offset(
             'struct trace_array', 'name')
         list_walker = llist.ListWalker(self.ramdump, trace_array_list, list_offset)
-        list_walker.walk_prev(trace_array_list, self.ftrace_get_buffers, trace_buffer_name_offset)
+        list_walker.walk_prev(self.ftrace_get_buffers, trace_buffer_name_offset)
         if len(self.trace_buffers) == 0:
-            list_walker.walk(trace_array_list, self.ftrace_get_buffers, trace_buffer_name_offset)
+            list_walker.walk(self.ftrace_get_buffers, trace_buffer_name_offset)
         if len(self.trace_buffers) == 0:
             print_out_str("A ftrace buffer is not found")
             return
