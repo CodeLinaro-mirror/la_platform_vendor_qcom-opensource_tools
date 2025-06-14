@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2015, 2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -236,6 +236,8 @@ class IrqParse(RamParser):
         try:
             chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
             chip_name = self.ramdump.read_cstring(chip.name, 48)
+            if chip_name is None:
+                chip_name = "None"
         except:
             chip_name = "None"
 
