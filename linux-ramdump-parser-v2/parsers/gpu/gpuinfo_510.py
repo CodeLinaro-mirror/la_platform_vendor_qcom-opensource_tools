@@ -590,16 +590,17 @@ class GpuParser_510(RamParser):
         page_count_offset = dump.field_offset('struct kgsl_page_pool',
                                               'page_count')
         for i in range(KGSL_MAX_POOLS):
+            if pools_base_addr is None or order_offset is None:
+                break
             p_order = dump.read_int(pools_base_addr + order_offset)
             pool_order.append(p_order)
             page_count = dump.read_int(pools_base_addr + page_count_offset)
-
             pool_size.append(page_count * (1 << p_order))
             pools_base_addr += shift
 
         self.writeln('\nKGSL Pool Size: ' +
                      str_convert_to_kb(sum(pool_size)*PAGE_SIZE))
-        for i in range(KGSL_MAX_POOLS):
+        for i in range(len(pool_order)):
             self.writeln('\t' + str(pool_order[i]) + ' order pool size: ' +
                          str_convert_to_kb(pool_size[i]*PAGE_SIZE))
 
