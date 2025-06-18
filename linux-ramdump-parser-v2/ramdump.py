@@ -814,6 +814,7 @@ class RamDump():
         self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
+        self.dump = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
