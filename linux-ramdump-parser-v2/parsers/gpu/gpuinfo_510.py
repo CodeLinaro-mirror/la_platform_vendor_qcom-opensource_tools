@@ -123,6 +123,7 @@ class GpuParser_510(RamParser):
             (self.parse_mutex_data, "KGSL Mutexes", 'gpuinfo.txt'),
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
             (self.parse_vrb_info, "VRB", 'gpuinfo.txt'),
+            (self.parse_dcvs_tunables, "GMU DCVS", 'gpuinfo.txt'),
             (self.parse_memstore_memory, "Memstore", 'gpuinfo.txt'),
             (self.parse_context_data, "Open Contexts", 'gpuinfo.txt'),
             (self.parse_active_context_data, "Active Contexts", 'gpuinfo.txt'),
@@ -1020,6 +1021,26 @@ class GpuParser_510(RamParser):
         self.writeln(format_str.format('L0', str(preempt_count_total_l0)))
         self.writeln(format_str.format('L1A', str(preempt_count_total_l1A)))
         self.writeln(format_str.format('L1B', str(preempt_count_total_l1B)))
+
+    def parse_dcvs_tunables(self, dump):
+        DCVS_Tunables_list = ['penalty_up', 'penalty_down',
+                              'first_step_down', 'subsequent_step_down',
+                              'min_freq_mhz', 'max_freq_mhz',
+                              'target_fps', 'num_samples_up',
+                              'num_samples_down', 'strict_frame',
+                              'non_linear_ramp_up', 'non_linear_ramp_down',
+                              'mod_percent', ]
+        hwsched_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'hwsched')
+        for index, DCVS_data in enumerate(DCVS_Tunables_list):
+            addr = dump.struct_field_addr(hwsched_addr,
+                                          'struct adreno_hwsched',
+                                          f'dcvs_tunables[{index}]')
+            value = dump.read_structure_field(addr,
+                                              'struct adreno_dcvs_tunable',
+                                              'value')
+            self.writeln(f'{DCVS_data}: ' + strhex(value))
 
     def parse_memstore_memory(self, dump):
         memstore_obj = dump.read_structure_field(self.devp,
