@@ -124,6 +124,7 @@ class GpuParser_510(RamParser):
             (self.parse_vrb_info, "VRB", 'gpuinfo.txt'),
             (self.parse_dcvs_tunables, "GMU DCVS", 'gpuinfo.txt'),
             (self.parse_active_fences, "Active Fences", 'hw_fences.txt'),
+            (self.parse_hwsched_info, "HWSCHED", 'gpuinfo.txt'),
             (self.parse_memstore_memory, "Memstore", 'gpuinfo.txt'),
             (self.parse_context_data, "Open Contexts", 'gpuinfo.txt'),
             (self.parse_active_context_data, "Active Contexts", 'gpuinfo.txt'),
@@ -1044,6 +1045,24 @@ class GpuParser_510(RamParser):
                                               'struct adreno_dcvs_tunable',
                                               'value')
             self.writeln(f'{DCVS_data}: ' + strhex(value))
+
+    def parse_hwsched_info(self, dump):
+        hwsched_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'hwsched')
+        flags = dump.read_structure_field(hwsched_addr,
+                                          'struct adreno_hwsched',
+                                          'flags')
+        self.writeln('flags: ' + strhex(flags))
+        flags_list = ['ADRENO_HWSCHED_POWER', 'ADRENO_HWSCHED_ACTIVE',
+                      'ADRENO_HWSCHED_CTX_BAD_LEGACY',
+                      'ADRENO_HWSCHED_CONTEXT_QUEUE',
+                      'ADRENO_HWSCHED_HW_FENCE',
+                      'ADRENO_HWSCHED_FORCE_RETIRE_GMU',
+                      'ADRENO_HWSCHED_GPU_SOFT_RESET', ]
+        for i, flag in enumerate(flags_list):
+            value = (flags >> i) & 1
+            self.writeln(f'{flag}: ' + str(value))
 
     def parse_memstore_memory(self, dump):
         memstore_obj = dump.read_structure_field(self.devp,
