@@ -27,7 +27,6 @@ from print_out import print_out_str
 ADRENO_DISPATCH_DRAWQUEUE_SIZE = 128
 KGSL_DEVMEMSTORE_SIZE = 40
 KGSL_PRIORITY_MAX_RB_LEVELS = 4
-KGSL_MAX_PWRLEVELS = 16
 KGSL_MAX_POOLS = 6
 PAGE_SIZE = 4096
 
@@ -853,6 +852,8 @@ class GpuParser_510(RamParser):
         for data in pwrctl_data:
             value = dump.read_structure_field(pwrctrl_address,
                                               'struct kgsl_pwrctrl', data)
+            if data == 'num_pwrlevels':
+                num_pwrlevels = value
             if data in pwrctl_data_hex:
                 self.writeln(f'{data}: ' + strhex(value))
             else:
@@ -863,7 +864,7 @@ class GpuParser_510(RamParser):
         pwrlevels_base_address = pwrctrl_address + \
             dump.field_offset('struct kgsl_pwrctrl', 'pwrlevels')
 
-        for i in range(0, KGSL_MAX_PWRLEVELS):
+        for i in range(0, num_pwrlevels):
             pwr_levels_temp = []
             pwrlevels_array_idx_addr = dump.array_index(
                 pwrlevels_base_address, "struct kgsl_pwrlevel", i)
