@@ -335,7 +335,8 @@ class GpuParser_510(RamParser):
                                        "MEMDESC_SIZE", "GPUADDR", "FLAGS",
                                        "USAGE", "PENDING_FREE", "PRIV"))
 
-        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset(
+            'struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
@@ -482,7 +483,7 @@ class GpuParser_510(RamParser):
                          'ADRENO_DCVS_PROFILE', ]
 
         for i, feature in enumerate(features_list):
-            if(features >> i) & 1:
+            if (features >> i) & 1:
                 enabled.append(feature)
             else:
                 disabled.append(feature)
@@ -1113,7 +1114,8 @@ class GpuParser_510(RamParser):
                                        "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
                                        "CTX_CNT", "STATE", "CMDLINE STRING"))
 
-        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset(
+            'struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
@@ -1163,7 +1165,8 @@ class GpuParser_510(RamParser):
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20}'
         self.writeln(format_str.format("PID", "pt_base", "ttbr0"))
-        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'pagetable_list')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset(
+            'struct kgsl_driver', 'pagetable_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_pagetable', 'list')
         pagetable_list_walker = linux_list.ListWalker(
