@@ -1012,6 +1012,8 @@ class RamDump():
             saved_config.write(l + '\n')
 
         saved_config.close()
+        if self.is_config_defined("CONFIG_VMSPLIT_2G") and not self.arm64 and self.get_kernel_version() >= (6, 6):
+            self.page_offset = 0x80000000	#For ARM32 with VMSPLIT_2G Enabled
         try:
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
