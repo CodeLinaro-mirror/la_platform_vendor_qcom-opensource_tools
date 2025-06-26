@@ -123,6 +123,8 @@ class GpuParser_510(RamParser):
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
             (self.parse_vrb_info, "VRB", 'gpuinfo.txt'),
             (self.parse_dcvs_tunables, "GMU DCVS", 'gpuinfo.txt'),
+            (self.parse_active_fences, "Active Fences", 'hw_fences.txt'),
+            (self.parse_hwsched_info, "HWSCHED", 'gpuinfo.txt'),
             (self.parse_memstore_memory, "Memstore", 'gpuinfo.txt'),
             (self.parse_context_data, "Open Contexts", 'gpuinfo.txt'),
             (self.parse_active_context_data, "Active Contexts", 'gpuinfo.txt'),
@@ -1044,6 +1046,24 @@ class GpuParser_510(RamParser):
                                               'value')
             self.writeln(f'{DCVS_data}: ' + strhex(value))
 
+    def parse_hwsched_info(self, dump):
+        hwsched_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'hwsched')
+        flags = dump.read_structure_field(hwsched_addr,
+                                          'struct adreno_hwsched',
+                                          'flags')
+        self.writeln('flags: ' + strhex(flags))
+        flags_list = ['ADRENO_HWSCHED_POWER', 'ADRENO_HWSCHED_ACTIVE',
+                      'ADRENO_HWSCHED_CTX_BAD_LEGACY',
+                      'ADRENO_HWSCHED_CONTEXT_QUEUE',
+                      'ADRENO_HWSCHED_HW_FENCE',
+                      'ADRENO_HWSCHED_FORCE_RETIRE_GMU',
+                      'ADRENO_HWSCHED_GPU_SOFT_RESET', ]
+        for i, flag in enumerate(flags_list):
+            value = (flags >> i) & 1
+            self.writeln(f'{flag}: ' + str(value))
+
     def parse_memstore_memory(self, dump):
         memstore_obj = dump.read_structure_field(self.devp,
                                                  'struct kgsl_device',
@@ -1209,6 +1229,27 @@ class GpuParser_510(RamParser):
 
         self.writeln(format_str.format(
             str(pid), strhex(pt_base), strhex(ttbr0_val)))
+
+    def parse_active_fences(self, dump):
+        format_str = '{0:14} {1:16} {2:20}'
+        self.writeln(format_str.format("ID", "timestamp", "index"))
+        node_addr = dump.address_of('hw_fence_list')
+        list_elem_offset = dump.field_offset(
+                            'struct kgsl_sync_fence', 'hw_fence_list')
+        fences_list_walker = linux_list.ListWalker(
+                                    dump, node_addr, list_elem_offset)
+        fences_list_walker.walk(self.walk_fences,
+                                dump, format_str)
+
+    def walk_fences(self, pt_base_addr, dump, format_str):
+        id = dump.read_structure_field(
+            pt_base_addr, 'struct kgsl_sync_fence', 'context_id')
+        timestamp = dump.read_structure_field(
+            pt_base_addr, 'struct kgsl_sync_fence', 'timestamp')
+        hw_fence_index = dump.read_structure_field(
+            pt_base_addr, 'struct kgsl_sync_fence', 'hw_fence_index')
+        self.writeln(format_str.format(
+            str(id), str(timestamp), str(hw_fence_index)))
 
     def parse_gmu_data(self, dump):
         gmu_core = dump.struct_field_addr(self.devp,
