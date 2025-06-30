@@ -745,6 +745,25 @@ class RamDump():
                            modules_vsize
         return kimage_vaddr
 
+    def get_elf_entry_address(self, header_ptr):
+        e_entry = None
+        e_ident = self.read_u64(header_ptr, virtual=False)
+        e_magic = e_ident & 0xffffffff
+        if e_magic == 0x464c457f:
+            e_class = (e_ident >> (4 * 8)) & 0xff
+            if e_class == 1:
+                e_entry = self.read_u32(header_ptr + 0x18, virtual=False)
+            elif e_class == 2:
+                e_entry = self.read_u64(header_ptr + 0x18, virtual=False)
+            else:
+                print_out_str('!!! Unknonw elf class({}) in the header at {}'.format(e_class, hex(header_ptr)))
+        if e_entry is not None:
+            print_out_str("ELF entry is {}".format(hex(e_entry)))
+        elif self.is_config_defined('CONFIG_PCI'):
+            print_out_str("Force ELF entry to 0x200000")
+            e_entry = 0x200000
+        return e_entry
+
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
         ## used for read_physical in multi-thread mode
@@ -795,6 +814,7 @@ class RamDump():
         self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
+        self.dump = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -932,6 +952,8 @@ class RamDump():
             if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
                 fd = open(file_path, 'rb')
+                fout = self.open_file('va_minidump.txt')
+                fout.write('{:16}{}\n'.format('symbol', 'addr'))
                 kva_elf = ELFFile(fd)
                 for s in kva_elf.iter_sections():
                     start = int(s.header['sh_addr'])
@@ -946,6 +968,8 @@ class RamDump():
                         self.md_dict[s.name] = [[start,size]]
                     else:
                         self.md_dict[s.name].append([start,size])
+                    fout.write('{:16}0x{:x}\n'.format(s.name, start))
+                fout.close()
 
         if options.minidump:
             if self.ebi_start == 0:
@@ -1032,16 +1056,20 @@ class RamDump():
         self.vabits_actual = self.get_vabits_actual()
         print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
 
-        if self.s2_walk and self.ipa_addr is not None:
-            early_s2mmu = Armv8MMU(self)
-            self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+        self.elf_entry_offset = None
+        if self.s2_walk:
+            if self.ipa_addr is not None:
+                early_s2mmu = Armv8MMU(self)
+                self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                if self.phys_offset is not None:
+                    print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
+                else:
+                    print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
+                            hex(self.phys_offset)))
+                    print_out_str('!!! Exiting now')
+                    sys.exit(1)
             if self.phys_offset is not None:
-                print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
-            else:
-                print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
-                        hex(self.phys_offset)))
-                print_out_str('!!! Exiting now')
-                sys.exit(1)
+                self.elf_entry_offset = self.get_elf_entry_address(self.phys_offset)
 
         self.pfn_range = None
         self.vmemmap = None
@@ -1602,9 +1630,6 @@ class RamDump():
             ebi_path = os.path.abspath(ram[3])
             startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
                 ebi_path, ram[1]))
-        if self.minidump:
-            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
-            startup_script.write(dload_ram_elf)
         # Check to include Reduced dump elf's
         if self.elf_addr:
             for file in self.elf_addr:
@@ -1689,6 +1714,9 @@ class RamDump():
         else:
             dloadelf = 'data.load.elf {}\n'.format(where)
         startup_script.write(dloadelf)
+        if self.minidump:
+            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
+            startup_script.write(dload_ram_elf)
 
         if self.arm64 and not self.minidump:
             startup_script.write('TRANSlation.COMMON NS:0xF000000000000000--0xffffffffffffffff\n')
@@ -1705,6 +1733,12 @@ class RamDump():
             startup_script.write('frame.config.eabi on\n')
             if self.arm64:
                 startup_script.write('Register.Set CPSR 0x1C5\n')
+            # md_KVA_DUMP.BIN is ELF format. Load it in T32
+            for i in self.ebi_files:
+                fd, start, end, path = i
+                if "md_KVA_DUMP" in path:
+                    startup_script.write('data.load.elf {} /LOGLOAD /nosymbol\n'.format(path))
+                    break
 
         if t32_host_system != 'Linux':
             if self.arm64:
@@ -1898,15 +1932,15 @@ class RamDump():
 
     @parser_util.time_cost
     def determine_kaslr_offset(self):
-        if self.svm and self.svm_kaslr_offset:
-            self.kaslr_offset = self.svm_kaslr_offset
+        if self.svm:
             self.kaslr_addr = None
+            if self.svm_kaslr_offset:
+                self.kaslr_offset = self.svm_kaslr_offset
+            else:
+                self.kaslr_offset = 0
             self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
-            return
-        elif self.svm and not self.svm_kaslr_offset:
-            self.kaslr_offset = 0
-            self.kaslr_addr = None
-            self.kimage_voffset = self.__kimage_vaddr_va - self.phys_offset
+            if self.elf_entry_offset:
+                self.kimage_voffset -= self.elf_entry_offset
             return
         else:
             __kaslr_offset = None

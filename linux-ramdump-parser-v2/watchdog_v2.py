@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1395,6 +1395,10 @@ def get_wdog_timing(ramdump):
         wdog_seg = next((s for s in ramdump.elffile.iter_sections() if s.name == 'KWDOGDATA'), None)
         if wdog_seg is not None:
             wdog_data_addr = wdog_seg['sh_addr']
+    if wdog_data_addr is None and not ramdump.minidump:
+        get_upstream_wdog_timing(ramdump)
+        return
+
     pet_timer_off = ramdump.field_offset(
         'struct msm_watchdog_data', 'pet_timer')
     timer_expires_off = ramdump.field_offset('struct timer_list', 'expires')
@@ -1584,3 +1588,214 @@ def get_wdog_timing(ramdump):
             wdog_data_addr, 'struct msm_watchdog_data', 'thread_start')
         print_out_str('thread_start : {0:.6f}'.format(ns_to_sec(
             thread_start)))
+
+
+def get_wdog_by_cdev(ramdump):
+    probe = 0
+    probes_len = 255
+    if ramdump.arm64:
+        addressspace = 8
+    else:
+        addressspace = 4
+    cdev_map = ramdump.read_word('cdev_map')
+    probes = cdev_map + 0x0
+    watchdog_devt = ramdump.read_word('watchdog_devt')
+    i = 0
+    while i < probes_len:
+        probe = ramdump.read_word(probes + i * addressspace )
+        dev_t = ramdump.read_structure_field(
+                    probe, 'struct probe', 'dev')
+        # find the wdt data by dev_t as /dev/watchdog is a char device
+        if dev_t == watchdog_devt:
+            break
+        i = i + 1
+
+    if probe != 0:
+        cdev = ramdump.read_structure_field(
+                    probe, 'struct probe', 'data')
+    else:
+        print_out_str('Get Watchdog data failed')
+
+    cdev_off = ramdump.field_offset('struct watchdog_core_data', 'cdev')
+    wdog_data = cdev - cdev_off
+    return wdog_data
+
+
+def get_wdog_task(ramdump):
+    watchdog_kworker = ramdump.read_word('watchdog_kworker')
+    wdog_task_off = ramdump.field_offset('struct kthread_worker', 'task')
+    wdog_task = ramdump.read_word(watchdog_kworker + wdog_task_off)
+    return wdog_task
+
+
+def get_upstream_wdog_timing(ramdump):
+    wdog_data_addr = get_wdog_by_cdev(ramdump)
+    watchdog_device = ramdump.read_structure_field(
+            wdog_data_addr, 'struct watchdog_core_data', 'wdd')
+    last_keepalive = ramdump.read_structure_field(
+            wdog_data_addr, 'struct watchdog_core_data', 'last_keepalive')
+    open_deadline = ramdump.read_structure_field(
+            wdog_data_addr, 'struct watchdog_core_data', 'open_deadline')
+    wdog_status = ramdump.read_structure_field(
+            wdog_data_addr, 'struct watchdog_core_data', 'status')
+    if ramdump.is_config_defined('CONFIG_WATCHDOG_HRTIMER_PRETIMEOUT'):
+        pretimeout_timer = ramdump.read_structure_field(
+                wdog_data_addr, 'struct watchdog_core_data', 'pretimeout_timer')
+
+    logical_map = []
+    runq_online_bits = 0
+    jiffies = ramdump.read_word('jiffies')
+    last_jiffies_update = ramdump.read_s64('last_jiffies_update')
+    tick_do_timer_cpu = ramdump.read_s32('tick_do_timer_cpu')
+    pet_timer_off = ramdump.field_offset('struct watchdog_core_data', 'timer')
+    timer_node_off = ramdump.field_offset('struct hrtimer', 'node')
+    timer_expires_off = ramdump.field_offset('struct timerqueue_node', 'expires')
+    pet_timer_expires = ramdump.read_word(
+        wdog_data_addr + pet_timer_off + timer_node_off + timer_expires_off)
+
+    timer_state_off = ramdump.field_offset('struct hrtimer', 'state')
+    pet_timer_state = ramdump.read_word(
+        wdog_data_addr + pet_timer_off + timer_state_off)
+
+    wdog_last_pet = ramdump.read_structure_field(
+        wdog_data_addr, 'struct watchdog_core_data', 'last_hw_keepalive')
+    #For kernel version less than 4.4, as the member variable timer_expired
+    #  is not available we need to get watchdog timer expire status
+    pet_timer_expired = False
+    if (ramdump.kernel_version < (4, 4)):
+        pet_timer_entry_offset = ramdump.field_offset('struct timer_list', 'entry')
+        pet_timer_prev_offset = ramdump.field_offset('struct list_head', 'prev')
+        pet_timer_entry_prev = ramdump.read_word(
+            wdog_data_addr + pet_timer_off + pet_timer_entry_offset + pet_timer_prev_offset)
+
+        if(pet_timer_entry_prev == '0x200'):
+            pet_timer_expired = True
+
+    pretimeout_off = ramdump.field_offset(
+        'struct watchdog_device', 'pretimeout')
+    bite_time_off = ramdump.field_offset(
+        'struct watchdog_device', 'timeout')
+
+    bite_time = ramdump.read_int(watchdog_device + bite_time_off)
+    pretimeout = ramdump.read_int(watchdog_device + pretimeout_off)
+    bark_time = bite_time - pretimeout
+
+    if not ramdump.minidump and ramdump.is_config_defined('CONFIG_GENERIC_CLOCKEVENTS_BROADCAST'):
+        tick_bc_mask = ramdump.read_word('tick_broadcast_oneshot_mask')
+        tick_bc_pending_mask = ramdump.read_word('tick_broadcast_pending_mask')
+        tick_bc_force_mask = ramdump.read_word('tick_broadcast_force_mask')
+        tick_bc_evt_dev = ramdump.read_structure_field(
+            'tick_broadcast_device', 'struct tick_device', 'evtdev')
+        if tick_bc_evt_dev != 0:
+            tick_bc_next_evt = ramdump.read_structure_field(
+                tick_bc_evt_dev, 'struct clock_event_device', 'next_event')
+            tick_bc_next_evt = ns_to_sec(tick_bc_next_evt)
+            tick_bc_cpumask = ramdump.read_structure_field(
+                tick_bc_evt_dev, 'struct clock_event_device', 'cpumask')
+            tick_bc_cpumask_bits = ramdump.read_structure_field(
+                tick_bc_cpumask, 'struct cpumask', 'bits')
+            if tick_bc_cpumask_bits is None:
+                tick_bc_cpumask_bits = 0
+    if ramdump.is_config_defined('CONFIG_SMP'):
+        runqueues_addr = ramdump.address_of('runqueues')
+        online_offset = ramdump.field_offset('struct rq', 'online')
+        for i in ramdump.iter_cpus():
+            online = ramdump.read_int(runqueues_addr + online_offset, cpu=i)
+            runq_online_bits |= (online << i)
+
+    if (ramdump.kernel_version >= (4, 9, 0)):
+        cpu_online_bits = ramdump.read_word('__cpu_online_mask')
+    else:
+        cpu_online_bits = ramdump.read_word('cpu_online_bits')
+
+    cpu_isolated_bits = cpu_isolation_mask(ramdump)
+
+    if not ramdump.minidump:
+        wdog_task = get_wdog_task(ramdump)
+        if ramdump.kernel_version >= (5, 15, 0):
+            wdog_task_state = ramdump.read_structure_field(
+                wdog_task, 'struct task_struct', '__state')
+        else:
+            wdog_task_state = ramdump.read_structure_field(
+                wdog_task, 'struct task_struct', 'state')
+        wdog_task_threadinfo = ramdump.get_thread_info_addr(wdog_task)
+        wdog_task_cpu = ramdump.get_task_cpu(wdog_task, wdog_task_threadinfo)
+        wdog_task_oncpu = ramdump.read_structure_field(
+            wdog_task, 'struct task_struct', 'on_cpu')
+        wdog_task_arrived = ramdump.read_structure_field(
+            wdog_task, 'struct task_struct', 'sched_info.last_arrival')
+        wdog_task_queued = ramdump.read_structure_field(
+            wdog_task, 'struct task_struct', 'sched_info.last_queued')
+
+    logical_map_addr = ramdump.address_of('__cpu_logical_map')
+    for i in ramdump.iter_cpus():
+        cpu_logical_map_addr = logical_map_addr + (i * 8)
+        core_id = ramdump.read_u64(cpu_logical_map_addr)
+        logical_map.append(core_id >> 8)
+    print_out_str('Non-secure Watchdog data')
+    print_out_str('Bark time: {0}s'.format(bark_time))
+    last_pet_sec = ns_to_sec(wdog_last_pet)
+
+    next_bark_sec = last_pet_sec + (bark_time)
+    print_out_str('Watchdog last pet: {0}'.format(last_pet_sec))
+    print_out_str('Watchdog next bark: {0}'.format(next_bark_sec))
+
+    if not ramdump.minidump:
+        if wdog_task_state == 0 and wdog_task_oncpu == 1:
+            pet_timer_expired = True
+            print_out_str("Watchdog task running on core {0} from {1:.6f}".format(
+                wdog_task_cpu, ns_to_sec(wdog_task_arrived)))
+
+        elif wdog_task_state == 0:
+            print_out_str(
+                "Watchdog task is waiting on core {0} from {1:.6f}".format(
+                    wdog_task_cpu, ns_to_sec(wdog_task_queued)))
+
+        elif wdog_task_state == 1 and pet_timer_expired == True:
+            print_out_str("Pet timer expired but Watchdog task is not queued")
+
+        elif pet_timer_expired == True:
+           print_out_str("Pet timer expired")
+
+        else:
+            print_out_str('Watchdog pet timer not expired')
+            if jiffies > pet_timer_expires:
+                print_out_str('Current jiffies crossed pet_timer expires jiffies')
+    print_out_str('Watchdog status: {0}'.format(wdog_status))
+    print_out_str('CPU online bits: {0:08b}'.format(cpu_online_bits))
+    print_out_str('CPU runqueue online bits: {0:08b}'.format(runq_online_bits))
+    print_out_str('CPU isolated bits: {0:08b}'.format(cpu_isolated_bits))
+    if (ramdump.kernel_version >= (5, 15, 0)):
+        cpu_dying_bits = ramdump.read_word('__cpu_dying_mask')
+        print_out_str('CPU dying bits: {0:08b}'.format(cpu_dying_bits))
+    print_out_str('pet_timer_state: 0x{0:x}'.format(pet_timer_state))
+    print_out_str('pet_timer_expires: {0}'.format(pet_timer_expires))
+    print_out_str('Current jiffies  : {0}'.format(jiffies))
+    print_out_str(
+        'Timestamp of last timer interrupt(last_jiffies_update): {0}'.format(
+            ns_to_sec(last_jiffies_update)))
+    print_out_str("tick_do_timer_cpu: {0}".format(tick_do_timer_cpu))
+    print_out_str('CPU logical map: {0}'.format(logical_map))
+    if not ramdump.minidump:
+        if ramdump.is_config_defined('CONFIG_GENERIC_CLOCKEVENTS_BROADCAST'):
+            print_out_str('tick_broadcast_oneshot_mask: {0:08b}'.format(tick_bc_mask))
+            print_out_str(
+                'tick_broadcast_pending_mask: {0:08b}'.format(tick_bc_pending_mask))
+            print_out_str(
+                'tick_broadcast_force_mask: {0:08b}'.format(tick_bc_force_mask))
+            if tick_bc_evt_dev != 0:
+                print_out_str(
+                    'tick_broadcast_device cpumask: {0:08b}'.format(tick_bc_cpumask_bits))
+                print_out_str(
+                    'tick_broadcast_device next_event: {0:.6f}'.format(tick_bc_next_evt))
+        for i in ramdump.iter_cpus():
+            tick_cpu_device = ramdump.address_of(
+                'tick_cpu_device') + ramdump.per_cpu_offset(i)
+            evt_dev = ramdump.read_structure_field(
+                tick_cpu_device, 'struct tick_device', 'evtdev')
+            if evt_dev != 0:
+                next_event = ramdump.read_structure_field(
+                    evt_dev, 'struct clock_event_device', 'next_event')
+                next_event = ns_to_sec(next_event)
+                print_out_str(
+                    "CPU{0} tick_device next_event: {1:.6f}".format(i, next_event))
