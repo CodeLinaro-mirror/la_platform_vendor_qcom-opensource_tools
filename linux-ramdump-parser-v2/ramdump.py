@@ -185,6 +185,11 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
         with open(os.path.join(self.autodumpdir, filename)) as f:
             try:
                 for line in f.readlines():
+                    if 'Exception CreateMemDebugFile during memory dump' in line:
+                        print_out_str('!!! QPST encountered errors while collecting the dump.')
+                        print_out_str('!!! Exiting now')
+                        sys.exit(1)
+
                     words = line.split()
                     if not words or not is_ramdump_file(words[-1],
                                                         self.minidump):
@@ -201,6 +206,8 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
                             % (fname, filesize, size))
                         continue
                     yield fname, start
+            except SystemExit:
+                sys.exit(1)
             except:
                 print_out_str('!!! Cannot parse dump_info.txt due to improper format!')
                 return
@@ -814,6 +821,7 @@ class RamDump():
         self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
+        self.dump = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
