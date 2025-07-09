@@ -12,6 +12,7 @@
 
 import linux_list
 import linux_radix_tree
+import struct
 import traceback
 
 from math import log2
@@ -52,6 +53,13 @@ KGSL_MEMFLAGS_VBO = (1 << 34)
 VRB_PREEMPT_COUNT_TOTAL_L0_IDX = 6
 VRB_PREEMPT_COUNT_TOTAL_L1A_IDX = 7
 VRB_PREEMPT_COUNT_TOTAL_L1B_IDX = 8
+
+KGSL_HFI_MEMKIND_SCRATCH = 0x2
+
+MAX_NUM_GC_RBS = 4
+MAX_NUM_LPAC_RBS = 1
+MAX_NUM_RBS = (MAX_NUM_GC_RBS + MAX_NUM_LPAC_RBS)
+RB_SCRATCH_DWORDS_SZ = 5
 
 kgsl_cachemode = ['-', 'u', 't', 'b']
 
@@ -942,40 +950,141 @@ class GpuParser_510(RamParser):
         else:
             self.writeln("UNLOCKED")
 
+    def is_hwsched_enabled(self):
+        dump = self.ramdump
+
+        hwsched_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'hwsched')
+        hwsched_ops = dump.read_structure_field(hwsched_addr,
+                                                'struct adreno_hwsched',
+                                                'hwsched_ops')
+        return bool(hwsched_ops)
+
+    def get_scratch_memory_memdesc(self):
+        dump = self.ramdump
+        hwsched_enabled = self.is_hwsched_enabled()
+        if not hwsched_enabled:
+            scratch_obj = dump.read_structure_field(self.devp,
+                                                    'struct kgsl_device',
+                                                    'scratch')
+            return scratch_obj
+
+        gpucore = dump.read_structure_field(self.devp,
+                                            'struct adreno_device', 'gpucore')
+        gpurev = dump.read_structure_field(gpucore,
+                                           'struct adreno_gpu_core', 'gpurev')
+        if gpurev >= 0x80000:
+            hwsched_device_struct = 'struct gen8_hwsched_device'
+            hwsched_hfi_struct = 'struct gen8_hwsched_hfi'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen8_device',
+                                                   'adreno_dev', 'gmu')
+        elif gpurev >= 0x70000:
+            hwsched_device_struct = 'struct gen7_hwsched_device'
+            hwsched_hfi_struct = 'struct gen7_hwsched_hfi'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen7_device',
+                                                   'adreno_dev', 'gmu')
+        else:
+            hwsched_device_struct = 'struct a6xx_hwsched_device'
+            hwsched_hfi_struct = 'struct a6xx_hwsched_hfi'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct a6xx_device',
+                                                   'adreno_dev', 'gmu')
+        try:
+            hwsched_addr = dump.struct_field_addr(self.devp,
+                                                  'struct adreno_device',
+                                                  'hwsched')
+            mem_alloc_entries = dump.read_structure_field(
+                hwsched_addr, 'struct adreno_hwsched', 'mem_alloc_entries')
+
+            if mem_alloc_entries is None:
+                raise ValueError("mem_alloc_entries is None")
+            mem_alloc_table_addr = dump.struct_field_addr(
+                hwsched_addr, 'struct adreno_hwsched', 'mem_alloc_table')
+
+        except Exception:
+            hwsched_hfi = dump.struct_field_addr(
+                gmu_dev_addr, hwsched_device_struct, 'hwsched_hfi'
+            )
+            mem_alloc_entries = dump.read_structure_field(
+                hwsched_hfi, hwsched_hfi_struct, 'mem_alloc_entries')
+            mem_alloc_table_addr = dump.struct_field_addr(
+                hwsched_hfi, hwsched_hfi_struct, 'mem_alloc_table')
+
+        if mem_alloc_entries is None:
+            return None
+
+        for i in range(mem_alloc_entries):
+            mem_alloc_table_idx_addr = dump.array_index(
+                mem_alloc_table_addr, "struct hfi_mem_alloc_entry",
+                i)
+            mem_kind = dump.read_structure_field(mem_alloc_table_idx_addr,
+                                                 'struct hfi_mem_alloc_desc',
+                                                 'mem_kind')
+            if mem_kind == KGSL_HFI_MEMKIND_SCRATCH:
+                scratch_obj = dump.read_structure_field(
+                    mem_alloc_table_idx_addr, 'struct hfi_mem_alloc_entry',
+                    'md')
+                return scratch_obj
+        return None
+
+    def print_scratch_swsched(self, scratch):
+        dump = self.ramdump
+
+        # struct adreno_rb_shadow format string
+        scratch_formatstr = '<IIIIQI'
+
+        format_str = '{0:20} {1:20} {2:20} {3:20} {4:20} {5:20} {6:20}'
+        self.writeln(format_str.format("Ringbuffer_Id", "RPTR_Value",
+                                       "BV_RPTR_Value", "BV_TS_Value",
+                                       "CUR_RB_PTNAME", "TTBR0", "CONTEXTIDR"))
+        for rb_id in range(MAX_NUM_RBS):
+            rptr, bv_rptr, bv_ts, current_rb_ptname, ttbr0, contextidr = \
+                dump.read_string(scratch, scratch_formatstr)
+            self.writeln(format_str.format(str(rb_id), str(rptr), str(bv_rptr),
+                                           str(bv_ts), str(current_rb_ptname),
+                                           strhex(ttbr0), str(contextidr)))
+            scratch += struct.calcsize(scratch_formatstr)
+
+    def print_scratch_hwsched(self, scratch):
+        dump = self.ramdump
+
+        # GMU FW struct RBScratch format string
+        scratch_formatstr = '<' + 'I'*MAX_NUM_RBS*5
+        scratch_data = dump.read_string(scratch, scratch_formatstr)
+
+        rptr = scratch_data[:MAX_NUM_RBS]
+        rptrBv = scratch_data[MAX_NUM_RBS:MAX_NUM_RBS*2]
+        sop = scratch_data[MAX_NUM_RBS*2:MAX_NUM_RBS*3]
+        eop = scratch_data[MAX_NUM_RBS*3:MAX_NUM_RBS*4]
+        tsBv = scratch_data[MAX_NUM_RBS*4:]
+
+        format_str = '{0:20} {1:20} {2:20} {3:20} {4:20} {5:20}'
+        self.writeln(format_str.format("Ringbuffer_Id", "RPTR_Value",
+                                       "BV_RPTR_Value", "BV_TS_Value",
+                                       "SOP", "EOP"))
+        for rb_id in range(MAX_NUM_RBS):
+            self.writeln(format_str.format(str(rb_id), str(rptr[rb_id]),
+                                           str(rptrBv[rb_id]),
+                                           str(tsBv[rb_id]), str(sop[rb_id]),
+                                           str(eop[rb_id])))
+
     def parse_scratch_memory(self, dump):
-        scratch_obj = dump.read_structure_field(self.devp,
-                                                'struct kgsl_device',
-                                                'scratch')
+        scratch_obj = self.get_scratch_memory_memdesc()
+        if not scratch_obj:
+            self.write("Scratch memory not found!\n")
+            return
+
         hostptr = dump.read_structure_field(scratch_obj, 'struct kgsl_memdesc',
                                             'hostptr')
         self.write("hostptr:  " + strhex(hostptr) + "\n")
 
-        def add_increment(x): return x + 4
-
-        format_str = '{0:20} {1:20} {2:20}'
-        self.writeln(format_str.format("Ringbuffer_id", "RPTR_Value",
-                                       "CTXT_RESTORE_ADD"))
-
-        rptr_0 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        rptr_1 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        rptr_2 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        rptr_3 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_0 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_1 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_2 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_3 = dump.read_s32(hostptr)
-
-        self.writeln(format_str.format(str(0), str(rptr_0), strhex(ctxt_0)))
-        self.writeln(format_str.format(str(1), str(rptr_1), strhex(ctxt_1)))
-        self.writeln(format_str.format(str(2), str(rptr_2), strhex(ctxt_2)))
-        self.writeln(format_str.format(str(3), str(rptr_3), strhex(ctxt_3)))
+        if self.is_hwsched_enabled():
+            self.print_scratch_hwsched(hostptr)
+        else:
+            self.print_scratch_swsched(hostptr)
 
     def parse_vrb_info(self, dump):
         gpucore = dump.read_structure_field(self.devp,
