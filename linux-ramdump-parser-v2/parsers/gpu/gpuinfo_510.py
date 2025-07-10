@@ -60,6 +60,7 @@ class GpuParser_510(RamParser):
             (self.parse_eventlog_data, "Eventlog Buffer", 'eventlog.txt'),
             (self.parse_gpu_dcvs_data, "GPU DCVS Info",
              'gpuinfo.txt'),
+            (self.parse_non_context_data, "Non Context Overrides", 'gpuinfo.txt'),
         ]
 
         self.rtw = linux_radix_tree.RadixTreeWalker(dump)
@@ -1501,3 +1502,48 @@ class GpuParser_510(RamParser):
             self.writeln("mod_percent: " + str(mod_percent))
         else:
             self.writeln("DCVS data dump skipped if GPU state is not ACTIVE")
+
+    def parse_non_context_data(self, dump):
+        gpucore = dump.read_structure_field(self.devp,
+                                            'struct adreno_device',
+                                            'gpucore')
+        gpurev = dump.read_structure_field(gpucore,
+                                           'struct adreno_gpu_core',
+                                           'gpurev')
+        if gpurev < 0x80000:
+            return
+
+        gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                               'struct gen8_device',
+                                               'adreno_dev', 'gmu')
+
+        format_str = '{0:16} {1:16} {2:16} {3:16} {4:16}'
+        self.writeln(format_str.format("offset", "pipelines", "value",
+                                       "set", "list_type"))
+
+        nc_overrides_addr = dump.read_structure_field(gmu_dev_addr,
+                                                      'struct gen8_device',
+                                                      'nc_overrides')
+        struct_size = self.ramdump.sizeof('struct gen8_nonctxt_overrides')
+        while(1):
+            offset = dump.read_structure_field(nc_overrides_addr,
+                                               'struct gen8_nonctxt_overrides',
+                                               'offset')
+            if offset == 0:
+                return
+            pipelines = dump.read_structure_field(
+                nc_overrides_addr, 'struct gen8_nonctxt_overrides',
+                'pipelines')
+            value = dump.read_structure_field(nc_overrides_addr,
+                                              'struct gen8_nonctxt_overrides',
+                                              'val')
+            addr = dump.struct_field_addr(nc_overrides_addr,
+                                          'struct gen8_nonctxt_overrides',
+                                          'set')
+            set = dump.read_bool(addr)
+            list_type = dump.read_structure_field(
+                nc_overrides_addr, 'struct gen8_nonctxt_overrides',
+                'list_type')
+            self.writeln(format_str.format(strhex(offset), strhex(pipelines),
+                         strhex(value), str(set), strhex(list_type)))
+            nc_overrides_addr = nc_overrides_addr + struct_size
