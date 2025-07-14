@@ -185,6 +185,11 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
         with open(os.path.join(self.autodumpdir, filename)) as f:
             try:
                 for line in f.readlines():
+                    if 'Exception CreateMemDebugFile during memory dump' in line:
+                        print_out_str('!!! QPST encountered errors while collecting the dump.')
+                        print_out_str('!!! Exiting now')
+                        sys.exit(1)
+
                     words = line.split()
                     if not words or not is_ramdump_file(words[-1],
                                                         self.minidump):
@@ -201,6 +206,8 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
                             % (fname, filesize, size))
                         continue
                     yield fname, start
+            except SystemExit:
+                sys.exit(1)
             except:
                 print_out_str('!!! Cannot parse dump_info.txt due to improper format!')
                 return
@@ -759,6 +766,9 @@ class RamDump():
                 print_out_str('!!! Unknonw elf class({}) in the header at {}'.format(e_class, hex(header_ptr)))
         if e_entry is not None:
             print_out_str("ELF entry is {}".format(hex(e_entry)))
+        elif self.is_config_defined('CONFIG_PCI'):
+            print_out_str("Force ELF entry to 0x200000")
+            e_entry = 0x200000
         return e_entry
 
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
@@ -811,6 +821,7 @@ class RamDump():
         self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
+        self.dump = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
