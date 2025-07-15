@@ -1,4 +1,3 @@
-# Copyright (c) The Linux Foundation. All rights reserved.
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
