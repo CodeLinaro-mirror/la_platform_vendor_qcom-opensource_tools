@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2015, 2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -93,9 +93,11 @@ class IrqParse(RamParser):
 
     def shift_to_maxindex(self, shift):
         radix_tree_map_shift = 6
-
-        if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
-            radix_tree_map_shift = 4
+        try:
+            if int(self.ramdump.get_config_val("CONFIG_BASE_SMALL")) == 1:
+                radix_tree_map_shift = 4
+        except:
+            pass
 
         radix_tree_map_size = 1 << radix_tree_map_shift
         return (radix_tree_map_size << shift) - 1
@@ -132,9 +134,12 @@ class IrqParse(RamParser):
         radix_tree_map_mask = 0x3f
 
         # if CONFIG_BASE_SMALL=1: radix_tree_map_shift = 4
-        if int(ram_dump.get_config_val("CONFIG_BASE_SMALL")) == 1:
-            radix_tree_map_shift = 4
-            radix_tree_map_mask = 0xf
+        try:
+            if int(ram_dump.get_config_val("CONFIG_BASE_SMALL")) == 1:
+                radix_tree_map_shift = 4
+                radix_tree_map_mask = 0xf
+        except:
+            pass
 
         rnode_addr = ram_dump.read_word(root_addr + rnode_offset)
         if self.is_internal_node(rnode_addr):
@@ -231,6 +236,8 @@ class IrqParse(RamParser):
         try:
             chip = self.ramdump.read_datatype(irq_desc.irq_data.chip, 'struct irq_chip', attr_list=['name'])
             chip_name = self.ramdump.read_cstring(chip.name, 48)
+            if chip_name is None:
+                chip_name = "None"
         except:
             chip_name = "None"
 

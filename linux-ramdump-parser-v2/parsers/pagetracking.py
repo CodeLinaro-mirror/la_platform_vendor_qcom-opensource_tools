@@ -21,28 +21,43 @@ from collections import defaultdict
 class StackDepot(object):
     def __init__(self, ramdump):
         self.ramdump = ramdump
-        if self.ramdump.field_offset('union handle_parts', 'pool_index') is not None:
+        self.get_handle_offsets()
+
+    def get_handle_offsets(self):
+        depot_stack_bits = self.ramdump.sizeof('depot_stack_handle_t') * 8
+        stack_alloc_null_protection_bits = 1
+        stack_alloc_order = 2
+        depot_valid_bit = 1
+        depot_extra_bits = 5
+        self.stack_alloc_align = 4
+        self.stack_alloc_offset_bits = stack_alloc_order + self.ramdump.page_shift - self.stack_alloc_align
+        self.depot_index_offset = 0
+
+        if self.ramdump.field_offset('union handle_parts', 'pool_index_plus_1') is not None:
             self.stack_slabs = self.ramdump.address_of('stack_pools')
+            self.stack_alloc_index_bits = depot_stack_bits - self.stack_alloc_offset_bits - depot_extra_bits
+            self.depot_index_offset = 1
+        elif self.ramdump.field_offset('union handle_parts', 'pool_index') is not None:
+            self.stack_slabs = self.ramdump.address_of('stack_pools')
+            self.stack_alloc_index_bits = depot_stack_bits - depot_valid_bit - self.stack_alloc_offset_bits - depot_extra_bits
         else:
             self.stack_slabs = self.ramdump.address_of('stack_slabs')
+            self.stack_alloc_index_bits = depot_stack_bits - stack_alloc_null_protection_bits - self.stack_alloc_offset_bits
+            if self.ramdump.field_offset('union handle_parts', 'extra') is not None:
+                self.stack_alloc_index_bits -= depot_extra_bits
+
         self.stack_slabs_size = self.ramdump.sizeof('void *')
         self.stack_trace_entry_size = self.ramdump.sizeof('unsigned long')
         self.stack_trace_entries_offset = self.ramdump.field_offset(
                 'struct stack_record', 'entries')
-        depot_stack_bits = self.ramdump.sizeof('depot_stack_handle_t') * 8
-        stack_alloc_null_protection_bits = 1
-        stack_alloc_order = 2
-        self.stack_alloc_align = 4
-        self.stack_alloc_offset_bits = stack_alloc_order + self.ramdump.page_shift - self.stack_alloc_align
-        self.stack_alloc_index_bits = depot_stack_bits - stack_alloc_null_protection_bits - self.stack_alloc_offset_bits
-        if self.ramdump.field_offset('union handle_parts', 'extra') is not None:
-            self.stack_alloc_index_bits -= 5
+        return
 
     def stack_depot_fetch(self, handle, symbol=True):
         if handle == 0 or handle == None:
             return -1, None, None
 
         slabindex = handle & ((1 << self.stack_alloc_index_bits) - 1)
+        slabindex -= self.depot_index_offset
         handle_offset = (handle >> self.stack_alloc_index_bits) & \
                             ((1 << self.stack_alloc_offset_bits) - 1)
         handle_offset = handle_offset << self.stack_alloc_align

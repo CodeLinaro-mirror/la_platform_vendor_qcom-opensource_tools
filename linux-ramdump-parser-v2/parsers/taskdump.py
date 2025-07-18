@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2013, 2015, 2017-2020,2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -82,6 +82,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
 
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
+    offset_tgid = ramdump.field_offset('struct task_struct', 'tgid')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
     if ramdump.kernel_version >= (5, 14, 0):
         offset_state = ramdump.field_offset('struct task_struct', '__state')
@@ -90,7 +91,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
     offset_prio = ramdump.field_offset('struct task_struct', 'prio')
     if ramdump.is_config_defined('CONFIG_SMP'):
         offset_oncpu = ramdump.field_offset('struct task_struct', 'on_cpu')
-    if ramdump.sizeof('struct sched_info') != 0:
+    if ramdump.sizeof('struct sched_info') != 0 and ramdump.sizeof('struct sched_info') != None:
         offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
         offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
         offset_last_rundelay = offset_schedinfo + ramdump.field_offset('struct sched_info', 'run_delay')
@@ -112,6 +113,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
     for next_thread_start in ramdump.for_each_thread(task_addr):
         next_thread_comm = next_thread_start + offset_comm
         next_thread_pid = next_thread_start + offset_pid
+        next_thread_tgid = next_thread_start + offset_tgid
         next_thread_prio = next_thread_start + offset_prio
         if offset_schedinfo is not None:
             next_thread_last_arrival = next_thread_start + offset_last_arrival
@@ -137,6 +139,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
         # Task prio is an integer and it can be -1 for DL tasks.
         thread_task_prio = ctypes.c_int(thread_task_prio).value
         thread_task_pid = ramdump.read_int(next_thread_pid)
+        next_thread_tgid = ramdump.read_int(next_thread_tgid)
         if thread_task_pid is None:
             error = 1
             return
@@ -163,33 +166,46 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
 
         task_last_enqueued_ts = 0
         task_last_sleep_ts = 0
+        next_thread_last_enqueued = None
+        next_thread_last_sleep_ts = None
         if offset_last_enqueued_ts is None and (ramdump.is_config_defined('CONFIG_SCHED_WALT') or 'sched_walt' in ramdump.ko_file_names):
             try:
                 offset_last_enqueued_ts = ramdump.field_offset('struct walt_task_struct', 'last_enqueued_ts')
-                if (ramdump.kernel_version >= (5, 10, 0)):
+                if (ramdump.kernel_version >= (6, 12, 0)):
+                    walt_task_struct_offset = ramdump.sizeof('struct task_struct')
+                    offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
+                elif (ramdump.kernel_version >= (5, 10, 0)):
                     walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
+                    offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
                 else:
                     walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
-                offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
+                    offset_last_enqueued_ts = offset_last_enqueued_ts + walt_task_struct_offset
             except:
                 pass
         if offset_last_enqueued_ts:
-            next_thread_last_enqueued = next_thread_start + offset_last_enqueued_ts
+            if next_thread_last_enqueued is None:
+                next_thread_last_enqueued = next_thread_start + offset_last_enqueued_ts
             task_last_enqueued_ts = ramdump.read_u64(next_thread_last_enqueued)
             if task_last_enqueued_ts is None:
                 task_last_enqueued_ts = 0
+
         if offset_last_sleep_ts is None and (ramdump.is_config_defined('CONFIG_SCHED_WALT') or 'sched_walt' in ramdump.ko_file_names):
             try:
                 offset_last_sleep_ts = ramdump.field_offset('struct walt_task_struct', 'last_sleep_ts ')
-                if (ramdump.kernel_version >= (5, 10, 0)):
+                if (ramdump.kernel_version >= (6, 12, 0)):
+                    walt_task_struct_offset = ramdump.sizeof('struct task_struct')
+                    offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
+                elif (ramdump.kernel_version >= (5, 10, 0)):
                     walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'android_vendor_data1')
+                    offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
                 else:
                     walt_task_struct_offset = ramdump.field_offset('struct task_struct', 'wts')
-                offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
+                    offset_last_sleep_ts = offset_last_sleep_ts + walt_task_struct_offset
             except:
                 pass
         if offset_last_sleep_ts:
-            next_thread_last_sleep_ts = next_thread_start + offset_last_sleep_ts
+            if next_thread_last_sleep_ts is None:
+                next_thread_last_sleep_ts = next_thread_start + offset_last_sleep_ts
             task_last_sleep_ts = ramdump.read_u64(next_thread_last_sleep_ts)
             if task_last_sleep_ts is None:
                 task_last_sleep_ts = 0
@@ -199,7 +215,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
                 panic_task_list.append([addr_stack, thread_task_name])
             task_cpu = ramdump.get_task_cpu(next_thread_start, threadinfo)
             #thread_line = thread_task_pid + task_cpu + task_state_str+ next_thread_start+thread_task_name
-            thread_line = "PID %6d cpu %1d  state %16s hex 0x%06x start 0x%x comm %32s\n" %(thread_task_pid, task_cpu,
+            thread_line = "PID %6d TGID %6d cpu %1d  state %16s hex 0x%06x start 0x%x comm %32s\n" %(thread_task_pid, next_thread_tgid, task_cpu,
                 task_state_str, task_state, next_thread_start, thread_task_name)
             if task_state != 1:
                 if not first:
@@ -226,13 +242,13 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
                 task_out.write(
                     '=====================================================\n')
                 first = 1
-            task_out.write('    Task name: {0} [affinity: 0x{11:x}] pid: {1} cpu: {2} prio: {7} start: {'
+            task_out.write('    Task name: {0:16} [affinity: 0x{11:x}] pid: {1:6} tgid: {12:6} cpu: {2} prio: {7} start: 0x{'
                            '6:x}\n    state: 0x{3:x}[{8}] exit_state: 0x{4:x}'
                            ' stack base: 0x{5:x}\n'
                            '    Last_enqueued_ts:{9:18.9f} Last_sleep_ts:{10:18.9f}\n'.format(
-                thread_task_name, thread_task_pid, task_cpu, task_state,
+                thread_task_name, thread_task_pid,  task_cpu, task_state,
                 task_exit_state, addr_stack, next_thread_start, thread_task_prio, task_state_str,
-                task_last_enqueued_ts/1000000000.0, task_last_sleep_ts/1000000000.0,thread_task_affine))
+                task_last_enqueued_ts/1000000000.0, task_last_sleep_ts/1000000000.0,thread_task_affine, next_thread_tgid))
             if task_on_cpu == 1:
                 taskhighlight_out.write("Task currently running on CPU. Please check dmesg_tz for callstack")
             else:
@@ -340,7 +356,7 @@ def do_dump_stacks(ramdump, check_for_panic=0):
         seen_tasks.append(next_task)
 
         init_next_task = next_task
-        init_thread_addr = init_next_task - offset_tasks 
+        init_thread_addr = init_next_task - offset_tasks
         if init_next_task == orig_init_next_task:
             break
     if check_for_panic == 0:
@@ -444,14 +460,12 @@ def do_dump_task_timestamps(ramdump):
         print_out_str('---wrote tasks to tasks_sched_stats{0}.txt'.format(i))
 
 def dump_thread_group_timestamps(ramdump, task_addr):
-    offset_thread_group = ramdump.field_offset(
-        'struct task_struct', 'thread_group')
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
     offset_task = ramdump.field_offset('struct thread_info', 'task')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
     offset_prio = ramdump.field_offset('struct task_struct', 'prio')
-    if ramdump.sizeof('struct sched_info') != 0:
+    if ramdump.sizeof('struct sched_info') != 0 and ramdump.sizeof('struct sched_info') != None:
         offset_schedinfo = ramdump.field_offset('struct task_struct', 'sched_info')
         offset_last_arrival = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_arrival')
         offset_last_queued = offset_schedinfo + ramdump.field_offset('struct sched_info', 'last_queued')
@@ -615,9 +629,10 @@ class CheckForPanic(RamParser):
     def parse(self):
         global panic_task_list
         addr = self.ramdump.address_of('in_panic')
+        if addr is None:
+            return;
 
         result = self.ramdump.read_word(addr)
-
         if result == 1:
             print_out_str('-------------------------------------------------')
             print_out_str('[!] KERNEL PANIC detected!')

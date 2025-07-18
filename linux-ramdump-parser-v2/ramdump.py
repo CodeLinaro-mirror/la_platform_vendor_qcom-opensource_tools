@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -39,6 +39,8 @@ from mm import mm_init
 from register import Register
 from collections import namedtuple
 import shlex
+import glob
+
 SP = 13
 LR = 14
 PC = 15
@@ -62,6 +64,13 @@ primary_types = ["int", "unsigned", "unsigned int", "signed", "signed int",
                  "s8", "s16", "s32", "s64", "uint8_t", "uint16_t", "uint64_t", "__u32", "size_t", "_Bool", "boolean"
                  ]
 storage_classes = ["static", "volatile", "extern", "register", "auto", "const"]
+
+SVM_ID   = 45
+OEMVM_ID = 49
+VCPU_CMM_FILES = [
+    "corevcpu*_vm_%d_regs.cmm" % SVM_ID,
+    "corevcpu*_vm_%d_regs.cmm" % OEMVM_ID
+]
 
 class InvalidDatatype(Exception):
     """
@@ -95,6 +104,9 @@ def is_ramdump_file(val, minidump):
         if ddr.match(val):
             return True
     return False
+
+def align_up(val, align_num):
+    return ((val + align_num -1) & (~(align_num -1)))
 
 def is_reduceddump_file(val, is_vm):
     hlos = re.compile(r'MR_HLOS.*[.]ELF', re.IGNORECASE)
@@ -668,20 +680,17 @@ class RamDump():
 
        return r;
 
-    def pac_ignore(self,data):
-        pac_check = self.createMask(self.va_bits, 63)
-        top_bit_ignore = 0xff00000000000000
+    def pac_ignore(self, data):
+        kernel_pac_mask = self.createMask(self.vabits_actual, 63)
         if data is None or not self.arm64:
             return data
-        if (data & pac_check) == pac_check or (data & pac_check) == 0:
+        if (data & kernel_pac_mask) == kernel_pac_mask or (data & kernel_pac_mask) == 0:
             return data
         # When address tagging is used
-        # The PAC field is Xn[54:bottom_PAC_bit].
+        # The PAC field is Kernel[63:bottom_PAC_bit],User[54:bottom_PAC_bit].
         # In the PAC field definitions, bottom_PAC_bit == 64-TCR_ELx.TnSZ,
         # TCR_ELx.TnSZ is set to 25. so 64-25=39
-        pac_mack = self.createMask(self.va_bits, 54)
-        result = pac_mack | data
-        result = result | top_bit_ignore
+        result = kernel_pac_mask | data
         return result
 
     def load_phys_range(self, path):
@@ -736,6 +745,25 @@ class RamDump():
                            modules_vsize
         return kimage_vaddr
 
+    def get_elf_entry_address(self, header_ptr):
+        e_entry = None
+        e_ident = self.read_u64(header_ptr, virtual=False)
+        e_magic = e_ident & 0xffffffff
+        if e_magic == 0x464c457f:
+            e_class = (e_ident >> (4 * 8)) & 0xff
+            if e_class == 1:
+                e_entry = self.read_u32(header_ptr + 0x18, virtual=False)
+            elif e_class == 2:
+                e_entry = self.read_u64(header_ptr + 0x18, virtual=False)
+            else:
+                print_out_str('!!! Unknonw elf class({}) in the header at {}'.format(e_class, hex(header_ptr)))
+        if e_entry is not None:
+            print_out_str("ELF entry is {}".format(hex(e_entry)))
+        elif self.is_config_defined('CONFIG_PCI'):
+            print_out_str("Force ELF entry to 0x200000")
+            e_entry = 0x200000
+        return e_entry
+
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
         ## used for read_physical in multi-thread mode
@@ -748,6 +776,7 @@ class RamDump():
         self.ebi_pa_name_map = {}
         self.md_dict = {}
         self.phys_offset = None
+        self.ipa_addr = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
         self.ebi_start = 0
@@ -782,6 +811,10 @@ class RamDump():
         self.available_cores = []
         self.skip_TLB_Cache_parse = options.skip_TLB_Cache_parse
         self.module_layout_dict = {}
+        self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
+        self.ko_file_dict = {}
+        self.ko_text_address_dict = {}
+        self.dump = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -919,6 +952,8 @@ class RamDump():
             if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
                 fd = open(file_path, 'rb')
+                fout = self.open_file('va_minidump.txt')
+                fout.write('{:16}{}\n'.format('symbol', 'addr'))
                 kva_elf = ELFFile(fd)
                 for s in kva_elf.iter_sections():
                     start = int(s.header['sh_addr'])
@@ -933,6 +968,8 @@ class RamDump():
                         self.md_dict[s.name] = [[start,size]]
                     else:
                         self.md_dict[s.name].append([start,size])
+                    fout.write('{:16}0x{:x}\n'.format(s.name, start))
+                fout.close()
 
         if options.minidump:
             if self.ebi_start == 0:
@@ -956,23 +993,30 @@ class RamDump():
         if self.svm and not self.minidump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
-            hyp_dump.determine_kaslr()
-            self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
-            hyp_dump.get_trace_phy()
-            if hyp_dump.ttbr1 is None:
-                print_out_str('!!! Could not find {}'.format(self.svm))
-                print_out_str('!!! Exiting now')
-                sys.exit(1)
-            self.ttbr = hyp_dump.ttbr1
-            self.vttbr = hyp_dump.vttbr
-            self.TTBR0_EL1 = hyp_dump.TTBR0_EL1
-            self.SCTLR_EL1 = hyp_dump.SCTLR_EL1
-            self.TCR_EL1 = hyp_dump.TCR_EL1
-            self.VTCR_EL2 = hyp_dump.VTCR_EL2
-            self.HCR_EL2 = hyp_dump.HCR_EL2
-            self.ttbr_data = hyp_dump.ttbr1_data_info
-            self.vttbr_data = hyp_dump.vttbr_el2_data
-            self.s2_walk = True
+            try:
+                hyp_dump.determine_kaslr()
+                self.gdbmi_hyp.kaslr_offset = hyp_dump.hyp_kaslr_addr_offset
+                hyp_dump.get_trace_phy()
+                self.ttbr = hyp_dump.ttbr1
+                self.vttbr = hyp_dump.vttbr
+                self.TTBR0_EL1 = hyp_dump.TTBR0_EL1
+                self.SCTLR_EL1 = hyp_dump.SCTLR_EL1
+                self.TCR_EL1 = hyp_dump.TCR_EL1
+                self.VTCR_EL2 = hyp_dump.VTCR_EL2
+                self.HCR_EL2 = hyp_dump.HCR_EL2
+                self.ttbr_data = hyp_dump.ttbr1_data_info
+                self.vttbr_data = hyp_dump.vttbr_el2_data
+                self.s2_walk = True
+                print_out_str("read vttbr from elf")
+            except:
+                pass
+            if self.vttbr is None:
+                ## read vttbr from cmm
+                self.read_from_cmm()
+                if self.vttbr is None:
+                    print_out_str('!!! Could not find {}'.format(self.svm))
+                    print_out_str('!!! Exiting now')
+                    sys.exit(1)
 
         self.config = []
         self.config_dict = {}
@@ -996,18 +1040,40 @@ class RamDump():
             else: # for arm32
                 self.va_bits = 32
         try:
-            self.page_shift = int(self.get_config_val("CONFIG_ARM64_PAGE_SHIFT"))
+            page_shift_config = self.get_config_val("CONFIG_PAGE_SHIFT")
+            if page_shift_config is None:
+                page_shift_config = self.get_config_val("CONFIG_ARM64_PAGE_SHIFT")
+            if page_shift_config is not None:
+                self.page_shift = int(page_shift_config)
+            else:
+                self.page_shift = 12
         except:
             self.page_shift = 12
         try:
             self.pgtable_levels = int(self.get_config_val("CONFIG_PGTABLE_LEVELS"))
         except:
             self.pgtable_levels = 3
+        self.vabits_actual = self.get_vabits_actual()
+        print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
+
+        self.elf_entry_offset = None
+        if self.s2_walk:
+            if self.ipa_addr is not None:
+                early_s2mmu = Armv8MMU(self)
+                self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                if self.phys_offset is not None:
+                    print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
+                else:
+                    print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
+                            hex(self.phys_offset)))
+                    print_out_str('!!! Exiting now')
+                    sys.exit(1)
+            if self.phys_offset is not None:
+                self.elf_entry_offset = self.get_elf_entry_address(self.phys_offset)
+
         self.pfn_range = None
         self.vmemmap = None
-
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
-        self.thread_maxcount = len(self.ebi_files)
         # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
         # Virtual address of the variable 'kimage_voffset'
@@ -1138,8 +1204,63 @@ class RamDump():
         mm_init(self)
         self.set_available_cores()
         self.arm_smmu_v12 = self.is_arm_smmu_v12()
+    def pgtable_l5_enabled(self):
+        return self.pgtable_levels == 5 and self.vabits_actual == self.va_bits
 
+    def read_tcr(self):
+        '''
+        T1SZ, bits [21:16] The size offset of the memory region addressed by TTBR1_EL1.
+        The region size is 2(64-T1SZ) bytes.
+        '''
+        tcr_value = 16 << 16
+        try:
+            tcr_value = self.TCR_EL1
+        except:
+            pass
+        return tcr_value
 
+    def get_vabits_actual(self):
+        if self.va_bits > 48:
+            vabits_actual = (64 - ((self.read_tcr() >> 16) & 63))
+        else:
+            vabits_actual = self.va_bits
+        return vabits_actual
+
+    def for_cmm_file(self):
+        for regex_file in VCPU_CMM_FILES:
+            ## find in dump folder
+            cmm_files = glob.glob(os.path.join(self.autodump, regex_file))
+            for cf in cmm_files:
+                yield cf
+
+            cmm_files = glob.glob(os.path.join(self.outdir, "host", regex_file))
+            for cf in cmm_files:
+                yield cf
+
+    def read_from_cmm(self):
+        for cmm_file in self.for_cmm_file():
+            with open(cmm_file) as f:
+                for line in f.readlines():
+                    if "Data.Set SPR:0x30200" in line:
+                        self.TTBR0_EL1 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x30100" in line:
+                        self.SCTLR_EL1 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x30202" in line:
+                        self.TCR_EL1 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x34212" in line:
+                        self.VTCR_EL2 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x34110" in line:
+                        self.HCR_EL2 = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x30201" in line:
+                        self.ttbr_data = int(eval(line.split()[-1]))
+                    if "Data.Set SPR:0x34210" in line:
+                        self.vttbr_data = int(eval(line.split()[-1]))
+
+                self.ttbr  = self.ttbr_data  & 0xffff_ffff_fff0
+                self.vttbr = self.vttbr_data & 0xffff_ffff_fff0
+                self.s2_walk = True
+            print_out_str("read vttbr from %s" % os.path.basename(cmm_file))
+            break
     def get_section_address(self,section):
         """
         Function to return address and size corresponding to the section name in elf files.
@@ -1417,7 +1538,6 @@ class RamDump():
             if info is not None:
                 if len(info.ebi_files) > 0:
                     self.ebi_files = info.ebi_files
-                    self.thread_maxcount = len(self.ebi_files)
                     self.phys_offset = self.ebi_files[0][1]
                     if self.get_hw_id():
                         for (f, start, end, filename) in self.ebi_files:
@@ -1510,9 +1630,6 @@ class RamDump():
             ebi_path = os.path.abspath(ram[3])
             startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
                 ebi_path, ram[1]))
-        if self.minidump:
-            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
-            startup_script.write(dload_ram_elf)
         # Check to include Reduced dump elf's
         if self.elf_addr:
             for file in self.elf_addr:
@@ -1592,8 +1709,14 @@ class RamDump():
         kaslr_offset = self.get_kaslr_offset()
         if kaslr_offset != 0:
             where += ' 0x{0:x}'.format(kaslr_offset)
-        dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+        if not self.minidump:
+            dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+        else:
+            dloadelf = 'data.load.elf {}\n'.format(where)
         startup_script.write(dloadelf)
+        if self.minidump:
+            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
+            startup_script.write(dload_ram_elf)
 
         if self.arm64 and not self.minidump:
             startup_script.write('TRANSlation.COMMON NS:0xF000000000000000--0xffffffffffffffff\n')
@@ -1610,6 +1733,12 @@ class RamDump():
             startup_script.write('frame.config.eabi on\n')
             if self.arm64:
                 startup_script.write('Register.Set CPSR 0x1C5\n')
+            # md_KVA_DUMP.BIN is ELF format. Load it in T32
+            for i in self.ebi_files:
+                fd, start, end, path = i
+                if "md_KVA_DUMP" in path:
+                    startup_script.write('data.load.elf {} /LOGLOAD /nosymbol\n'.format(path))
+                    break
 
         if t32_host_system != 'Linux':
             if self.arm64:
@@ -1803,15 +1932,15 @@ class RamDump():
 
     @parser_util.time_cost
     def determine_kaslr_offset(self):
-        if self.svm and self.svm_kaslr_offset:
-            self.kaslr_offset = self.svm_kaslr_offset
+        if self.svm:
             self.kaslr_addr = None
+            if self.svm_kaslr_offset:
+                self.kaslr_offset = self.svm_kaslr_offset
+            else:
+                self.kaslr_offset = 0
             self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
-            return
-        elif self.svm and not self.svm_kaslr_offset:
-            self.kaslr_offset = 0
-            self.kaslr_addr = None
-            self.kimage_voffset = self.__kimage_vaddr_va - self.phys_offset
+            if self.elf_entry_offset:
+                self.kimage_voffset -= self.elf_entry_offset
             return
         else:
             __kaslr_offset = None
@@ -1836,7 +1965,7 @@ class RamDump():
                 self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset, __kaslr_offset)
             except:
                 print_out_str("Traverse DDR to find out correct kaslr_offset and phys_offset, it may take a little time to do!!")
-                hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset(__kaslr_offset)
+                hasFound, kaslr_offset, kimage_voffset, phys_offset = self.determine_phys_offset()
                 if hasFound:
                     self.kaslr_offset = kaslr_offset
                     self.kimage_voffset = kimage_voffset
@@ -1845,8 +1974,14 @@ class RamDump():
                     self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
                     self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
+                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                        if self.uefi_magic_offset:
+                            uefi_magic = self.read_u32(self.uefi_magic_offset, False)
+                            if uefi_magic == 0x75656669:
+                                print_out_str("!!!look like early boot crash")
+                                sys.exit(1)
 
-    def determine_phys_offset(self, __kaslr_offset):
+    def determine_phys_offset(self):
         fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
         bfiles = []
         if self.reduceddump:
@@ -1872,11 +2007,11 @@ class RamDump():
         kimage_voffset = 0
         phys_offset = 0
         from concurrent import futures
-        max_workers = max(len(bfiles), 8)
+        max_workers = min(len(bfiles), self.thread_maxcount)
         self.executor = futures.ThreadPoolExecutor(max_workers)
         self.enable_multithread(max_workers, self.executor._thread_name_prefix)
         lock = threading.Lock()
-        threads = [self.executor.submit(self.traverse_file_thread, __kaslr_offset, _bfile, lock) for _bfile in bfiles]
+        threads = [self.executor.submit(self.traverse_file_thread, _bfile, lock) for _bfile in bfiles]
 
         for future in futures.as_completed(threads):
             isFound, kaslr_offset, kimage_voffset, phys_offset  = future.result()
@@ -1895,7 +2030,7 @@ class RamDump():
 
       read data from physical address is allowed.
     '''
-    def traverse_file_thread(self, __kaslr_offset, _bfile, thread_lock):
+    def traverse_file_thread(self, _bfile, thread_lock):
         '''
         traverse DDR file with min_image_align
         to find out correct kaslr_offset and kimage_voffset
@@ -1913,7 +2048,7 @@ class RamDump():
                     pass
 
                 try:
-                    kaslr_offset, kimage_voffset = self.validate_phys_offset(kimage_load_addr, __kaslr_offset)
+                    kaslr_offset, kimage_voffset = self.validate_phys_offset(kimage_load_addr)
                     with thread_lock:
                         self.__kaslr_found = True
                     return True, kaslr_offset, kimage_voffset, kimage_load_addr
@@ -1959,23 +2094,44 @@ class RamDump():
         Third step:
               check if linux_banner read from DDR == linux_banner from vmlinux
         '''
-        ## First step, calculate kaslr_offset and kimage_voffset
-        if self.arm64:
-            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
-            if kaslr_offset != None:
-                kimage_voffset = self.__kimage_vaddr_var_va  + kaslr_offset - kimage_vaddr_var_phy
-            else:
-                kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
-                if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
-                    kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
-                    kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
-                else:
-                    raise Exception("!!! Determine kaslr_voffset failed")
-        else:
+        ###********* First step, calculate kaslr_offset and kimage_voffset *********
+        if not self.arm64:
             kimage_voffset = self.page_offset - phys_offset
             if not self.__kimage_voffset_var_va:
-                #print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
+                print_out_str("!!!! Skip validate phys_offset for ARM32 with older kernel version")
                 return kaslr_offset, kimage_voffset
+
+        kimage_voffset = None
+        if kaslr_offset != None:
+            ## kaslr_offset=0 means kaslr feature was disabled
+            ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
+            ## kaslr_offset=None need to be calculated
+            if self.arm64:
+                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
+            else:
+                kimage_voffset = self.page_offset - phys_offset
+        ## calculate kaslr_offset via kimage_voffset
+        if self.__kimage_voffset_var_va != None and kaslr_offset == None:
+            ## calculte depends on kimage_voffset variable which should exist
+            kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+            kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
+            if kimage_voffset_tmp is not None:
+                kimage_voffset = kimage_voffset_tmp
+                kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
+                if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
+                    kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
+        ## calculate kaslr_offset via kimage_vaddr
+        if self.__kimage_vaddr_var_va != None and kaslr_offset == None:
+            ## calculte depends on kimage_vaddr variable which should exist
+            kimage_vaddr_var_phy = phys_offset + self.__kimage_vaddr_var_va - self.__kimage_vaddr_va
+            kimage_vaddr_va_kaslr = self.read_word(kimage_vaddr_var_phy, False)
+            if kimage_vaddr_va_kaslr and kimage_vaddr_va_kaslr >= self.__kimage_vaddr_va:
+                kaslr_offset = kimage_vaddr_va_kaslr - self.__kimage_vaddr_va
+                kimage_voffset = kimage_vaddr_va_kaslr - phys_offset
+
+        if kimage_voffset is None or kaslr_offset is None:
+            raise Exception("!!! Determine kimage_voffset failed")
+        ###********* First step end *********
 
         '''print_out_str(f" kaslr_offset {kaslr_offset:x}, kimage_voffset {kimage_voffset:x}
             phys_offset {phys_offset:x} self.__kimage_vaddr_va {self.__kimage_vaddr_va:x}")'''
@@ -2139,6 +2295,8 @@ class RamDump():
             'TZ address: {0:x}'.format(board.wdog_addr))
         if board.phys_offset is not None:
             self.phys_offset = board.phys_offset
+        if hasattr(board, 'ipa_addr'):
+            self.ipa_addr = board.ipa_addr
         self.tz_addr = board.wdog_addr
         self.ebi_start = board.ram_start
         self.tz_start = board.imem_start
@@ -2159,6 +2317,10 @@ class RamDump():
             self.kaslr_addr = board.kaslr_addr
         else:
             self.kaslr_addr = None
+        if hasattr(board, 'uefi_magic_offset'):
+            self.uefi_magic_offset = board.uefi_magic_offset
+        else:
+            self.uefi_magic_offset = None
         if hasattr(board, 'svm_kaslr_offset'):
             self.svm_kaslr_offset = board.svm_kaslr_offset
         self.board = board
@@ -2298,6 +2460,43 @@ class RamDump():
 
             next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
+    def parse_module_text(self, ko_path, plt_num, ftrace_plt_num):  # parse ko text address from MOD_TEXT
+        fd = open(ko_path, 'rb')
+        mod = import_module('elftools.elf.elffile')
+        constants = import_module('elftools.elf.constants')
+        sections = import_module('elftools.elf.sections')
+        ELFFile = mod.ELFFile
+        elffile = ELFFile(fd)
+        text_offset = 0
+        for section in elffile.iter_sections():
+            header = section.header
+            if (header['sh_flags'] & (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR)) == \
+                (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR):
+                is_init = re.match(r".init", section.name)
+                if is_init is not None:
+                    continue
+
+                if section.name == ".text":
+                    break
+
+                plt_entry_size = self.sizeof('struct plt_entry')
+                if section.name == ".plt":
+                    text_offset = align_up(text_offset, 64)   #plt align is 64
+                    sh_size = plt_entry_size * plt_num
+                elif section.name == ".text.ftrace_trampoline":
+                    text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
+                    sh_size = plt_entry_size * ftrace_plt_num
+                else:
+                    text_offset = align_up(text_offset, header['sh_addralign'])
+                    sh_size = header['sh_size']
+
+                text_offset += sh_size
+
+        if self.kernel_version >= (6, 1) and self.kernel_version < (6, 6): # kp 3.0
+            text_offset = align_up(text_offset, 4096)
+
+        return text_offset
+
     def retrieve_minidump_modules(self):
         kmodules_seg = next((s for s in self.elffile.iter_sections() if s.name == 'KMODULES'), None)
         if kmodules_seg is None:
@@ -2309,7 +2508,27 @@ class RamDump():
             if m is not None:
                 mod_tbl_ent = module_table.module_table_entry()
                 mod_tbl_ent.name = m.group(1)
-                mod_tbl_ent.module_offset = int(m.group(2), base=16)
+
+                nplt = re.search(r"nplt: (.+)", line)
+                if nplt is not None:
+                    if self.kernel_version >= (6, 1) and self.kernel_version < (6, 6): # kp 3.0
+                        ftrace_plt_num = 2    # arm64 NR_FTRACE_PLTS is 2
+                    else:
+                        ftrace_plt_num = 1    # arm64 NR_FTRACE_PLTS is 1
+
+                    plt_num = int(nplt.group(1), base=10) - ftrace_plt_num
+
+                    ko_path = self.ko_file_dict.get(mod_tbl_ent.name, None)
+                    if ko_path is None:
+                        print_out_str('!! retrieve Object not found for {}'.format(mod_tbl_ent.name))
+                        continue
+
+                    mod_text_offset = self.parse_module_text(ko_path, plt_num, ftrace_plt_num)
+                    mod_tbl_ent.module_offset = mod_text_offset + int(m.group(2), base=16)
+                else:
+                    mod_tbl_ent.module_offset = int(m.group(2), base=16)
+
+                self.ko_text_address_dict[mod_tbl_ent.name] = mod_tbl_ent.module_offset
                 n = re.search(r"\.bss: (?:0x)?([0-9a-fA-F]+).*", line)
                 if n is not None:
                     mod_tbl_ent.section_offsets['.bss'] = int(n.group(1), base=16)
@@ -2317,18 +2536,19 @@ class RamDump():
                 if n is not None:
                     mod_tbl_ent.section_offsets['.data'] = int(n.group(1), base=16)
                 self.module_table.add_entry(mod_tbl_ent)
+        self.dump_mod_text_address(self.ko_text_address_dict)
 
-    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_list):
-        name_index = [s for s in ko_file_list.keys() if mod_tbl_ent.name in s]
+    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_dict):
+        name_index = [s for s in ko_file_dict.keys() if mod_tbl_ent.name in s]
         if len(name_index) == 0:
             print_out_str('!! Object not found for {}'.format(mod_tbl_ent.name))
             return
 
-        if mod_tbl_ent.name not in ko_file_list and name_index[0] in ko_file_list:
-            temp_data = ko_file_list[name_index[0]]
-            del ko_file_list[name_index[0]]
-            ko_file_list[mod_tbl_ent.name] = temp_data
-        if not mod_tbl_ent.set_sym_path(ko_file_list[mod_tbl_ent.name]):
+        if mod_tbl_ent.name not in ko_file_dict and name_index[0] in ko_file_dict:
+            temp_data = ko_file_dict[name_index[0]]
+            del ko_file_dict[name_index[0]]
+            ko_file_dict[mod_tbl_ent.name] = temp_data
+        if not mod_tbl_ent.set_sym_path(ko_file_dict[mod_tbl_ent.name]):
             return
 
         if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
@@ -2369,9 +2589,14 @@ class RamDump():
                 ###
                 if (sym_name is None or mod_tbl_ent.name is None):
                     continue
-                if sym_addr:
-                    # when sym_addr is 0, it means the symbol is undefined
-                    # will not add undefined symbols here to avoid address 0x0
+                """
+                see include/uapi/linux/elf.h
+                #define STT_FUNC    2
+                ...
+                #define ELF_ST_TYPE(x)		((x) & 0xf)
+                """
+                if st_info & 0xf == 2:
+                    # only add FUNC type symbols to avoid built-in symbols
                     # being treated as belonging to a particular kernel module
                     mod_tbl_ent.kallsyms_table.append(
                         (sym_addr, sym_name + '[' + mod_tbl_ent.name + ']', sym_type, i,
@@ -2392,6 +2617,12 @@ class RamDump():
             mod_tbl_ent.sym_lookup_table.sort()
             if self.dump_module_symbol_table:
                 self.dump_mod_sym_table(mod_tbl_ent.name, mod_tbl_ent.sym_lookup_table)
+
+    def dump_mod_text_address(self, mod_address_dict):
+        text_dump_file = self.open_file('mod_text_address'+'.txt')
+        for mod_name in mod_address_dict.keys():
+            text_dump_file.write('{0} 0x{1:x} \n'.format(mod_name, mod_address_dict[mod_name]))
+        text_dump_file.close()
 
     def walk_depth(self, path, on_file, depth=10):
         if depth <= 0:
@@ -2421,35 +2652,11 @@ class RamDump():
             return False
 
     def parse_module_symbols(self):
-        # Recursively search all files under mod_path ending in '.ko.unstripped' and store in a list
-        ko_file_list = {}
-        for path in self.module_table.sym_path_list:
-            def on_file(file):
-                if file.endswith('.ko.unstripped'):
-                    name = file[:-len('.ko.unstripped')]
-                elif file.endswith('.ko'):
-                    name = file[:-len('.ko')]
-                else:
-                    return
-                name = os.path.basename(name)
-                name = name.replace("-","_")
-                # Prefer .ko.unstripped
-                if ko_file_list.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
-                    return
-
-                # Prefer ko with debug info
-                if name in ko_file_list and self.has_debug_info(ko_file_list.get(name)):
-                    return
-
-                ko_file_list[name] = file
-                self.ko_file_names.append(name)
-            self.walk_depth(path, on_file)
-
         for mod_tbl_ent in self.module_table.module_table:
             if mod_tbl_ent.name is None:
                 print_out_str('!! Object name not extracted properly..checking next!!')
                 continue
-            self.parse_symbols_of_one_module(mod_tbl_ent, ko_file_list)
+            self.parse_symbols_of_one_module(mod_tbl_ent, self.ko_file_dict)
 
     def add_symbols_to_global_lookup_table(self):
         if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
@@ -2464,7 +2671,31 @@ class RamDump():
                     self.lookup_table.append(sym)
         self.lookup_table.sort()
 
+    def traverse_module(self):
+        for path in self.module_table.sym_path_list:
+            def on_file(file):
+                if file.endswith('.ko.unstripped'):
+                    name = file[:-len('.ko.unstripped')]
+                elif file.endswith('.ko'):
+                    name = file[:-len('.ko')]
+                else:
+                    return
+                name = os.path.basename(name)
+                name = name.replace("-","_")
+                # Prefer .ko.unstripped
+                if self.ko_file_dict.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
+                    return
+
+                # Prefer ko with debug info
+                if name in self.ko_file_dict and self.has_debug_info(self.ko_file_dict.get(name)):
+                    return
+
+                self.ko_file_dict[name] = file
+                self.ko_file_names.append(name)
+            self.walk_depth(path, on_file)
+
     def setup_module_symbols(self):
+        self.traverse_module()
         if self.minidump:
             self.retrieve_minidump_modules()
         else:
@@ -2501,6 +2732,12 @@ class RamDump():
         sym_dump_file.close()
 
     def address_of(self, symbol):
+        cached_data = self.cached_data['addressof']
+        kaslr_tmp = self.get_kaslr_offset()
+        if kaslr_tmp in cached_data:
+            if symbol in cached_data[kaslr_tmp]:
+                return cached_data[kaslr_tmp][symbol]
+
         """Returns the address of a symbol.
 
         :param symbol: name of the symbol.
@@ -2513,12 +2750,18 @@ class RamDump():
         >>> hex(dump.address_of('linux_banner'))
         '0xffffffc000c7a0a8L'
         """
+        if kaslr_tmp not in cached_data:
+            cached_data[kaslr_tmp] = {}
         try:
-            return self.gdbmi.address_of(symbol)
+            r = self.gdbmi.address_of(symbol)
+            cached_data[kaslr_tmp][symbol] = r
+            return r
         except gdbmi.GdbMIException:
             if self.hyp:
                 try:
-                    return self.gdbmi_hyp.address_of(symbol)
+                    r = self.gdbmi_hyp.address_of(symbol)
+                    cached_data[kaslr_tmp][symbol] = r
+                    return r
                 except gdbmi.GdbMIException:
                     pass
 
@@ -2541,12 +2784,20 @@ class RamDump():
                     pass
 
     def sizeof(self, the_type):
+        cached_data = self.cached_data['sizeof']
+        if the_type in cached_data:
+            return cached_data[the_type]
+
         try:
-            return self.gdbmi.sizeof(the_type)
+            r = self.gdbmi.sizeof(the_type)
+            cached_data[the_type] = r
+            return r
         except gdbmi.GdbMIException:
             if self.hyp:
                 try:
-                    return self.gdbmi_hyp.sizeof(the_type)
+                    r = self.gdbmi_hyp.sizeof(the_type)
+                    cached_data[the_type] = r
+                    return r
                 except gdbmi.GdbMIException:
                     pass
 
@@ -2578,21 +2829,27 @@ class RamDump():
                     pass
 
     def get_symbol_info1(self,addr):
+        cached_data = self.cached_data['addrtosym']
+        if addr in cached_data:
+            return cached_data[addr]
+
         kaslr = self.get_kaslr_offset()
         if kaslr:
             addr1 = addr - kaslr
         else:
             addr1 = addr
-        #print "hex of address in get_symbol_info1 {0}".format(hex(addr1))
         addr1, desc = self.step_through_jump_table(addr1)
         symbol_obj =  self.gdbmi.get_symbol_info(addr1)
         module = symbol_obj.section.split('\\\\')[-1]
         if self.minidump:
             if module == 'vmlinux':
-                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset)
+                symbol_desc = symbol_obj.symbol + desc + " " + str(symbol_obj.offset)
             else:
-                return symbol_obj.symbol + desc + " " + str(symbol_obj.offset) + " [" + module + "]"
-        return symbol_obj.symbol + desc
+                symbol_desc = symbol_obj.symbol + desc + " " + str(symbol_obj.offset) + " [" + module + "]"
+        else:
+            symbol_desc = symbol_obj.symbol + desc
+        cached_data[addr] = symbol_desc
+        return symbol_desc
 
     def type_of(self, symbol):
         """
@@ -2608,6 +2865,11 @@ class RamDump():
             pass
 
     def field_offset(self, the_type, field):
+        cached_data = self.cached_data['fieldoffset']
+        if the_type in cached_data:
+            if field in cached_data[the_type]:
+                return cached_data[the_type][field]
+
         """Gets the offset of a field from the base of its containing struct.
 
         This can be useful when reading struct fields, although you should
@@ -2619,12 +2881,18 @@ class RamDump():
         >>> dump.field_offset('struct device', 'bus')
         168
         """
+        if the_type not in cached_data:
+            cached_data[the_type] = {}
         try:
-            return self.gdbmi.field_offset(the_type, field)
+            r = self.gdbmi.field_offset(the_type, field)
+            cached_data[the_type][field] = r
+            return r
         except gdbmi.GdbMIException:
             if self.hyp:
                 try:
-                    return self.gdbmi_hyp.field_offset(the_type, field)
+                    r = self.gdbmi_hyp.field_offset(the_type, field)
+                    cached_data[the_type][field] = r
+                    return r
                 except gdbmi.GdbMIException:
                     pass
 
@@ -3016,6 +3284,8 @@ class RamDump():
             return None
 
         addr += self.field_offset(struct_name, field)
+        if size == 1:
+            return self.read_byte(addr, virtual)
         if size == 2:
             return self.read_u16(addr, virtual)
         if size == 4:
@@ -3671,14 +3941,14 @@ class RamDump():
         var_type, vsize, temp_name = self.__get_type_info(the_type)
         if vsize is None:
             vsize = size
-        data = self.__get_bin_data(addr, vsize)
+        data = self.get_bin_data(addr, vsize)
         if attr_list != None:
             attr_dict = self.__attr_list_to_dict(attr_list)
             return self.__object_value(var_type, data, 0, temp_name, addr, attr_dict)
         else:
             return self.__object_value(var_type, data, 0, temp_name, addr)
 
-    def __get_bin_data(self, addr, size):
+    def get_bin_data(self, addr, size):
         """
         Function to return binary data of 'size' bytes read
         from the given address.
