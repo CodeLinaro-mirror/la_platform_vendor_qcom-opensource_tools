@@ -216,7 +216,10 @@ class IrqParse(RamParser):
         hwirq = irq_desc.irq_data.hwirq
 
         if self.ramdump.kernel_version >= (4,4,0):
-            affinity = irq_desc.irq_common_data.affinity.bits[0] & 0xFFFFFFFF
+            if self.ramdump.is_config_defined('CONFIG_SMP'):
+                affinity = irq_desc.irq_common_data.affinity.bits[0] & 0xFFFFFFFF
+            else:
+                affinity = 0  # Default value if CONFIG_SMP is not enabled
         else:
             affinity = irq_desc.irq_data.affinity.bits[0] & 0xFFFFFFFF
 
