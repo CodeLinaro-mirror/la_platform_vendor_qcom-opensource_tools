@@ -185,6 +185,11 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
         with open(os.path.join(self.autodumpdir, filename)) as f:
             try:
                 for line in f.readlines():
+                    if 'Exception CreateMemDebugFile during memory dump' in line:
+                        print_out_str('!!! QPST encountered errors while collecting the dump.')
+                        print_out_str('!!! Exiting now')
+                        sys.exit(1)
+
                     words = line.split()
                     if not words or not is_ramdump_file(words[-1],
                                                         self.minidump):
@@ -201,6 +206,8 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
                             % (fname, filesize, size))
                         continue
                     yield fname, start
+            except SystemExit:
+                sys.exit(1)
             except:
                 print_out_str('!!! Cannot parse dump_info.txt due to improper format!')
                 return
@@ -745,6 +752,25 @@ class RamDump():
                            modules_vsize
         return kimage_vaddr
 
+    def get_elf_entry_address(self, header_ptr):
+        e_entry = None
+        e_ident = self.read_u64(header_ptr, virtual=False)
+        e_magic = e_ident & 0xffffffff
+        if e_magic == 0x464c457f:
+            e_class = (e_ident >> (4 * 8)) & 0xff
+            if e_class == 1:
+                e_entry = self.read_u32(header_ptr + 0x18, virtual=False)
+            elif e_class == 2:
+                e_entry = self.read_u64(header_ptr + 0x18, virtual=False)
+            else:
+                print_out_str('!!! Unknonw elf class({}) in the header at {}'.format(e_class, hex(header_ptr)))
+        if e_entry is not None:
+            print_out_str("ELF entry is {}".format(hex(e_entry)))
+        elif self.is_config_defined('CONFIG_PCI'):
+            print_out_str("Force ELF entry to 0x200000")
+            e_entry = 0x200000
+        return e_entry
+
     def __init__(self, options, nm_path, gdb_path, objdump_path,gdb_ndk_path):
         self.ebi_files = []
         ## used for read_physical in multi-thread mode
@@ -757,6 +783,7 @@ class RamDump():
         self.ebi_pa_name_map = {}
         self.md_dict = {}
         self.phys_offset = None
+        self.ipa_addr = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
         self.ebi_start = 0
@@ -794,6 +821,7 @@ class RamDump():
         self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
+        self.dump = None
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -931,6 +959,8 @@ class RamDump():
             if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
                 fd = open(file_path, 'rb')
+                fout = self.open_file('va_minidump.txt')
+                fout.write('{:16}{}\n'.format('symbol', 'addr'))
                 kva_elf = ELFFile(fd)
                 for s in kva_elf.iter_sections():
                     start = int(s.header['sh_addr'])
@@ -945,6 +975,8 @@ class RamDump():
                         self.md_dict[s.name] = [[start,size]]
                     else:
                         self.md_dict[s.name].append([start,size])
+                    fout.write('{:16}0x{:x}\n'.format(s.name, start))
+                fout.close()
 
         if options.minidump:
             if self.ebi_start == 0:
@@ -1030,6 +1062,21 @@ class RamDump():
             self.pgtable_levels = 3
         self.vabits_actual = self.get_vabits_actual()
         print_out_str(f"va_bits {self.va_bits}, vabits_actual {self.vabits_actual}, pgtable_levels {self.pgtable_levels}")
+
+        self.elf_entry_offset = None
+        if self.s2_walk:
+            if self.ipa_addr is not None:
+                early_s2mmu = Armv8MMU(self)
+                self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                if self.phys_offset is not None:
+                    print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
+                else:
+                    print_out_str('!!! Could not get the phys_offset from IPA {}'.format(\
+                            hex(self.phys_offset)))
+                    print_out_str('!!! Exiting now')
+                    sys.exit(1)
+            if self.phys_offset is not None:
+                self.elf_entry_offset = self.get_elf_entry_address(self.phys_offset)
 
         self.pfn_range = None
         self.vmemmap = None
@@ -1590,9 +1637,6 @@ class RamDump():
             ebi_path = os.path.abspath(ram[3])
             startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
                 ebi_path, ram[1]))
-        if self.minidump:
-            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
-            startup_script.write(dload_ram_elf)
         # Check to include Reduced dump elf's
         if self.elf_addr:
             for file in self.elf_addr:
@@ -1677,6 +1721,9 @@ class RamDump():
         else:
             dloadelf = 'data.load.elf {}\n'.format(where)
         startup_script.write(dloadelf)
+        if self.minidump:
+            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
+            startup_script.write(dload_ram_elf)
 
         if self.arm64 and not self.minidump:
             startup_script.write('TRANSlation.COMMON NS:0xF000000000000000--0xffffffffffffffff\n')
@@ -1693,6 +1740,12 @@ class RamDump():
             startup_script.write('frame.config.eabi on\n')
             if self.arm64:
                 startup_script.write('Register.Set CPSR 0x1C5\n')
+            # md_KVA_DUMP.BIN is ELF format. Load it in T32
+            for i in self.ebi_files:
+                fd, start, end, path = i
+                if "md_KVA_DUMP" in path:
+                    startup_script.write('data.load.elf {} /LOGLOAD /nosymbol\n'.format(path))
+                    break
 
         if t32_host_system != 'Linux':
             if self.arm64:
@@ -1886,15 +1939,15 @@ class RamDump():
 
     @parser_util.time_cost
     def determine_kaslr_offset(self):
-        if self.svm and self.svm_kaslr_offset:
-            self.kaslr_offset = self.svm_kaslr_offset
+        if self.svm:
             self.kaslr_addr = None
+            if self.svm_kaslr_offset:
+                self.kaslr_offset = self.svm_kaslr_offset
+            else:
+                self.kaslr_offset = 0
             self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
-            return
-        elif self.svm and not self.svm_kaslr_offset:
-            self.kaslr_offset = 0
-            self.kaslr_addr = None
-            self.kimage_voffset = self.__kimage_vaddr_va - self.phys_offset
+            if self.elf_entry_offset:
+                self.kimage_voffset -= self.elf_entry_offset
             return
         else:
             __kaslr_offset = None
@@ -1928,6 +1981,12 @@ class RamDump():
                     self.kaslr_offset = __kaslr_offset if __kaslr_offset else 0
                     self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
                     print_out_str("!!! Determine kaslr_offset failed")
+                    if self.is_config_defined("CONFIG_RANDOMIZE_BASE"):
+                        if self.uefi_magic_offset:
+                            uefi_magic = self.read_u32(self.uefi_magic_offset, False)
+                            if uefi_magic == 0x75656669:
+                                print_out_str("!!!look like early boot crash")
+                                sys.exit(1)
 
     def determine_phys_offset(self):
         fdtuple = namedtuple("FDTuple", ["base", "end", "path"])
@@ -2243,6 +2302,8 @@ class RamDump():
             'TZ address: {0:x}'.format(board.wdog_addr))
         if board.phys_offset is not None:
             self.phys_offset = board.phys_offset
+        if hasattr(board, 'ipa_addr'):
+            self.ipa_addr = board.ipa_addr
         self.tz_addr = board.wdog_addr
         self.ebi_start = board.ram_start
         self.tz_start = board.imem_start
@@ -2263,6 +2324,10 @@ class RamDump():
             self.kaslr_addr = board.kaslr_addr
         else:
             self.kaslr_addr = None
+        if hasattr(board, 'uefi_magic_offset'):
+            self.uefi_magic_offset = board.uefi_magic_offset
+        else:
+            self.uefi_magic_offset = None
         if hasattr(board, 'svm_kaslr_offset'):
             self.svm_kaslr_offset = board.svm_kaslr_offset
         self.board = board
@@ -3226,6 +3291,8 @@ class RamDump():
             return None
 
         addr += self.field_offset(struct_name, field)
+        if size == 1:
+            return self.read_byte(addr, virtual)
         if size == 2:
             return self.read_u16(addr, virtual)
         if size == 4:
@@ -3519,8 +3586,7 @@ class RamDump():
                     break
 
                 task_struct = task_pointer - tasks_offset
-                if ((self.validate_task_struct(task_struct) == -1) or (
-                        self.validate_sched_class(task_struct) == -1)):
+                if (self.validate_task_struct(task_struct) == -1):
                     next = init_task
                     while (1):
                         task_pointer = self.read_word(next + tasks_offset +
@@ -3530,8 +3596,6 @@ class RamDump():
                             break
                         task_struct = task_pointer - tasks_offset
                         if (self.validate_task_struct(task_struct) == -1):
-                            break
-                        if (self.validate_sched_class(task_struct) == -1):
                             break
                         if task_struct in seen_tasks:
                             break
@@ -3575,8 +3639,7 @@ class RamDump():
 
             while True:
                 task_addr = next_thread_head - offset_thread_node
-                if (self.validate_task_struct(task_addr) == -1) or (
-                        self.validate_sched_class(task_addr) == -1):
+                if (self.validate_task_struct(task_addr) == -1):
                         break
 
                 yield task_addr
@@ -3611,19 +3674,6 @@ class RamDump():
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
-            return -1
-
-    def validate_sched_class(self, task):
-        sc_top = self.address_of('stop_sched_class')
-        sc_rt = self.address_of('rt_sched_class')
-        sc_idle = self.address_of('idle_sched_class')
-        sc_fair = self.address_of('fair_sched_class')
-
-        sched_class = self.read_structure_field(
-                                task, 'struct task_struct', 'sched_class')
-
-        if not ((sched_class == sc_top) or (sched_class == sc_rt) or (
-                sched_class == sc_idle) or (sched_class == sc_fair)):
             return -1
 
     def __ignore_storage_class(self, line):
