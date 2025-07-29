@@ -3638,9 +3638,14 @@ class RamDump():
         offset_thread_head = self.field_offset(
             'struct signal_struct', 'thread_head')
         try:
+            '''
+            reference the kernel code to fetch the threads info
+            #define for_each_thread(p, t)		\
+	            __for_each_thread((p)->signal, t)
+            '''
             signal_addr = self.read_word(task_addr + offset_signal)
-            thread_head_addr = self.read_word(signal_addr + offset_thread_head)
-            next_thread_head = thread_head_addr
+            thread_head_addr = signal_addr + offset_thread_head
+            next_thread_head = self.read_word(thread_head_addr)
             seen_threads = []
 
             while True:
