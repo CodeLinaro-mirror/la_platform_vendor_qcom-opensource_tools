@@ -1859,6 +1859,12 @@ class RamDump():
 
         startup_script.write(
             'v.v  %ASCII %STRING linux_banner\n')
+
+        if not self.is_config_defined('CONFIG_SMP'):
+            if self.get_kernel_version() >= (6, 6):
+                if not self.arm64:
+                    startup_script.write('SYStem.Option MMUSPACES OFF\n')
+
         if os.path.exists(os.path.join(out_path, 'regs_panic.cmm')):
             startup_script.write(
                 'do {0}\n'.format(out_path + '/regs_panic.cmm'))
