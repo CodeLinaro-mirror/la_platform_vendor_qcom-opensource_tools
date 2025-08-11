@@ -25,7 +25,6 @@ class Zram(RamParser):
     MAGIC_VAL_BITS = 8
 
     CRYPTO_MAX_ALG_NAME       = 128
-    MAX_POSSIBLE_PHYSMEM_BITS = 48
 
     CRYPTO_LZO     = "lzo"
     CRYPTO_LZO_RLE = "lzo-rle"
@@ -37,7 +36,10 @@ class Zram(RamParser):
         self.zram_table_oft    = self.ramdump.field_offset('struct zram', 'table')
         self.zram_comp_oft     = self.ramdump.field_offset('struct zram', 'comp')
         self.zram_disksize_oft = self.ramdump.field_offset('struct zram', 'disksize')
-        self.zram_compressor_oft = self.ramdump.field_offset('struct zram', 'compressor')
+        if self.ramdump.kernel_version >= (6, 2):
+            self.zram_compressor_oft = self.ramdump.field_offset('struct zram', 'comp_algs')
+        else:
+            self.zram_compressor_oft = self.ramdump.field_offset('struct zram', 'compressor')
 
         # struct zram_table_entry
         self.zram_table_entry_flags_oft  = self.ramdump.field_offset('struct zram_table_entry', 'flags')
@@ -60,7 +62,7 @@ class Zram(RamParser):
         self.init_config()
 
     def init_config(self):
-        if (self.ramdump.kernel_version) < (6, 1, 0):
+        if self.ramdump.kernel_version < (6, 1, 0):
             self.__SWP_TYPE_SHIFT = 2
             self.__SWP_TYPE_BITS = 6
 
@@ -74,6 +76,12 @@ class Zram(RamParser):
             self.__SWP_TYPE_BITS = 5
             self.ZRAM_FLAG_SHIFT = self.ramdump.page_shift + 1
             self.HUGE_BITS = 1
+
+        if self.ramdump.kernel_version >= (6, 4, 0):
+            self.FULLNESS_BITS = 4
+
+        if self.ramdump.kernel_version >= (6, 9, 0):
+            self.ISOLATED_BITS = 0
 
         self.__SWP_OFFSET_BITS = 50
 
@@ -97,10 +105,14 @@ class Zram(RamParser):
         except:
             self.pgtable_levels = 3
 
+        if self.ramdump.kernel_version >= (6, 12, 0):
+            self.MAX_POSSIBLE_PHYSMEM_BITS = 52
+        else:
+            self.MAX_POSSIBLE_PHYSMEM_BITS = 48
+
         if self.pgtable_levels == 2 and self.ramdump.is_config_defined('CONFIG_ARM'):
             self.MAX_POSSIBLE_PHYSMEM_BITS = 32
-
-        if self.pgtable_levels == 3 and self.ramdump.is_config_defined('CONFIG_ARM'):
+        elif self.pgtable_levels == 3 and self.ramdump.is_config_defined('CONFIG_ARM'):
             self.MAX_POSSIBLE_PHYSMEM_BITS = 40
 
         self._PFN_BITS = (self.MAX_POSSIBLE_PHYSMEM_BITS - self.ramdump.page_shift)
@@ -109,7 +121,10 @@ class Zram(RamParser):
             self.BITS_PER_LONG = 32
 
         # 64-36-1 = 27 for 64bit and 32-20-1 = 11 for 32bit(pgtable_levels = 2)
-        self.OBJ_INDEX_BITS = (self.BITS_PER_LONG - self._PFN_BITS - self.OBJ_TAG_BITS)
+        if self.ramdump.kernel_version >= (6, 9, 0):
+            self.OBJ_INDEX_BITS = (self.BITS_PER_LONG - self._PFN_BITS)
+        else:
+            self.OBJ_INDEX_BITS = (self.BITS_PER_LONG - self._PFN_BITS - self.OBJ_TAG_BITS)
         self.OBJ_INDEX_MASK = (1 << self.OBJ_INDEX_BITS) -1
         self.fullness_group = ['ZS_EMPTY', 'ZS_ALMOST_EMPTY','ZS_ALMOST_FULL','ZS_FULL']
 
@@ -205,7 +220,10 @@ class Zram(RamParser):
         return True
 
     def zs_map_object(self, mem_pool_addr, handle):
-        pfn = handle >> (self.OBJ_TAG_BITS + self.OBJ_INDEX_BITS)
+        if self.ramdump.kernel_version >= (6, 9, 0):
+            pfn = handle >> (self.OBJ_INDEX_BITS)
+        else:
+            pfn = handle >> (self.OBJ_TAG_BITS + self.OBJ_INDEX_BITS)
         page_addr = pfn_to_page(self.ramdump, pfn)
         if page_addr == None:
             return
@@ -223,7 +241,14 @@ class Zram(RamParser):
                     size_class_addr, "struct size_class *", class_idx))
         size = self.ramdump.read_s32(class_addr +  self.size_class_size_oft)
 
-        obj_idx = (handle >> self.OBJ_TAG_BITS) & self.OBJ_INDEX_MASK
+        if size == 0:
+            print_out_str("size class is zeroed out")
+            raise Exception("size class %d is messed up" % class_idx)
+
+        if self.ramdump.kernel_version >= (6, 9, 0):
+            obj_idx = handle & self.OBJ_INDEX_MASK
+        else:
+            obj_idx = handle >> (self.OBJ_TAG_BITS + self.OBJ_INDEX_BITS)
         off = (size * obj_idx) & (self.PAGE_SIZE -1)
         vm_addr = page_address(self.ramdump, page_addr) + off
         data = b''
@@ -301,8 +326,11 @@ class Zram(RamParser):
         fullness = (magic_int >> (self.HUGE_BITS)) \
                    & ((1 << (self.FULLNESS_BITS)) - 1)
 
-        isolated = (magic_int >> (self.HUGE_BITS + self.FULLNESS_BITS + self.CLASS_BITS + 1)) \
-                   & ((1 << self.ISOLATED_BITS) - 1)
+        if self.ramdump.kernel_version >= (6, 9, 0):
+            isolated = 0
+        else:
+            isolated = (magic_int >> (self.HUGE_BITS + self.FULLNESS_BITS + self.CLASS_BITS + 1)) \
+                       & ((1 << self.ISOLATED_BITS) - 1)
 
         return inuse, freeobj, magic, class_idx, fullness, isolated
 
@@ -328,7 +356,11 @@ class Zram(RamParser):
     def print_obj_stats(self, size_class_value, output_file):
         stats_offset = self.ramdump.field_offset('struct size_class', 'stats')
         objs_address = size_class_value + stats_offset
-        max_node_stat_item = self.ramdump.gdbmi.get_value_of('NR_ZS_STAT_TYPE')
+        if self.ramdump.kernel_version >= (6, 4, 0):
+            max_node_stat_item = self.ramdump.gdbmi.get_value_of('NR_CLASS_STAT_TYPES')
+        else:
+            max_node_stat_item = self.ramdump.gdbmi.get_value_of('NR_ZS_STAT_TYPE')
+
         try:
             class_stat_type_names = self.ramdump.gdbmi.get_enum_lookup_table('class_stat_type', max_node_stat_item)
         except:
