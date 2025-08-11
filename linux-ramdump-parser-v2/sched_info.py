@@ -291,6 +291,21 @@ class Schedinfo(RamParser):
             print_out_str("\t\t sysctl_sched_rt_runtime Default:{0} and Value in dump:{1}\n".format(DEFAULT_RT_RUNTIME, sched_rt_runtime))
             print_out_str("\t\t sysctl_sched_rt_period Default:{0} and Value in dump:{1}\n".format(DEFAULT_RT_PERIOD, sched_rt_period))
 
+        # print sched feature
+        if self.ramdump.is_config_defined('CONFIG_SCHED_DEBUG'):
+            print_out_str('sched feature:')
+            sched_feat_names_addr = self.ramdump.address_of('sched_feat_names')
+            sysctl_sched_features_addr = self.ramdump.address_of('sysctl_sched_features')
+            sysctl_sched_features = self.ramdump.read_u32(sysctl_sched_features_addr)
+            for i in range(0, self.ramdump.gdbmi.get_value_of('__SCHED_FEAT_NR')):
+                name_addr = self.ramdump.read_pointer(self.ramdump.array_index(sched_feat_names_addr, 'char *',  i))
+                name = self.ramdump.read_cstring(name_addr, 48)
+                if sysctl_sched_features & (1 << i):
+                    print_out_str('\t{}'.format(name))
+                else:
+                    print_out_str('\tNO_{}'.format(name))
+            print_out_str('')
+
         # verify rq root domain
         runqueues_addr = self.ramdump.address_of('runqueues')
         rd_offset = self.ramdump.field_offset('struct rq', 'rd')
