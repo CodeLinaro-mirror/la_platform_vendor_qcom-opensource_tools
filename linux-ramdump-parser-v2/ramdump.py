@@ -2485,26 +2485,30 @@ class RamDump():
         text_offset = 0
         for section in elffile.iter_sections():
             header = section.header
+            is_init = re.match(r".init", section.name)
+            if is_init is not None:
+                continue
+
+            if section.name == ".text":
+                break
+
+            plt_entry_size = self.sizeof('struct plt_entry')
+            if section.name == ".plt":
+                text_offset = align_up(text_offset, 64)   #plt align is 64
+                sh_size = plt_entry_size * plt_num
+                text_offset += sh_size
+                continue
+
+            if section.name == ".text.ftrace_trampoline":
+                text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
+                sh_size = plt_entry_size * ftrace_plt_num
+                text_offset += sh_size
+                continue
+
             if (header['sh_flags'] & (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR)) == \
                 (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR):
-                is_init = re.match(r".init", section.name)
-                if is_init is not None:
-                    continue
-
-                if section.name == ".text":
-                    break
-
-                plt_entry_size = self.sizeof('struct plt_entry')
-                if section.name == ".plt":
-                    text_offset = align_up(text_offset, 64)   #plt align is 64
-                    sh_size = plt_entry_size * plt_num
-                elif section.name == ".text.ftrace_trampoline":
-                    text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
-                    sh_size = plt_entry_size * ftrace_plt_num
-                else:
-                    text_offset = align_up(text_offset, header['sh_addralign'])
-                    sh_size = header['sh_size']
-
+                text_offset = align_up(text_offset, header['sh_addralign'])
+                sh_size = header['sh_size']
                 text_offset += sh_size
 
         if self.kernel_version >= (6, 1) and self.kernel_version < (6, 6): # kp 3.0
