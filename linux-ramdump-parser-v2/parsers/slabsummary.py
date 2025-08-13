@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -21,10 +21,7 @@ OO_MASK = (1 << OO_SHIFT) - 1
 @register_parser('--slabsummary', 'print summary of slab', optional=True)
 class Slabinfo_summary(RamParser):
 
-    def cal_free_pages(
-                        self, ramdump,
-                        start,  slab_lru_offset,
-                        max_page, cpu):
+    def cal_free_pages(self, start, slab_lru_offset, max_page, slab_addr, cpu):
         totalfree = 0
         page = self.ramdump.read_word(start)
         if page == 0:
@@ -34,6 +31,7 @@ class Slabinfo_summary(RamParser):
         total_objects = 0
         inuse = 0
         while page != start:
+            valid_page = True
             if page is None:
                 return totalfree
             #iterater partial slab may reach to NULL
@@ -42,6 +40,8 @@ class Slabinfo_summary(RamParser):
             if page in seen:
                 return totalfree
             if page > max_page:
+                return totalfree
+            if page == 0xDEAD000000000100 or page == 0xDEAD000000000122:
                 return totalfree
             seen.append(page)
             #c->slab page->insue always equal to page->objects, need NOT to consider
@@ -58,12 +58,17 @@ class Slabinfo_summary(RamParser):
                     #struct slab are pulled out from struct page
                     count = self.ramdump.read_structure_field(
                                 page, 'struct slab', 'counters')
-            if not(count):
-                count = 0
-            inuse = count & 0x0000FFFF
-            total_objects = (count >> 16) & 0x00007FFF
-            freeobj = total_objects - inuse
-            totalfree = totalfree + freeobj
+                    slab_cache = self.ramdump.read_structure_field(
+                                page, 'struct slab', 'slab_cache')
+                    if slab_cache is None or slab_cache != slab_addr:
+                        valid_page = False
+            if valid_page:
+                if not(count):
+                    count = 0
+                inuse = count & 0x0000FFFF
+                total_objects = (count >> 16) & 0x00007FFF
+                freeobj = total_objects - inuse
+                totalfree = totalfree + freeobj
             page = self.ramdump.read_word(page + slab_lru_offset)
         return totalfree
 
@@ -89,6 +94,13 @@ class Slabinfo_summary(RamParser):
         slab = self.ramdump.read_word(original_slab)
         slab_lru_offset = self.ramdump.field_offset(
                                          'struct page', 'lru')
+        if (self.ramdump.kernel_version > (5, 17)):
+            slab_lru_offset = self.ramdump.field_offset(
+                                             'struct slab', 'slab_list')
+            slab_next = self.ramdump.field_offset(
+                                             'struct slab', 'next')
+        else:
+            slab_next = slab_lru_offset
         pfn_range = get_pfn_range(self.ramdump)
         max_page = pfn_to_page(self.ramdump, pfn_range['max'])
         format_string = '\n{0:35} {1:9} {2:10} {3:10} {4:10} {5:8}K {6:8}' \
@@ -123,21 +135,20 @@ class Slabinfo_summary(RamParser):
             num_slabs = self.ramdump.read_structure_field(
                         slab_node_addr,
                         'struct kmem_cache_node', 'nr_slabs')
+
             # per cpu slab
             for i in self.ramdump.iter_cpus():
                 cpu_slabn_addr = cpu_slab_addr + self.ramdump.per_cpu_offset(i)
                 if cpu_slabn_addr == 0 or cpu_slabn_addr is None:
                     break
-                total_freeobjects = total_freeobjects + self.cal_free_pages(
-                                self.ramdump,
-                                (cpu_slabn_addr + cpu_partial_offset),
-                                slab_lru_offset,
-                                max_page, True)
-
+                if cpu_partial_offset is not None:
+                    total_freeobjects = total_freeobjects + self.cal_free_pages(
+                                    (cpu_slabn_addr + cpu_partial_offset),
+                                    slab_next, max_page, slab, True)
+            # partial node
             total_freeobjects = total_freeobjects + self.cal_free_pages(
-                                self.ramdump,
                                 slab_node_addr + slab_partial_offset,
-                                slab_lru_offset, max_page, False)
+                                slab_lru_offset, max_page, slab, False)
 
             total_allocated = nr_total_objects - total_freeobjects
             page_order = (oo >> OO_SHIFT) & OO_MASK
