@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -86,7 +86,27 @@ def has_debug_info(objdump_path, file):
 def get_ftrace_args(option, opt, value, parser):
     setattr(parser.values, option.dest, value.split(','))
 
-def prepare_vttbr_for_svm(options):
+def get_pvm_dump(options):
+    options.vmlinux = options.host_vmlinux
+    options.mod_path_list = options.host_mod_path_list
+    if options.force_hardware.strip().endswith("svm"):
+        options.force_hardware= options.force_hardware.strip()[:-3]
+    elif options.force_hardware.strip().endswith("oemvm"):
+        options.force_hardware= options.force_hardware.strip()[:-5]
+
+    options.outdir = os.path.join(options.outdir, "host")
+    options.svm =  ""
+    if not os.path.exists(options.outdir):
+        try:
+            os.makedirs(options.outdir)
+        except:
+            print ("Failed to create %s. You probably don't have permissions there. Bailing." % options.outdir)
+            sys.exit(1)
+
+    dump = RamDump(options, nm_path, gdb_path, objdump_path, gdb_ndk_path)
+    return dump
+
+def prepare_vttbr_for_svm(options, dump):
     '''
     two methods to address ttbr and vttbr for svm
     1. read ttbr or vttbr from hyp with symbols (default way)
@@ -109,25 +129,8 @@ def prepare_vttbr_for_svm(options):
         if len(cmm_files) > 0:
             return
 
-    options.vmlinux = options.host_vmlinux
-    options.mod_path_list = options.host_mod_path_list
-    if options.force_hardware.strip().endswith("svm"):
-        options.force_hardware= options.force_hardware.strip()[:-3]
-    elif options.force_hardware.strip().endswith("oemvm"):
-        options.force_hardware= options.force_hardware.strip()[:-5]
-
-    options.outdir = os.path.join(options.outdir, "host")
-    options.svm =  ""
-    if not os.path.exists(options.outdir):
-        try:
-            os.makedirs(options.outdir)
-        except:
-            print ("Failed to create %s. You probably don't have permissions there. Bailing." % options.outdir)
-            sys.exit(1)
-
     print_out_str("\n######### Using host vmlinux firstly to determine vttbr##########\n")
     print_out_str('change to use vmlinux file {0}'.format(options.vmlinux))
-    dump = RamDump(options, nm_path, gdb_path, objdump_path,gdb_ndk_path)
     if not dump.print_command_line():
         print_out_str('!!! Error printing saved command line.')
         print_out_str('!!! The vmlinux is probably wrong for the ramdumps')
@@ -295,7 +298,10 @@ if __name__ == '__main__':
         default_list.append("PStore")
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
+        default_list.append("GpuParser")
         default_list.append("ipc_logging_cn")
+        default_list.append("VaMinidump")
+        default_list.append("SoftirqStat")
 
     if options.everything:
         everything_exclusion_list.append("ROData")
@@ -458,13 +464,16 @@ if __name__ == '__main__':
     if options.everything:
         options.qtf = True
 
-    if options.svm:
+    if options.svm and options.host_vmlinux:
         ## prepare for vttbr on svm mode
         import copy
         copied_options = copy.deepcopy(options)
-        prepare_vttbr_for_svm(copied_options)
+        pvmdump = get_pvm_dump(copied_options)
+        prepare_vttbr_for_svm(copied_options, pvmdump)
 
     dump = RamDump(options, nm_path, gdb_path, objdump_path,gdb_ndk_path)
+    if options.svm and options.host_vmlinux:
+        dump.dump = pvmdump
 
     if options.eval:
         if options.eval == '-':
