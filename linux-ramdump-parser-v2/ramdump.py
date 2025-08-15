@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -2410,16 +2410,29 @@ class RamDump():
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
 
-        if self.field_offset('struct module_sect_attr', 'battr') is not None:
+        is_attr_new = False
+        if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None:
+            is_attr_new = True
+
+        if is_attr_new:
+            sect_name_offset = self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
+        elif self.field_offset('struct module_sect_attr', 'battr') is not None:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'battr') + self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
         else:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'name')
 
         kallsyms_offset = self.field_offset('struct module', 'kallsyms')
-        sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
-        nsections_offset = self.field_offset('struct module_sect_attrs', 'nsections')
+        if is_attr_new:
+            bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs_new')
+            sect_addr_offset = self.field_offset('struct bin_attribute', 'private')
+        else:
+            sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
+            nsections_offset = self.field_offset('struct module_sect_attrs', 'nsections')
         section_attrs_offset = self.field_offset('struct module_sect_attrs', 'attrs')
-        section_attr_size = self.sizeof('struct module_sect_attr')
+        if is_attr_new:
+            section_attr_size = self.sizeof('struct bin_attribute')
+        else:
+            section_attr_size = self.sizeof('struct module_sect_attr')
         mod_sect_attrs_offset = self.field_offset('struct module', 'sect_attrs')
         mod_state_offset = self.field_offset('struct module', 'state')
         mod_attr_grp_name_offest = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'name')
@@ -2455,12 +2468,20 @@ class RamDump():
                 print_out_str('Unexpected variation in module section group name, skipping loading sections for {}'.format(mod_tbl_ent.name))
                 next_list_ent = self.read_pointer(next_list_ent + next_offset)
                 continue
-            for i in range(0, self.read_u32(mod_sect_attrs + nsections_offset)):
-                # attr_ptr = module.sect_attrs.attrs[i]
+
+            if is_attr_new:
+                nsections = 0
+                attr_array_ptr = self.read_word(mod_sect_attrs + bin_attrs_new_offset)
+                attr_ptr = self.read_word(attr_array_ptr)
+                while (attr_ptr != 0) and (nsections < 100):
+                    nsections += 1
+                    attr_ptr = self.read_word(attr_array_ptr+(nsections * 8))
+            else:
+                nsections = self.read_u32(mod_sect_attrs + nsections_offset)
+
+            for i in range(0, nsections):
                 attr_ptr = mod_sect_attrs + section_attrs_offset + (i * section_attr_size)
-                # sect_name = attr_ptr.battr.attr.name (for 5.4+)
                 sect_name = self.read_cstring(self.read_pointer(attr_ptr + sect_name_offset))
-                # sect_addr = attr_ptr.address
                 sect_addr = self.read_word(attr_ptr + sect_addr_offset)
                 # https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/gdb/linux/symbols.py?h=v5.14#n102
                 if sect_name not in ['.data', '.data..read_mostly', '.rodata', '.bss',
