@@ -1,5 +1,5 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 import linux_radix_tree
 from mm import page_address
@@ -12,6 +12,7 @@ import struct
 import traceback
 import linux_list as llist
 import subprocess
+import local_settings
 
 @register_parser('--print-zram', 'Extract data from zram')
 class Zram(RamParser):
@@ -50,6 +51,14 @@ class Zram(RamParser):
 
             self.overriddan_parser = True
             self.overriddan_parser_path = path
+        elif self.ramdump.read_pointer('qpace_dev') and hasattr(local_settings, 'compressor_path'):
+            path = local_settings.compressor_path
+            if os.path.exists(path):
+                self.overriddan_parser = True
+                self.overriddan_parser_path = path
+            else:
+                print_out_str("'" + path + "' is not a valid path to decompression in local_settings")
+                self.overriddan_parser = False
         else:
             self.overriddan_parser = False
 
