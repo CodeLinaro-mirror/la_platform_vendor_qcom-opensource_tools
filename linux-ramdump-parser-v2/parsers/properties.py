@@ -19,9 +19,6 @@ import struct
 class Properties(RamParser):
     def __init__(self, *args):
         super(Properties, self).__init__(*args)
-        self.f_path_offset = self.ramdump.field_offset('struct file', 'f_path')
-        self.dentry_offset = self.ramdump.field_offset('struct path', 'dentry')
-        self.d_iname_offset = self.ramdump.field_offset('struct dentry', 'd_iname')
         self.SIZEOF_PROP_BT=0x14
         self.SIZEOF_PROP_INFO=0x60
         self.SIZEOF_PROP_AREA=0x80
