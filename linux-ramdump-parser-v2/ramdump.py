@@ -822,6 +822,7 @@ class RamDump():
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
         self.dump = None
+        self.zram_parser_override = options.zram_parser_override
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -1039,6 +1040,8 @@ class RamDump():
             saved_config.write(l + '\n')
 
         saved_config.close()
+        if self.is_config_defined("CONFIG_VMSPLIT_2G") and not self.arm64 and self.get_kernel_version() >= (6, 6):
+            self.page_offset = 0x80000000	#For ARM32 with VMSPLIT_2G Enabled
         try:
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
@@ -1859,6 +1862,12 @@ class RamDump():
 
         startup_script.write(
             'v.v  %ASCII %STRING linux_banner\n')
+
+        if not self.is_config_defined('CONFIG_SMP'):
+            if self.get_kernel_version() >= (6, 6):
+                if not self.arm64:
+                    startup_script.write('SYStem.Option MMUSPACES OFF\n')
+
         if os.path.exists(os.path.join(out_path, 'regs_panic.cmm')):
             startup_script.write(
                 'do {0}\n'.format(out_path + '/regs_panic.cmm'))
@@ -2477,26 +2486,30 @@ class RamDump():
         text_offset = 0
         for section in elffile.iter_sections():
             header = section.header
+            is_init = re.match(r".init", section.name)
+            if is_init is not None:
+                continue
+
+            if section.name == ".text":
+                break
+
+            plt_entry_size = self.sizeof('struct plt_entry')
+            if section.name == ".plt":
+                text_offset = align_up(text_offset, 64)   #plt align is 64
+                sh_size = plt_entry_size * plt_num
+                text_offset += sh_size
+                continue
+
+            if section.name == ".text.ftrace_trampoline":
+                text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
+                sh_size = plt_entry_size * ftrace_plt_num
+                text_offset += sh_size
+                continue
+
             if (header['sh_flags'] & (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR)) == \
                 (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR):
-                is_init = re.match(r".init", section.name)
-                if is_init is not None:
-                    continue
-
-                if section.name == ".text":
-                    break
-
-                plt_entry_size = self.sizeof('struct plt_entry')
-                if section.name == ".plt":
-                    text_offset = align_up(text_offset, 64)   #plt align is 64
-                    sh_size = plt_entry_size * plt_num
-                elif section.name == ".text.ftrace_trampoline":
-                    text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
-                    sh_size = plt_entry_size * ftrace_plt_num
-                else:
-                    text_offset = align_up(text_offset, header['sh_addralign'])
-                    sh_size = header['sh_size']
-
+                text_offset = align_up(text_offset, header['sh_addralign'])
+                sh_size = header['sh_size']
                 text_offset += sh_size
 
         if self.kernel_version >= (6, 1) and self.kernel_version < (6, 6): # kp 3.0
@@ -3586,8 +3599,7 @@ class RamDump():
                     break
 
                 task_struct = task_pointer - tasks_offset
-                if ((self.validate_task_struct(task_struct) == -1) or (
-                        self.validate_sched_class(task_struct) == -1)):
+                if (self.validate_task_struct(task_struct) == -1):
                     next = init_task
                     while (1):
                         task_pointer = self.read_word(next + tasks_offset +
@@ -3597,8 +3609,6 @@ class RamDump():
                             break
                         task_struct = task_pointer - tasks_offset
                         if (self.validate_task_struct(task_struct) == -1):
-                            break
-                        if (self.validate_sched_class(task_struct) == -1):
                             break
                         if task_struct in seen_tasks:
                             break
@@ -3635,15 +3645,19 @@ class RamDump():
         offset_thread_head = self.field_offset(
             'struct signal_struct', 'thread_head')
         try:
+            '''
+            reference the kernel code to fetch the threads info
+            #define for_each_thread(p, t)		\
+	            __for_each_thread((p)->signal, t)
+            '''
             signal_addr = self.read_word(task_addr + offset_signal)
-            thread_head_addr = self.read_word(signal_addr + offset_thread_head)
-            next_thread_head = thread_head_addr
+            thread_head_addr = signal_addr + offset_thread_head
+            next_thread_head = self.read_word(thread_head_addr)
             seen_threads = []
 
             while True:
                 task_addr = next_thread_head - offset_thread_node
-                if (self.validate_task_struct(task_addr) == -1) or (
-                        self.validate_sched_class(task_addr) == -1):
+                if (self.validate_task_struct(task_addr) == -1):
                         break
 
                 yield task_addr
@@ -3678,19 +3692,6 @@ class RamDump():
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
-            return -1
-
-    def validate_sched_class(self, task):
-        sc_top = self.address_of('stop_sched_class')
-        sc_rt = self.address_of('rt_sched_class')
-        sc_idle = self.address_of('idle_sched_class')
-        sc_fair = self.address_of('fair_sched_class')
-
-        sched_class = self.read_structure_field(
-                                task, 'struct task_struct', 'sched_class')
-
-        if not ((sched_class == sc_top) or (sched_class == sc_rt) or (
-                sched_class == sc_idle) or (sched_class == sc_fair)):
             return -1
 
     def __ignore_storage_class(self, line):
