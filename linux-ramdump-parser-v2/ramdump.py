@@ -822,6 +822,7 @@ class RamDump():
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
         self.dump = None
+        self.zram_parser_override = options.zram_parser_override
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -1039,6 +1040,8 @@ class RamDump():
             saved_config.write(l + '\n')
 
         saved_config.close()
+        if self.is_config_defined("CONFIG_VMSPLIT_2G") and not self.arm64 and self.get_kernel_version() >= (6, 6):
+            self.page_offset = 0x80000000	#For ARM32 with VMSPLIT_2G Enabled
         try:
             self.va_bits = int(self.get_config_val("CONFIG_ARM64_VA_BITS"))
         except:
@@ -2483,26 +2486,30 @@ class RamDump():
         text_offset = 0
         for section in elffile.iter_sections():
             header = section.header
+            is_init = re.match(r".init", section.name)
+            if is_init is not None:
+                continue
+
+            if section.name == ".text":
+                break
+
+            plt_entry_size = self.sizeof('struct plt_entry')
+            if section.name == ".plt":
+                text_offset = align_up(text_offset, 64)   #plt align is 64
+                sh_size = plt_entry_size * plt_num
+                text_offset += sh_size
+                continue
+
+            if section.name == ".text.ftrace_trampoline":
+                text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
+                sh_size = plt_entry_size * ftrace_plt_num
+                text_offset += sh_size
+                continue
+
             if (header['sh_flags'] & (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR)) == \
                 (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR):
-                is_init = re.match(r".init", section.name)
-                if is_init is not None:
-                    continue
-
-                if section.name == ".text":
-                    break
-
-                plt_entry_size = self.sizeof('struct plt_entry')
-                if section.name == ".plt":
-                    text_offset = align_up(text_offset, 64)   #plt align is 64
-                    sh_size = plt_entry_size * plt_num
-                elif section.name == ".text.ftrace_trampoline":
-                    text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
-                    sh_size = plt_entry_size * ftrace_plt_num
-                else:
-                    text_offset = align_up(text_offset, header['sh_addralign'])
-                    sh_size = header['sh_size']
-
+                text_offset = align_up(text_offset, header['sh_addralign'])
+                sh_size = header['sh_size']
                 text_offset += sh_size
 
         if self.kernel_version >= (6, 1) and self.kernel_version < (6, 6): # kp 3.0
@@ -3638,9 +3645,14 @@ class RamDump():
         offset_thread_head = self.field_offset(
             'struct signal_struct', 'thread_head')
         try:
+            '''
+            reference the kernel code to fetch the threads info
+            #define for_each_thread(p, t)		\
+	            __for_each_thread((p)->signal, t)
+            '''
             signal_addr = self.read_word(task_addr + offset_signal)
-            thread_head_addr = self.read_word(signal_addr + offset_thread_head)
-            next_thread_head = thread_head_addr
+            thread_head_addr = signal_addr + offset_thread_head
+            next_thread_head = self.read_word(thread_head_addr)
             seen_threads = []
 
             while True:
