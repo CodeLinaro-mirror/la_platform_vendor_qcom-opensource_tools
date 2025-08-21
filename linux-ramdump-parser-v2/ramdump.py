@@ -185,6 +185,11 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
         with open(os.path.join(self.autodumpdir, filename)) as f:
             try:
                 for line in f.readlines():
+                    if 'Exception CreateMemDebugFile during memory dump' in line:
+                        print_out_str('!!! QPST encountered errors while collecting the dump.')
+                        print_out_str('!!! Exiting now')
+                        sys.exit(1)
+
                     words = line.split()
                     if not words or not is_ramdump_file(words[-1],
                                                         self.minidump):
@@ -201,6 +206,8 @@ class AutoDumpInfoDumpInfoTXT(AutoDumpInfo):
                             % (fname, filesize, size))
                         continue
                     yield fname, start
+            except SystemExit:
+                sys.exit(1)
             except:
                 print_out_str('!!! Cannot parse dump_info.txt due to improper format!')
                 return
@@ -3579,8 +3586,7 @@ class RamDump():
                     break
 
                 task_struct = task_pointer - tasks_offset
-                if ((self.validate_task_struct(task_struct) == -1) or (
-                        self.validate_sched_class(task_struct) == -1)):
+                if (self.validate_task_struct(task_struct) == -1):
                     next = init_task
                     while (1):
                         task_pointer = self.read_word(next + tasks_offset +
@@ -3590,8 +3596,6 @@ class RamDump():
                             break
                         task_struct = task_pointer - tasks_offset
                         if (self.validate_task_struct(task_struct) == -1):
-                            break
-                        if (self.validate_sched_class(task_struct) == -1):
                             break
                         if task_struct in seen_tasks:
                             break
@@ -3635,8 +3639,7 @@ class RamDump():
 
             while True:
                 task_addr = next_thread_head - offset_thread_node
-                if (self.validate_task_struct(task_addr) == -1) or (
-                        self.validate_sched_class(task_addr) == -1):
+                if (self.validate_task_struct(task_addr) == -1):
                         break
 
                 yield task_addr
@@ -3671,19 +3674,6 @@ class RamDump():
         if ((task != task_struct) or (thread_info_address == 0x0)):
             return -1
         if ((cpu_number < 0) or (cpu_number > self.get_num_cpus())):
-            return -1
-
-    def validate_sched_class(self, task):
-        sc_top = self.address_of('stop_sched_class')
-        sc_rt = self.address_of('rt_sched_class')
-        sc_idle = self.address_of('idle_sched_class')
-        sc_fair = self.address_of('fair_sched_class')
-
-        sched_class = self.read_structure_field(
-                                task, 'struct task_struct', 'sched_class')
-
-        if not ((sched_class == sc_top) or (sched_class == sc_rt) or (
-                sched_class == sc_idle) or (sched_class == sc_fair)):
             return -1
 
     def __ignore_storage_class(self, line):
