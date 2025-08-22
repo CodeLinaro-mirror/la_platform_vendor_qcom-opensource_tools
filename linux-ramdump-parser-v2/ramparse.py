@@ -116,8 +116,6 @@ def prepare_vttbr_for_svm(options, dump):
 
     this method was used to generate corevcpu with host vmlinux and other host arguments
     '''
-    if has_debug_info(objdump_path, options.hyp):
-        return
 
     for _file in VCPU_CMM_FILES:
         ## find in dump folder
