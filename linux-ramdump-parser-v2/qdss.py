@@ -775,9 +775,9 @@ class QDSSDump():
         print("}", file = self.f)
 
     def parse_tc_dataset(self, tc):
-        capture_mode = self.ramdump.read_structure_field(bc, 'struct bc_dataset', 'capture_mode')
+        capture_mode = self.ramdump.read_structure_field(tc, 'struct bc_dataset', 'capture_mode')
         capture_mode = self.ramdump.enum_lookup('enum tpdm_mode', capture_mode)
-        retrieval_mode = self.ramdump.read_structure_field(bc, 'struct bc_dataset', 'retrieval_mode')
+        retrieval_mode = self.ramdump.read_structure_field(tc, 'struct bc_dataset', 'retrieval_mode')
         retrieval_mode = self.ramdump.enum_lookup('enum tpdm_mode', retrieval_mode)
         trig_val_lo = self.read_array(tc + self.ramdump.field_offset('struct tc_dataset', 'trig_val_lo'), 8, 'u32')
         trig_val_hi = self.read_array(tc + self.ramdump.field_offset('struct tc_dataset', 'trig_val_hi'), 8, 'u32')
@@ -787,11 +787,11 @@ class QDSSDump():
         print("{", file = self.f)
         print("\tcapture_mode\t= {},".format(capture_mode), file =self.f)
         print("\tretrieval_mode\t= {},".format(retrieval_mode), file =self.f)
-        self.parse_qdss_field(bc, 'struct tc_dataset', 'sat_mode', 2)
-        self.parse_qdss_field(bc, 'struct tc_dataset', 'enable_counters')
-        self.parse_qdss_field(bc, 'struct tc_dataset', 'clear_counters')
-        self.parse_qdss_field(bc, 'struct tc_dataset', 'enable_irq', 2)
-        self.parse_qdss_field(bc, 'struct tc_dataset', 'clear_irq', 2)
+        self.parse_qdss_field(tc, 'struct tc_dataset', 'sat_mode', 2)
+        self.parse_qdss_field(tc, 'struct tc_dataset', 'enable_counters')
+        self.parse_qdss_field(tc, 'struct tc_dataset', 'clear_counters')
+        self.parse_qdss_field(tc, 'struct tc_dataset', 'enable_irq', 2)
+        self.parse_qdss_field(tc, 'struct tc_dataset', 'clear_irq', 2)
         print("\ttrig_sel\t\t= {},".format(trig_sel), file =self.f)
         print("\ttrig_val_lo\t\t= {},".format(trig_val_lo), file =self.f)
         print("\ttrig_val_hi\t\t= {},".format(trig_val_hi), file =self.f)
@@ -854,6 +854,11 @@ class QDSSDump():
             base_phy = 0
         else:
             base_phy = self.ramdump.virt_to_phys(base)
+        atclk = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'atclk')
+        if (self.ramdump.kernel_version > (6, 7, 0)):
+            self.parse_csdev(csdev)
+            self.parse_clk(atclk)
+            return
         nr_tclk = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'nr_tclk')
         nr_treg = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'nr_treg')
         gpr = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'gpr')
@@ -861,7 +866,6 @@ class QDSSDump():
         tc = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'tc')
         dsb = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'dsb')
         cmb = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'cmb')
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'atclk')
 
         print("struct tpdm_drvdata {} :".format(hex(drvdata)), file = self.f)
         print("{", file = self.f)
@@ -934,8 +938,9 @@ class QDSSDump():
         csdev = self.ramdump.read_structure_field(drvdata, 'struct tpda_drvdata', 'csdev')
         base = self.ramdump.read_structure_field(drvdata, 'struct tpda_drvdata', 'base')
         base_phy = self.ramdump.virt_to_phys(base)
-        bc_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'bc_esize'), 32, 'u32')
-        tc_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'tc_esize'), 32, 'u32')
+        if (self.ramdump.kernel_version < (6, 7, 0)):
+            bc_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'bc_esize'), 32, 'u32')
+            tc_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'tc_esize'), 32, 'u32')
         dsb_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'dsb_esize'), 32, 'u32')
         cmb_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'cmb_esize'), 32, 'u32')
         atclk = self.ramdump.read_structure_field(drvdata, 'struct tpda_drvdata', 'atclk')
@@ -945,8 +950,9 @@ class QDSSDump():
         print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
         self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'enable', 2)
         self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'atid', 2)
-        print("\tbc_esize\t= {},".format(bc_esize), file =self.f)
-        print("\ttc_esize\t= {},".format(tc_esize), file =self.f)
+        if (self.ramdump.kernel_version < (6, 7, 0)):
+            print("\tbc_esize\t= {},".format(bc_esize), file =self.f)
+            print("\ttc_esize\t= {},".format(tc_esize), file =self.f)
         print("\tdsb_esize\t= {},".format(dsb_esize), file =self.f)
         print("\tcmb_esize\t= {},".format(cmb_esize), file =self.f)
         self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'trig_async')
