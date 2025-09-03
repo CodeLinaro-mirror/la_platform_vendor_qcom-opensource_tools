@@ -141,9 +141,10 @@ class Slabinfo_summary(RamParser):
                 cpu_slabn_addr = cpu_slab_addr + self.ramdump.per_cpu_offset(i)
                 if cpu_slabn_addr == 0 or cpu_slabn_addr is None:
                     break
-                total_freeobjects = total_freeobjects + self.cal_free_pages(
-                                (cpu_slabn_addr + cpu_partial_offset),
-                                slab_next, max_page, slab, True)
+                if cpu_partial_offset is not None:
+                    total_freeobjects = total_freeobjects + self.cal_free_pages(
+                                    (cpu_slabn_addr + cpu_partial_offset),
+                                    slab_next, max_page, slab, True)
             # partial node
             total_freeobjects = total_freeobjects + self.cal_free_pages(
                                 slab_node_addr + slab_partial_offset,

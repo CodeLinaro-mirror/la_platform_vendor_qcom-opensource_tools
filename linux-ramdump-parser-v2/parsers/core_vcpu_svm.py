@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -24,7 +24,7 @@ class svm_vcpu_context_parse(RamParser):
 
     def svm_vcpu_context_parse(self,fop):
         opfile = fop
-        for core in range(0,2):
+        for core in range(0,4):
             input_file = "corevcpu{0}_vm_*.cmm".format(core)
             file_path_list = glob.glob(os.path.join(self.ramdump.outdir + "\..", input_file))
             for each_file in file_path_list:
@@ -36,7 +36,7 @@ class svm_vcpu_context_parse(RamParser):
                 if os.path.exists(input_file_cmm):
                     fd = open(input_file_cmm, "r")
                 else:
-                    print("not exisit")
+                    #print("{} is not found".format(input_file_cmm))
                     continue
                 fp = 0
                 sp = 0
@@ -60,7 +60,8 @@ class svm_vcpu_context_parse(RamParser):
                     if "r.s sp_el1" in line and sp_flag is False:
                         sp_flag = True
                         sp = int(columns[-1], 16)
-
+                if fd:
+                    fd.close()
                 opfile.write("Core {0} context\n".format(core))
                 a = self.ramdump.unwind_lookup(pc)
                 if a is not None:
