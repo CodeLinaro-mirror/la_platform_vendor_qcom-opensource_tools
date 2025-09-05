@@ -40,6 +40,7 @@ from register import Register
 from collections import namedtuple
 import shlex
 import glob
+from linux_list import ListWalker
 
 SP = 13
 LR = 14
@@ -2989,14 +2990,15 @@ class RamDump():
 
     def setup_module_layout(self):
         mod_list = self.address_of('modules')
-        next_offset = self.field_offset('struct list_head', 'next')
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
 
-        next_list_ent = self.read_pointer(mod_list + next_offset)
-        while next_list_ent and next_list_ent != mod_list:
-            mod = next_list_ent - list_offset
+        list_walker = ListWalker(self, mod_list, list_offset)
+        for mod in list_walker:
             mod_name = self.read_cstring(mod + name_offset)
+            if mod_name == None:
+                continue
+
             ent_array = []
             # setup module init layout
             if self.kernel_version >= (6, 4, 0):
@@ -3037,7 +3039,6 @@ class RamDump():
                 ent_array.append((base, size))
 
             self.module_layout_dict[mod_name] = ent_array
-            next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
     def validate_module_sym_addr(self, sym_addr, mod_name):
         """
@@ -3144,6 +3145,9 @@ class RamDump():
             return (table[low][1] + desc, size)
 
     def unwind_lookup(self, addr, symbol_size=0):
+        if addr == None:
+            return None
+
         r = self.__unwind_lookup(addr, symbol_size)
         if r is not None:
             return r
