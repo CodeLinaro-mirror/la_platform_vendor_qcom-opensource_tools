@@ -245,7 +245,14 @@ def prepare_bin_load_command(file):
 def generate_cmm_script(dump):
     gmu_startup_script = gmu_startup_script_header
 
-    for root, dirs, files in os.walk(gmu_t32_path):
+    file = dump.open_file(gmu_t32_path + "gmu_startup_script.cmm", "w")
+    path = os.path.abspath(file.name)
+    path = os.path.normpath(path)
+    directory = os.path.dirname(path)
+    if os.name == 'nt' or '\\' in path:
+        abs_path = directory.replace('\\', '\\\\')
+
+    for root, dirs, files in os.walk(abs_path):
         bin_load_commands = [prepare_bin_load_command(file) for file in files
                              if file.endswith('.bin')]
         gmu_startup_script += "".join(bin_load_commands)
@@ -254,7 +261,6 @@ def generate_cmm_script(dump):
     gmu_startup_script += gmu_startup_script_symbol
     gmu_startup_script += gmu_startup_script_footer
 
-    file = dump.open_file(gmu_t32_path + "gmu_startup_script.cmm", "w")
     file.write(gmu_startup_script)
     file.close()
 
