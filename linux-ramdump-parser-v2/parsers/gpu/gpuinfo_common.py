@@ -74,7 +74,8 @@ DCVS_Tunables_list = ['penalty_up', 'penalty_down', 'first_step_down',
                       'subsequent_step_down', 'min_freq_mhz', 'max_freq_mhz',
                       'target_fps', 'num_samples_up', 'num_samples_down',
                       'strict_frame', 'non_linear_ramp_up',
-                      'non_linear_ramp_down', 'mod_percent', ]
+                      'non_linear_ramp_down', 'mod_percent', 'bus_min_freq',
+                      'bus_max_freq', 'min_ab_mbps', 'max_ab_mbps', ]
 
 
 kgsl_ctx_priv = [
