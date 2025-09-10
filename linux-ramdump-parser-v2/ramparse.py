@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -116,8 +116,6 @@ def prepare_vttbr_for_svm(options, dump):
 
     this method was used to generate corevcpu with host vmlinux and other host arguments
     '''
-    if has_debug_info(objdump_path, options.hyp):
-        return
 
     for _file in VCPU_CMM_FILES:
         ## find in dump folder
@@ -265,6 +263,11 @@ if __name__ == '__main__':
     parser.add_option('', '--skip_TLB_Cache_parse', action='store_true', help='Skip parsing TLB Cache Dumps in parse_debug_image')
     parser.add_option('--iommu-pg-table-format', action='store', choices=['fastrpc', 'default'],
                       default='default')
+    parser.add_option("--zram_parser_override", type='string', dest="zram_parser_override",
+                      help="""
+                      Specify a separate program to parse ZRAM-compressed pages with. The program must take in
+                      compressed input through stdin and output decompressed output through stdout.
+                      """)
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
@@ -298,6 +301,7 @@ if __name__ == '__main__':
         default_list.append("PStore")
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
+        default_list.append("GpuParser")
         default_list.append("ipc_logging_cn")
         default_list.append("VaMinidump")
         default_list.append("SoftirqStat")
