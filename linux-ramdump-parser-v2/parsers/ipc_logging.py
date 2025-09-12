@@ -27,7 +27,7 @@ OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Changes from Qualcomm Innovation Center are provided under the following license:
-Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause-Clear
 
 IPC Logging Extraction Tool
@@ -225,7 +225,10 @@ class ipc_logging_cn(RamParser):
                           .format(ipc_log_context))
             return
 
-        self.do_ipc_log_context_parser(ipc_log_context)
+        try:
+            self.do_ipc_log_context_parser(ipc_log_context)
+        except:
+            pass
 
     def get_ipc_log_context_list(self, ram_dump):
         ipc_log_context_list = ram_dump.address_of('ipc_log_context_list')
@@ -233,7 +236,7 @@ class ipc_logging_cn(RamParser):
             'struct ipc_log_context', 'list')
         list_walker = llist.ListWalker(
             self.ramdump, ipc_log_context_list, list_offset)
-        list_walker.walk(ipc_log_context_list, self.ipc_log_context_list_func)
+        list_walker.walk(self.ipc_log_context_list_func)
 
     def parse(self):
         self.output_dir = os.path.join(os.path.abspath(

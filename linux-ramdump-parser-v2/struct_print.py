@@ -1,4 +1,5 @@
 # Copyright (c) 2021, The Linux Foundation. All rights reserved.
+# Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 #
 # This program is free software; you can redistribute it and/or modify
@@ -185,7 +186,7 @@ class struct_print_class(object):
                     pass
                 else:
                     list_walker = ListWalker(self.ramdump, node.val, offset)
-                    list_walker.walk(node.val, self.hlist_head_walk_func)
+                    list_walker.walk(self.hlist_head_walk_func)
                 s1 = '\t}\n'
                 self.out_file.write(s1)
             elif (node.data_type == 'rw_semaphore'):

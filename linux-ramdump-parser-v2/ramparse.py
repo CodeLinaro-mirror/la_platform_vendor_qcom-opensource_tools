@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -25,10 +25,12 @@ import re
 import time
 import platform
 import textwrap
+import glob
 from optparse import OptionParser
 
 import parser_util
 from ramdump import RamDump
+from ramdump import VCPU_CMM_FILES
 from print_out import print_out_str, set_outfile, print_out_section, print_out_exception, flush_outfile
 from sched_info import verify_active_cpus
 # Please update version when something is changed!'
@@ -65,20 +67,96 @@ def parse_ram_file(option, opt_str, value, parser):
     a.append((temp[0], int(temp[1], 16), int(temp[2], 16)))
     setattr(parser.values, option.dest, a)
 
+def has_debug_info(objdump_path, file):
+    import subprocess
+    import shlex
+    cmd = objdump_path + ' -h ' + file
+    if platform.system() != "Linux":
+        objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    universal_newlines=True, )
+    else:
+        objdump = subprocess.Popen(shlex.split(cmd), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    universal_newlines=True, )
+    out, err = objdump.communicate()
+    if '.debug_info' in out:
+        return True
+    else:
+        return False
 
 def get_ftrace_args(option, opt, value, parser):
     setattr(parser.values, option.dest, value.split(','))
 
+def get_pvm_dump(options):
+    options.vmlinux = options.host_vmlinux
+    options.mod_path_list = options.host_mod_path_list
+    if options.force_hardware.strip().endswith("svm"):
+        options.force_hardware= options.force_hardware.strip()[:-3]
+    elif options.force_hardware.strip().endswith("oemvm"):
+        options.force_hardware= options.force_hardware.strip()[:-5]
+
+    options.outdir = os.path.join(options.outdir, "host")
+    options.svm =  ""
+    if not os.path.exists(options.outdir):
+        try:
+            os.makedirs(options.outdir)
+        except:
+            print ("Failed to create %s. You probably don't have permissions there. Bailing." % options.outdir)
+            sys.exit(1)
+
+    dump = RamDump(options, nm_path, gdb_path, objdump_path, gdb_ndk_path)
+    return dump
+
+def prepare_vttbr_for_svm(options, dump):
+    '''
+    two methods to address ttbr and vttbr for svm
+    1. read ttbr or vttbr from hyp with symbols (default way)
+    2. read ttbr or vttbr from corevcpu (this way was suitable for customer)
+
+    corevcpu was based on host environment.
+
+    this method was used to generate corevcpu with host vmlinux and other host arguments
+    '''
+    if has_debug_info(objdump_path, options.hyp):
+        return
+
+    for _file in VCPU_CMM_FILES:
+        ## find in dump folder
+        cmm_files = glob.glob(os.path.join(options.autodump, _file))
+        if len(cmm_files) > 0:
+            return
+        ## find in output folder
+        cmm_files = glob.glob(os.path.join(options.outdir, "host", _file))
+        if len(cmm_files) > 0:
+            return
+
+    print_out_str("\n######### Using host vmlinux firstly to determine vttbr##########\n")
+    print_out_str('change to use vmlinux file {0}'.format(options.vmlinux))
+    if not dump.print_command_line():
+        print_out_str('!!! Error printing saved command line.')
+        print_out_str('!!! The vmlinux is probably wrong for the ramdumps')
+        print_out_str('!!! Exiting now...')
+        sys.exit(1)
+
+    for p in parser_util.get_parsers():
+        from parsers.debug_image import DebugImage
+        if p.cls.__name__ ==  DebugImage.__name__:
+            print(p.cls.__name__)
+            try:
+                p.cls(dump).parse()
+            except Exception as e:
+                print_out_str(e)
+    print_out_str("\n######### Using host vmlinux firstly to determine vttbr end!!!##########\n")
 
 if __name__ == '__main__':
     starttime = time.time()
     usage = 'usage: %prog [options to print]. Run with --help for more details'
     parser = OptionParser(usage)
-    parser.add_option('', '--print-watchdog-time', action='store_true',
-                      dest='watchdog_time', help='Print watchdog timing information', default=False)
     parser.add_option('', '--logcat_limit_time_sec',
                       dest='logcat_limit_time', type='int', default=0,
                       help='Defined the max time logcat parse running')
+    parser.add_option('', '--ftrace_limit_time_sec',
+                      dest='ftrace_limit_time', type='int', default=0,
+                      help='Defined the max time ftrace parse running')
     parser.add_option('-e', '--ram-file', dest='ram_addr',
                       help='List of ram files (name, start, end)', action='callback', callback=parse_ram_file)
     parser.add_option('-v', '--vmlinux', dest='vmlinux', help='vmlinux path')
@@ -156,6 +234,9 @@ if __name__ == '__main__':
     parser.add_option('', '--dump_glb_sym_tbl', action='store_true', dest='dump_global_symbol_table',
                       help='dump all symbols within the global symbol lookup table', default=False)
     parser.add_option('', '--hyp', dest='hyp', help='elf file containing hypervisor symbol information. Required for --svm')
+    parser.add_option('', '--host_vmlinux', dest='host_vmlinux', help='host vmlinux. Required for --svm')
+    parser.add_option('', '--host_mod_path',  action='append', dest='host_mod_path_list', help='symbol path to all loadable modules. Required for --svm')
+
     parser.add_option('--dbg', '--debug', action='store_true', dest='debug',
                       help=textwrap.dedent("""\
                       Enable debug.
@@ -202,7 +283,7 @@ if __name__ == '__main__':
         except Exception as err:
             print("{}".format(str(err)))
             sys.exit(1)
-
+    everything_exclusion_list  = []
     if options.minidump:
         default_list = []
         default_list.append("Schedinfo")
@@ -217,7 +298,13 @@ if __name__ == '__main__':
         default_list.append("PStore")
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
+        default_list.append("GpuParser")
         default_list.append("ipc_logging_cn")
+        default_list.append("VaMinidump")
+        default_list.append("SoftirqStat")
+
+    if options.everything:
+        everything_exclusion_list.append("ROData")
 
     if options.outdir:
         if not os.path.exists(options.outdir):
@@ -377,7 +464,16 @@ if __name__ == '__main__':
     if options.everything:
         options.qtf = True
 
+    if options.svm and options.host_vmlinux:
+        ## prepare for vttbr on svm mode
+        import copy
+        copied_options = copy.deepcopy(options)
+        pvmdump = get_pvm_dump(copied_options)
+        prepare_vttbr_for_svm(copied_options, pvmdump)
+
     dump = RamDump(options, nm_path, gdb_path, objdump_path,gdb_ndk_path)
+    if options.svm and options.host_vmlinux:
+        dump.dump = pvmdump
 
     if options.eval:
         if options.eval == '-':
@@ -446,11 +542,6 @@ if __name__ == '__main__':
         print_out_str(
             '!!! Please just use --parse-debug-image to get QDSS information')
 
-    if options.watchdog_time:
-        print_out_str('\n--------- watchdog time -------')
-        get_wdog_timing(dump)
-        print_out_str('---------- end watchdog time-----')
-
     # Always verify Scheduler requirement for active_cpus on 64-bit platforms.
     if options.arm64:
         try:
@@ -474,6 +565,9 @@ if __name__ == '__main__':
     print_out_str("Time taken to setup the subparsers run : {}".format(time.time()-starttime))
     starttime = time.time()
     for i,p in enumerate(parsers_to_run):
+        if options.everything:
+            if p.cls.__name__ in everything_exclusion_list:
+                continue
         if i == 0:
             sys.stderr.write("\n")
         if options.minidump:

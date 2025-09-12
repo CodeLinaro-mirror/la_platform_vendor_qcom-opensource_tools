@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022,2024, Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -109,7 +109,13 @@ class kgsl_snapshot_gmu_mem_header(Structure):
 
 
 def gmu_log(devp, dump, gpurev):
-    if gpurev >= 0x70000:
+    if gpurev >= 0x80000:
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen8_device',
+                                          'adreno_dev', 'gmu')
+        gmu_logs = dump.read_structure_field(gmu_dev,
+                                             'struct gen8_gmu_device',
+                                             'gmu_log')
+    elif gpurev >= 0x70000:
         gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
         gmu_logs = dump.read_structure_field(gmu_dev,
@@ -146,7 +152,14 @@ def gmu_log(devp, dump, gpurev):
 
 
 def hfi_mem(devp, dump, gpurev):
-    if gpurev >= 0x70000:
+    if gpurev >= 0x80000:
+        gmu_dev = dump.sibling_field_addr(devp, 'struct gen8_device',
+                                          'adreno_dev', 'gmu')
+        hfi = dump.struct_field_addr(gmu_dev, 'struct gen8_gmu_device',
+                                     'hfi')
+        hfi_mem = dump.read_structure_field(hfi, 'struct gen8_hfi',
+                                            'hfi_mem')
+    elif gpurev >= 0x70000:
         gmu_dev = dump.sibling_field_addr(devp, 'struct gen7_device',
                                           'adreno_dev', 'gmu')
         hfi = dump.struct_field_addr(gmu_dev, 'struct gen7_gmu_device',
@@ -208,7 +221,7 @@ def snapshot_gmu_mem_section(devp, dump, gpurev, file, hdr_type):
     mem_hdr.gpuaddr = gmu_mem_gpuaddr
     file.write(mem_hdr)
 
-    data = dump.read_binarystring(gmu_mem_hostptr, gmu_mem_size)
+    data = dump.get_bin_data(gmu_mem_hostptr, gmu_mem_size)
     file.write(data)
 
 
@@ -280,7 +293,7 @@ def snapshot_rb_section(devp, dump, file, rb_type):
     rb_header.id = rb_id
     file.write(rb_header)
 
-    data = dump.read_binarystring(rb_hostptr, rb_size)
+    data = dump.get_bin_data(rb_hostptr, rb_size)
     file.write(data)
 
 
