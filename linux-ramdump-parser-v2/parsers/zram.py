@@ -1,16 +1,18 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 import linux_radix_tree
 from mm import page_address
 from mm import pfn_to_page
 import os
-from parser_util import register_parser, RamParser, cleanupString
+from parser_util import register_parser, RamParser, cleanupString, get_system_type
 from lzo1xlib import Lzo1xParser
 from print_out import print_out_str
 import struct
 import traceback
 import linux_list as llist
+import subprocess
+import local_settings
 
 @register_parser('--print-zram', 'Extract data from zram')
 class Zram(RamParser):
@@ -40,6 +42,25 @@ class Zram(RamParser):
             self.zram_compressor_oft = self.ramdump.field_offset('struct zram', 'comp_algs')
         else:
             self.zram_compressor_oft = self.ramdump.field_offset('struct zram', 'compressor')
+
+        if self.ramdump.zram_parser_override is not None:
+            path = self.ramdump.zram_parser_override
+
+            if not os.path.exists(path):
+                raise Exception("'" + path + "' is not a valid path to decompression, check arg to --zram_parser_override")
+
+            self.overriddan_parser = True
+            self.overriddan_parser_path = path
+        elif self.ramdump.read_pointer('qpace_dev') and hasattr(local_settings, 'compressor_path'):
+            path = local_settings.compressor_path
+            if os.path.exists(path):
+                self.overriddan_parser = True
+                self.overriddan_parser_path = path
+            else:
+                print_out_str("'" + path + "' is not a valid path to decompression in local_settings")
+                self.overriddan_parser = False
+        else:
+            self.overriddan_parser = False
 
         # struct zram_table_entry
         self.zram_table_entry_flags_oft  = self.ramdump.field_offset('struct zram_table_entry', 'flags')
@@ -71,11 +92,19 @@ class Zram(RamParser):
 
             self.ZRAM_FLAG_SHIFT = 24
             self.HUGE_BITS = 0
-        else:
+            self.__SWP_OFFSET_SHIFT = (self.__SWP_TYPE_BITS + self.__SWP_TYPE_SHIFT)
+        elif self.ramdump.kernel_version < (6, 12, 0):
             self.__SWP_TYPE_SHIFT = 3
             self.__SWP_TYPE_BITS = 5
             self.ZRAM_FLAG_SHIFT = self.ramdump.page_shift + 1
             self.HUGE_BITS = 1
+            self.__SWP_OFFSET_SHIFT = (self.__SWP_TYPE_BITS + self.__SWP_TYPE_SHIFT)
+        else:
+            self.__SWP_TYPE_SHIFT = 6
+            self.__SWP_TYPE_BITS = 5
+            self.ZRAM_FLAG_SHIFT = self.ramdump.page_shift + 1
+            self.HUGE_BITS = 1
+            self.__SWP_OFFSET_SHIFT = 12
 
         if self.ramdump.kernel_version >= (6, 4, 0):
             self.FULLNESS_BITS = 4
@@ -89,9 +118,7 @@ class Zram(RamParser):
             self.__SWP_OFFSET_BITS = 0
 
         self.__SWP_TYPE_MASK = ((1 << self.__SWP_TYPE_BITS) - 1)
-        self.__SWP_OFFSET_SHIFT = (self.__SWP_TYPE_BITS + self.__SWP_TYPE_SHIFT)
         self.__SWP_OFFSET_MASK = ((1 << self.__SWP_OFFSET_BITS) - 1)
-
 
         self.ZRAM_SAME = self.ZRAM_FLAG_SHIFT + 1
         self.ZRAM_WB = self.ZRAM_FLAG_SHIFT + 2
@@ -199,7 +226,7 @@ class Zram(RamParser):
             if need_save_to_file:
                 self.save_to_file(zram_addr, self.zdata, index)
             #print_out_str("Zram: parse success due to size == self.PAGE_SIZE index=0x%x" % index)
-        else:
+        elif not self.overriddan_parser:
             if data[0] != 17 or (data[1] != 1 and data[1] !=0):
                 raise Exception("invalid lzo-rel header")
             oudata = bytearray(self.PAGE_SIZE)
@@ -217,6 +244,37 @@ class Zram(RamParser):
                     self.zdata = self.lzo_parser.oudata[0 : self.lzo_parser.ou_len]
                     if need_save_to_file:
                         self.save_to_file(zram_addr, self.zdata, index)
+        else:
+            if get_system_type() == "Windows":
+                decomp_proc = subprocess.Popen(self.overriddan_parser_path, stdin=subprocess.PIPE,
+                                               stdout=subprocess.PIPE, universal_newlines=True, shell=True)
+                comp_data = ''.join(f'{b:02x}' for b in data[:size])
+            else:
+                decomp_proc = subprocess.Popen(self.overriddan_parser_path, stdin=subprocess.PIPE,
+                                               stdout=subprocess.PIPE, shell=True)
+                comp_data = data[:size]
+
+            try:
+                stdout,stderr = decomp_proc.communicate(comp_data, timeout=5)
+            except subprocess.TimeoutExpired:
+                decomp_proc.kill()
+                traceback.print_exc()
+                print_out_str(traceback.format_exc())
+                raise Exception("timed out on index=0x%x" % (index))
+
+            if decomp_proc.returncode != 0:
+                traceback.print_exc()
+                print_out_str(traceback.format_exc())
+                raise Exception("Failed to parse index=0x%x" % (index))
+
+            if get_system_type() == "Windows":
+                self.zdata = bytes.fromhex(stdout)
+            else:
+                self.zdata = stdout
+
+            if need_save_to_file:
+                self.save_to_file(zram_addr, self.zdata, index)
+
         return True
 
     def zs_map_object(self, mem_pool_addr, handle):
@@ -289,17 +347,22 @@ class Zram(RamParser):
 
 
     def zram_exact(self, zram_addr):
-        compressor = cleanupString(self.ramdump.read_cstring( \
-                    zram_addr + self.zram_compressor_oft, self.CRYPTO_MAX_ALG_NAME))
+        if self.overriddan_parser is False:
+            compressor = cleanupString(self.ramdump.read_cstring( \
+                        zram_addr + self.zram_compressor_oft, self.CRYPTO_MAX_ALG_NAME))
+        else:
+            compressor = self.overriddan_parser_path
+
+        if not self.overriddan_parser and compressor != self.CRYPTO_LZO and compressor != self.CRYPTO_LZO_RLE:
+            print_out_str("Zram: not support compressoFr %s" % compressor)
+            return
+
         disk_size = self.ramdump.read_word(zram_addr + self.zram_disksize_oft)
         disk_size_pages = disk_size >> 12
         print_out_str("zram disk_size %d Mb, compressor %s v.v (struct zram*)0x%x" % (disk_size/1024/1024, compressor, zram_addr))
         self.zram_zs_pool_dump(zram_addr)
         index = 0
 
-        if compressor !=  self.CRYPTO_LZO and compressor != self.CRYPTO_LZO_RLE:
-            print_out_str("Zram: not support compressoFr %s" % compressor)
-            return
         while index < disk_size_pages:
             try:
                 ret = self.process_zram(zram_addr, index * self.sizeof_zram_table_entry)

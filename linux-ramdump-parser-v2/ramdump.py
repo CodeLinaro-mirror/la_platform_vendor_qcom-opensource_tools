@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -40,6 +40,7 @@ from register import Register
 from collections import namedtuple
 import shlex
 import glob
+from linux_list import ListWalker
 
 SP = 13
 LR = 14
@@ -822,6 +823,7 @@ class RamDump():
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
         self.dump = None
+        self.zram_parser_override = options.zram_parser_override
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -2409,16 +2411,29 @@ class RamDump():
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
 
-        if self.field_offset('struct module_sect_attr', 'battr') is not None:
+        is_attr_new = False
+        if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None:
+            is_attr_new = True
+
+        if is_attr_new:
+            sect_name_offset = self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
+        elif self.field_offset('struct module_sect_attr', 'battr') is not None:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'battr') + self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
         else:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'name')
 
         kallsyms_offset = self.field_offset('struct module', 'kallsyms')
-        sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
-        nsections_offset = self.field_offset('struct module_sect_attrs', 'nsections')
+        if is_attr_new:
+            bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs_new')
+            sect_addr_offset = self.field_offset('struct bin_attribute', 'private')
+        else:
+            sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
+            nsections_offset = self.field_offset('struct module_sect_attrs', 'nsections')
         section_attrs_offset = self.field_offset('struct module_sect_attrs', 'attrs')
-        section_attr_size = self.sizeof('struct module_sect_attr')
+        if is_attr_new:
+            section_attr_size = self.sizeof('struct bin_attribute')
+        else:
+            section_attr_size = self.sizeof('struct module_sect_attr')
         mod_sect_attrs_offset = self.field_offset('struct module', 'sect_attrs')
         mod_state_offset = self.field_offset('struct module', 'state')
         mod_attr_grp_name_offest = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'name')
@@ -2454,12 +2469,20 @@ class RamDump():
                 print_out_str('Unexpected variation in module section group name, skipping loading sections for {}'.format(mod_tbl_ent.name))
                 next_list_ent = self.read_pointer(next_list_ent + next_offset)
                 continue
-            for i in range(0, self.read_u32(mod_sect_attrs + nsections_offset)):
-                # attr_ptr = module.sect_attrs.attrs[i]
+
+            if is_attr_new:
+                nsections = 0
+                attr_array_ptr = self.read_word(mod_sect_attrs + bin_attrs_new_offset)
+                attr_ptr = self.read_word(attr_array_ptr)
+                while (attr_ptr != 0) and (nsections < 100):
+                    nsections += 1
+                    attr_ptr = self.read_word(attr_array_ptr+(nsections * 8))
+            else:
+                nsections = self.read_u32(mod_sect_attrs + nsections_offset)
+
+            for i in range(0, nsections):
                 attr_ptr = mod_sect_attrs + section_attrs_offset + (i * section_attr_size)
-                # sect_name = attr_ptr.battr.attr.name (for 5.4+)
                 sect_name = self.read_cstring(self.read_pointer(attr_ptr + sect_name_offset))
-                # sect_addr = attr_ptr.address
                 sect_addr = self.read_word(attr_ptr + sect_addr_offset)
                 # https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/gdb/linux/symbols.py?h=v5.14#n102
                 if sect_name not in ['.data', '.data..read_mostly', '.rodata', '.bss',
@@ -2967,14 +2990,15 @@ class RamDump():
 
     def setup_module_layout(self):
         mod_list = self.address_of('modules')
-        next_offset = self.field_offset('struct list_head', 'next')
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
 
-        next_list_ent = self.read_pointer(mod_list + next_offset)
-        while next_list_ent and next_list_ent != mod_list:
-            mod = next_list_ent - list_offset
+        list_walker = ListWalker(self, mod_list, list_offset)
+        for mod in list_walker:
             mod_name = self.read_cstring(mod + name_offset)
+            if mod_name == None:
+                continue
+
             ent_array = []
             # setup module init layout
             if self.kernel_version >= (6, 4, 0):
@@ -3015,7 +3039,6 @@ class RamDump():
                 ent_array.append((base, size))
 
             self.module_layout_dict[mod_name] = ent_array
-            next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
     def validate_module_sym_addr(self, sym_addr, mod_name):
         """
@@ -3122,6 +3145,9 @@ class RamDump():
             return (table[low][1] + desc, size)
 
     def unwind_lookup(self, addr, symbol_size=0):
+        if addr == None:
+            return None
+
         r = self.__unwind_lookup(addr, symbol_size)
         if r is not None:
             return r
