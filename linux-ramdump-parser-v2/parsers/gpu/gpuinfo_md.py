@@ -40,7 +40,7 @@ class GpuMinidumpParser(RamParser):
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
             (self.parse_vrb_info, "VRB", 'gpuinfo.txt'),
             (self.parse_hwsched_info, "HWSCHED", 'gpuinfo.txt'),
-            (self.parse_dcvs_tunables, "GMU DCVS", 'gpuinfo.txt'),
+            (self.parse_dcvs_tunables, "GMU DCVS Tunables", 'gpuinfo.txt'),
             (self.parse_memstore_memory, "Memstore", 'gpuinfo.txt'),
             (self.parse_context_data, "Open Contexts", 'gpuinfo.txt'),
             (self.parse_active_context_data, "Active Contexts", 'gpuinfo.txt'),
@@ -287,20 +287,27 @@ class GpuMinidumpParser(RamParser):
             self.writeln(f'{flag}: ' + str(value))
 
     def parse_dcvs_tunables(self, dump):
-        hwsched_offset = dump.field_offset('struct adreno_device',
-                                           'hwsched')
+        def get_tunable_value(base_addr, struct_name, field_name):
+            offset = dump.field_offset('struct adreno_hwsched', field_name)
+            addr = base_addr + offset
+            dcvs_struct = self.ramdump.read_datatype(addr, struct_name)
+            return getattr(dcvs_struct, 'value')
+
+        hwsched_offset = dump.field_offset('struct adreno_device', 'hwsched')
         hwsched_addr = self.devp + hwsched_offset
-        hwsched = self.ramdump.read_datatype(hwsched_addr,
-                                             "struct adreno_hwsched")
-        for index, DCVS_data in enumerate(DCVS_Tunables_list):
-            adreno_dcvs_tunable_offset = dump.field_offset(
-                'struct adreno_hwsched', f'dcvs_tunables[{index}]')
-            adreno_dcvs_tunable_addr = hwsched_addr + \
-                adreno_dcvs_tunable_offset
-            adreno_dcvs_tunable = self.ramdump.read_datatype(
-                adreno_dcvs_tunable_addr, "struct adreno_dcvs_tunable")
-            value = getattr(adreno_dcvs_tunable, 'value')
-            self.writeln(f'{DCVS_data}: ' + strhex(value))
+
+        self.writeln(f'{"Tunable Name":<35}{"Default Val":<15}{"Sysfs Val"}')
+
+        for index, tunable in enumerate(DCVS_Tunables_list):
+            default_field = f'default_dcvs_tunables[{index}]'
+            sysfs_field = f'sysfs_dcvs_tunables[{index}]'
+
+            default_val = get_tunable_value(hwsched_addr, "struct adreno_dcvs_tunable",
+                default_field)
+            sysfs_val = get_tunable_value(hwsched_addr, "struct adreno_dcvs_tunable",
+                sysfs_field)
+
+            self.writeln(f'{tunable:<35}{strhex(default_val):<15}{strhex(sysfs_val)}')
 
     def parse_gpu_dcvs_data(self, dump):
         kgsl_device = self.ramdump.read_datatype(self.devp,
