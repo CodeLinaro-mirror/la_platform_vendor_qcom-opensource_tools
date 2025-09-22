@@ -41,6 +41,9 @@ from collections import namedtuple
 import shlex
 import glob
 from linux_list import ListWalker
+import mmap
+import bisect
+from lrucachedict import LRUCacheDict
 
 SP = 13
 LR = 14
@@ -686,7 +689,7 @@ class RamDump():
            r |= 1 << i
            i = i +1
 
-       return r;
+       return r
 
     def pac_ignore(self, data):
         kernel_pac_mask = self.createMask(self.vabits_actual, 63)
@@ -819,7 +822,10 @@ class RamDump():
         self.available_cores = []
         self.skip_TLB_Cache_parse = options.skip_TLB_Cache_parse
         self.module_layout_dict = {}
-        self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
+        self.cached_data = {
+            'addrtosym':{}, 'addressof':{}, 'fieldoffset':{},
+            'sizeof':{}, 'unwindsym':{}
+        }
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
         self.dump = None
@@ -911,6 +917,8 @@ class RamDump():
                         'Could not open {0}. Will not be part of dump'.format(file_path))
                     continue
                 self.ebi_files.append((fd, start, end, file_path))
+            if self.ebi_files:
+                self.ebi_files.sort(key=lambda x: x[1])
 
         elif not options.reduceddump:
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
@@ -921,6 +929,8 @@ class RamDump():
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & HLOS elf files manually.")
                 sys.exit(1)
+
+        self.ebi_file_starts = [start for _, start, _, _ in self.ebi_files]
 
         if self.elf_addr is not None:
             # Setup the needed vector and hash table for binary search in read_physical
@@ -992,6 +1002,8 @@ class RamDump():
                 self.ebi_start = self.ebi_files[0][1]
         if self.phys_offset is None:
             self.get_hw_id()
+
+        self.setup_cached_mmap()
 
         if options.phys_offset is not None:
             print_out_str(
@@ -1288,8 +1300,10 @@ class RamDump():
             raise InvalidInput
 
     def __del__(self):
-        self.gdbmi.close()
-        if self.hyp:
+        self.clear_mmap_regions()
+        if self.gdbmi:
+            self.gdbmi.close()
+        if self.gdbmi_hyp:
             self.gdbmi_hyp.close()
 
     def open_file(self, file_name, mode='wt'):
@@ -3152,15 +3166,16 @@ class RamDump():
             return (table[low][1] + desc, size)
 
     def unwind_lookup(self, addr, symbol_size=0):
-        if addr == None:
-            return None
-
+        unwind_key = addr + symbol_size
+        cached_data = self.cached_data['unwindsym']
+        if unwind_key in cached_data:
+            return cached_data[unwind_key]
         r = self.__unwind_lookup(addr, symbol_size)
-        if r is not None:
-            return r
-
-        # when fail to lookup the symbol name, show the module name as much as possible.
-        return self.match_name_for_module_sym_addr(addr)
+        if r is None:
+            # when fail to lookup the symbol name, show the module name as much as possible.
+            r = self.match_name_for_module_sym_addr(addr)
+        cached_data[unwind_key] = r
+        return r
 
     def read_elf_memory(self, addr, length, temp_file):
         s = self.gdbmi.read_elf_memory(addr, length, temp_file)
@@ -3169,6 +3184,52 @@ class RamDump():
             return a.split('\0')[0]
         else:
             return s
+
+    def clear_mmap_regions(self):
+        if hasattr(self, 'mmap_regions'):
+            for mm, _, _ in self.mmap_regions:
+                if mm: mm.close()
+            self.mmap_regions.clear()
+        return
+
+    def setup_cached_mmap(self):
+        if self.minidump or self.reduceddump:
+            return
+        self.mmap_regions = []
+        self.phys_cache = LRUCacheDict(max_bytes=500<<20)
+        self.phys_cache_get = self.phys_cache.get
+        self.phys_cache_put = self.phys_cache.put
+        self.phys_cache_size = self.phys_cache.cache_size
+        self.large_size = self.phys_cache.large_size
+        try:
+            import local_settings
+        except:
+            local_settings = None
+        if local_settings and hasattr(local_settings, 'phys_cache_max_bytes'):
+            self.phys_cache.set_max_bytes(local_settings.phys_cache_max_bytes)
+
+        def is_unc_path(path):
+            unc_path = path
+            if not os.path.isabs(path):
+                unc_path = os.path.abspath(path)
+            return unc_path.startswith('\\\\')
+
+        for fd, start, end, path in self.ebi_files:
+            try:
+                if is_unc_path(path):
+                    self.clear_mmap_regions()
+                    break
+                mm = mmap.mmap(fd.fileno(), 0, access=mmap.ACCESS_READ)
+                self.mmap_regions.append((mm, start, end))
+            except Exception as e:
+                print_out_str(f'Failed to memory map {path}: {str(e)}')
+                self.clear_mmap_regions()
+
+        if self.mmap_regions:
+            self.__read_physical_cache = self.___read_physical_mmap_cache
+        else:
+            self.__read_physical_cache = self.___read_physical_cache
+        return
 
     def read_physical(self, addr, length):
         if not isinstance(addr, int) or not isinstance(length, int):
@@ -3184,8 +3245,6 @@ class RamDump():
             data = elfutil.read_physical(self.elf_vector, self.elf_htable,
                                             self.elf_filemap, self.ebi_files,
                                             addr, length)
-            #if addr == 0x83cc09268:
-            #    print("addr read yielded none : {:x}".format(addr))
             return data
 
         else:
@@ -3197,18 +3256,93 @@ class RamDump():
                 return self.__read_physical(addr, length, self.ebi_files)
 
     def __read_physical(self, addr, length, ebi_files):
-        ebi = (-1, -1, -1)
-        for a in ebi_files:
-            fd, start, end, path = a
-            if addr >= start and addr <= end:
-                ebi = a
-                break
-        if ebi[0] == -1:
+        max_loop = 20
+        loop_cnt = 0
+        result = bytearray()
+        current_addr = addr
+        remaining = length
+        use_cache = not self.use_multithread and length < self.large_size
+        if use_cache:
+            max_loop += (length // self.phys_cache_size)
+        while remaining > 0 and loop_cnt < max_loop:
+            if use_cache:
+                data = self.__read_physical_cache(current_addr, remaining, ebi_files)
+            else:
+                data = self.___read_physical(current_addr, remaining, ebi_files)
+            if not data:
+                return bytes(result) if result else None
+            actual_read_len = len(data)
+            result.extend(data)
+            current_addr += actual_read_len
+            remaining -= actual_read_len
+            loop_cnt += 1
+        return bytes(result) if result else None
+
+    def ___read_physical(self, addr, length, ebi_files):
+        chunk = None
+        idx = bisect.bisect_right(self.ebi_file_starts, addr) - 1
+        if idx >= 0:
+            fd, start, end, path  = self.ebi_files[idx]
+            if start <= addr <= end:
+                available = end - addr + 1
+                read_len = min(length, available)
+                offset = addr - start
+                fd.seek(offset)
+                chunk = fd.read(read_len)
+        return chunk
+
+    def ___read_physical_mmap_cache(self, addr, length, ebi_files):
+        cache_size = self.phys_cache_size
+        page_base = addr & ~(cache_size - 1)
+        page_offset = addr - page_base
+        read_len = min(length, cache_size - page_offset)
+        page_data = self.phys_cache_get(page_base)
+        if page_data is None:
+            page_data = b''
+            idx = bisect.bisect_right(self.ebi_file_starts, addr) - 1
+            if idx >= 0:
+                mm, start, end  = self.mmap_regions[idx]
+                if start <= page_base <= end:
+                    offset = page_base - start
+                    available = end - page_base + 1
+                    page_read_len = min(cache_size, available)
+                    page_data = mm[offset:offset + page_read_len]
+            if not page_data:
+                return None
+            if len(page_data) < cache_size:
+                page_data += b'\x00' * (cache_size - len(page_data))
+            self.phys_cache_put(page_base, page_data)
+        actual_read_len = min(read_len, len(page_data) - page_offset)
+        if actual_read_len <= 0:
             return None
-        offset = addr - ebi[1]
-        ebi[0].seek(offset)
-        a = ebi[0].read(length)
-        return a
+        return page_data[page_offset:page_offset + actual_read_len]
+
+    def ___read_physical_cache(self, addr, length, ebi_files):
+        cache_size = self.phys_cache_size
+        page_base = addr & ~(cache_size - 1)
+        page_offset = addr - page_base
+        read_len = min(length, cache_size - page_offset)
+        page_data = self.phys_cache_get(page_base)
+        if page_data is None:
+            page_data = b''
+            idx = bisect.bisect_right(self.ebi_file_starts, addr) - 1
+            if idx >= 0:
+                fd, start, end, path  = self.ebi_files[idx]
+                if start <= page_base <= end:
+                    offset = page_base - start
+                    available = end - page_base + 1
+                    page_read_len = min(cache_size, available)
+                    fd.seek(offset)
+                    page_data = fd.read(page_read_len)
+            if not page_data:
+                return None
+            if len(page_data) < cache_size:
+                page_data += b'\x00' * (cache_size - len(page_data))
+            self.phys_cache_put(page_base, page_data)
+        actual_read_len = min(read_len, len(page_data) - page_offset)
+        if actual_read_len <= 0:
+            return None
+        return page_data[page_offset:page_offset + actual_read_len]
 
     def enable_multithread(self, thread_max_count, thread_name_prefix):
         if self.use_multithread:

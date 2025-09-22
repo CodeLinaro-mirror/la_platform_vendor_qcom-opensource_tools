@@ -617,3 +617,5 @@ if __name__ == '__main__':
     if options.reduceddump:
         print_out_str("Number of cache hits on full cache : {}".format(elfutil.cachehits))
         print_out_str("Number of cache misses on full cache : {}".format(elfutil.cachemiss))
+    if hasattr(dump, 'phys_cache'):
+        dump.phys_cache.print_stats("phys_cache")
