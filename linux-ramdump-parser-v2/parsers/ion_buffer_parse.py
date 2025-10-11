@@ -1,6 +1,5 @@
 """
 Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
-Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
 met:
@@ -26,8 +25,8 @@ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Changes from Qualcomm Innovation Center are provided under the following license:
-Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+Changes from Qualcomm Technologies, Inc. are provided under the following license
+Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 SPDX-License-Identifier: BSD-3-Clause-Clear
 """
 
@@ -105,7 +104,9 @@ def ion_buffer_info(self, ramdump, ion_info):
     size_offset = ramdump.field_offset('struct dma_buf', 'size')
     ops_offset = ramdump.field_offset('struct dma_buf', 'ops')
     file_offset = ramdump.field_offset('struct dma_buf', 'file')
-    f_count_offset = ramdump.field_offset('struct file', 'f_count')
+    f_count_offset = ramdump.field_offset('struct file', 'f_ref')
+    if f_count_offset is None:
+        f_count_offset = ramdump.field_offset('struct file', 'f_count')
     name_offset = ramdump.field_offset('struct dma_buf', 'buf_name')
     if name_offset is None:
         name_offset = ramdump.field_offset('struct dma_buf', 'name')
@@ -569,6 +570,8 @@ class DumpIonBuffer(RamParser):
     def __init__(self, *args):
         super(DumpIonBuffer, self).__init__(*args)
         self.timekeeper = self.ramdump.address_of('shadow_timekeeper')
+        if self.timekeeper is None:
+            self.timekeeper = self.ramdump.address_of('tk_core.shadow_timekeeper')
         self.files_offset = self.ramdump.field_offset(
                                      'struct task_struct', 'files')
         self.fdt_offset = self.ramdump.field_offset(
