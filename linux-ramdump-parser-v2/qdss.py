@@ -1538,4 +1538,4 @@ class QDSSDump():
         self.print_dbgui_registers(ram_dump)
         self.print_all_etm_register(ram_dump)
         self.parse_qdss_component_atid(ram_dump)
-        self.parse_qdss_component(ram_dump)
+        #self.parse_qdss_component(ram_dump)
