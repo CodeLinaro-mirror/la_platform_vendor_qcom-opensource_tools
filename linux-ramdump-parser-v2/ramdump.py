@@ -2580,20 +2580,21 @@ class RamDump():
                 self.module_table.add_entry(mod_tbl_ent)
         self.dump_mod_text_address(self.ko_text_address_dict)
 
-    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_dict):
-        name_index = [s for s in ko_file_dict.keys() if mod_tbl_ent.name in s]
-        if len(name_index) == 0:
-            print_out_str('!! Object not found for {}'.format(mod_tbl_ent.name))
-            return
+    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_dict, ko_required):
+        ko_path = ko_file_dict.get(mod_tbl_ent.name)
+        if not ko_path:
+            name_index = [s for s in ko_file_dict.keys() if mod_tbl_ent.name in s]
+            if len(name_index) == 1:
+                temp_data = ko_file_dict[name_index[0]]
+                del ko_file_dict[name_index[0]]
+                ko_file_dict[mod_tbl_ent.name] = temp_data
+                print_out_str(f'!! Object renamed to {mod_tbl_ent.name} from {name_index[0]}')
 
-        if mod_tbl_ent.name not in ko_file_dict and name_index[0] in ko_file_dict:
-            temp_data = ko_file_dict[name_index[0]]
-            del ko_file_dict[name_index[0]]
-            ko_file_dict[mod_tbl_ent.name] = temp_data
-        if not mod_tbl_ent.set_sym_path(ko_file_dict[mod_tbl_ent.name]):
-            return
+        ko_path = ko_file_dict.get(mod_tbl_ent.name)
+        if ko_path:
+            mod_tbl_ent.set_sym_path(ko_path)
 
-        if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
+        if not ko_required:
             symtab_offset = self.field_offset('struct mod_kallsyms', 'symtab')
             num_symtab_offset = self.field_offset('struct mod_kallsyms', 'num_symtab')
             strtab_offset = self.field_offset('struct mod_kallsyms', 'strtab')
@@ -2646,7 +2647,7 @@ class RamDump():
             mod_tbl_ent.kallsyms_table.sort()
             if self.dump_module_kallsyms:
                 self.dump_mod_kallsyms_sym_table(mod_tbl_ent.name, mod_tbl_ent.kallsyms_table)
-        else:
+        elif mod_tbl_ent.get_sym_path():
             args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
             p = subprocess.run(args, stdout=subprocess.PIPE)
             symbols = p.stdout.decode().splitlines()
@@ -2659,6 +2660,11 @@ class RamDump():
             mod_tbl_ent.sym_lookup_table.sort()
             if self.dump_module_symbol_table:
                 self.dump_mod_sym_table(mod_tbl_ent.name, mod_tbl_ent.sym_lookup_table)
+        else:
+            #Either CONFIG_KALLSYMS is not defined or the .ko file is unavailable.
+            print_out_str('!! Object not found for {}'.format(mod_tbl_ent.name))
+            return
+        return
 
     def dump_mod_text_address(self, mod_address_dict):
         text_dump_file = self.open_file('mod_text_address'+'.txt')
@@ -2694,11 +2700,12 @@ class RamDump():
             return False
 
     def parse_module_symbols(self):
+        ko_required = not self.is_config_defined("CONFIG_KALLSYMS") or self.minidump
         for mod_tbl_ent in self.module_table.module_table:
             if mod_tbl_ent.name is None:
                 print_out_str('!! Object name not extracted properly..checking next!!')
                 continue
-            self.parse_symbols_of_one_module(mod_tbl_ent, self.ko_file_dict)
+            self.parse_symbols_of_one_module(mod_tbl_ent, self.ko_file_dict, ko_required)
 
     def add_symbols_to_global_lookup_table(self):
         if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
