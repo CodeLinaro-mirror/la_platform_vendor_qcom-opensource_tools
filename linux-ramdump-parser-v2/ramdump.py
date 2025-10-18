@@ -2814,6 +2814,29 @@ class RamDump():
                 except gdbmi.GdbMIException:
                     pass
 
+    def address_of_symbol_from_file(self, symbol, file_name):
+
+        """Returns the address of a symbol belonging
+        to a specific file
+
+        :param symbol: name of the symbol.
+        :type symbol: str
+
+        :param file_name: name of the file
+        :type file_name: str
+
+        :return: address value
+
+        """
+        try:
+            return self.gdbmi.address_of_symbol_from_file(symbol, file_name)
+        except gdbmi.GdbMIException:
+            if self.hyp:
+                try:
+                    return self.gdbmi_hyp.address_of(symbol)
+                except gdbmi.GdbMIException:
+                    pass
+
     def symbol_at(self, addr):
         """
         Function to return symbol using gdbmi.
@@ -2912,6 +2935,21 @@ class RamDump():
             return self.gdbmi.type_of(symbol)
         except gdbmi.GdbMIException:
             pass
+
+    def set_priority_namespace(self, filename):
+        """
+            Set specific file as priority namespace for symbol identification
+        """
+        try:
+            self.gdbmi.set_priority_namespace(filename)
+        except gdbmi.GdbMIException:
+            return
+
+        #invalidate cached data
+        self.cached_data['addrtosym'] = dict()
+        self.cached_data['addressof'] = dict()
+        self.cached_data['fieldoffset'] = dict()
+        self.cached_data['sizeof'] = dict()
 
     def field_offset(self, the_type, field):
         cached_data = self.cached_data['fieldoffset']
