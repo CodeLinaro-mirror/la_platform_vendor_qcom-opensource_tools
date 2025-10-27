@@ -424,6 +424,8 @@ class QDSSDump():
             bottom_delta_read = False
             while continue_looping:
                 entry = ram_dump.read_u32(start, False)
+                if start == dbaddr and entry is None:
+                    return False
                 blk = (entry >> 4) << 12
                 if (entry & 0x3) == 3:
                     start = blk
@@ -462,6 +464,8 @@ class QDSSDump():
         else:
             while continue_looping:
                 entry = ram_dump.read_u32(start, False)
+                if start == dbaddr and entry is None:
+                    return False
                 blk = (entry >> 4) << 12
                 if (entry & 0x3) == 3:
                     start = blk
@@ -475,6 +479,7 @@ class QDSSDump():
                 else:
                     break
                 tmc_etr.write(ram_dump.read_physical(it[0], len(it)))
+        return True
 
     def dump_etr_iova(self, start, size, ram_dump, tmc_etr, collapsed_mapping):
         pyh_start = None;
@@ -570,7 +575,9 @@ class QDSSDump():
 
             if ((axictl >> 7) & 0x1) == 1:
                 print_out_str('Scatter gather memory type was selected for TMC ETR')
-                self.read_sg_data(dbaddr, sts, rwpval, ram_dump, tmc_etr)
+                if self.read_sg_data(dbaddr, sts, rwpval, ram_dump, tmc_etr) == False:
+                    print_out_str('Try virtual address for Scatter gather mode for TMC ETR')
+                    self.read_data_iova(dbaddr, rsz, sts, rwpval, ram_dump, tmc_etr)
             else:
                 if self.read_data_iova(dbaddr, rsz, sts, rwpval, ram_dump, tmc_etr) == False:
                     print_out_str('Contiguous memory type was selected for TMC ETR')
@@ -1538,4 +1545,4 @@ class QDSSDump():
         self.print_dbgui_registers(ram_dump)
         self.print_all_etm_register(ram_dump)
         self.parse_qdss_component_atid(ram_dump)
-        self.parse_qdss_component(ram_dump)
+        #self.parse_qdss_component(ram_dump)
