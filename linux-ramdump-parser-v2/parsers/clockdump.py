@@ -92,6 +92,12 @@ class ClockDumps(RamParser):
         else:
             cur_level = "NULL"
 
+        if devid == None:
+            devid = "NULL"
+
+        if conid == None:
+            conid = "NULL"
+
         output = "{0:40} {1:<25} {2:20} {3:<2}/ {4:<17} {5:<25} {6:<10} v.v (struct clk *)0x{7:<20x}\n".format(
             dbg_name, devid, conid, count, prepare_count, rate, cur_level, clk)
 
@@ -314,6 +320,29 @@ class ClockDumps(RamParser):
                 break
             self.dump_clock(clk_core, clk_name)
 
+    def print_clk_rpmh(self, data):
+        size = self.ramdump.read_structure_field(
+                        data, 'struct clk_rpmh_desc', 'num_clks')
+        clks = self.ramdump.read_structure_field(
+                        data, 'struct clk_rpmh_desc', 'clks')
+        sizeof_clk_hw = self.ramdump.sizeof('struct clk_hw *')
+        counter = 0
+        while counter < size:
+            clk = self.ramdump.read_word(clks +
+                                 (sizeof_clk_hw * counter))
+            clk_core = self.ramdump.read_structure_field(
+                                clk, 'struct clk_hw', 'core')
+            if clk_core == 0 or clk_core is None:
+                counter = counter + 1
+                continue
+            clk_name_addr = self.ramdump.read_structure_field(
+                                clk_core, 'struct clk_core', 'name')
+            clk_name = self.ramdump.read_cstring(clk_name_addr, 48)
+            if (clk_name == 0 or clk_name == None):
+                break
+            self.dump_clock(clk_core, clk_name)
+            counter = counter + 1
+
     def clk_providers_walker(self, node):
         data_address = node + self.ramdump.field_offset(
                                     'struct of_clk_provider', 'data')
@@ -334,13 +363,16 @@ class ClockDumps(RamParser):
             elif "of_clk_hw_virtio_get" in getfunchw[0]:
                 self.print_clk_virtio(data)
                 return
+            elif "of_clk_rpmh_hw_get" in getfunchw[0]:
+                self.print_clk_rpmh(data)
+                return
             else:
                 return
 
         getfunc = self.ramdump.unwind_lookup(getfunc)
         if "of_clk_src_simple_get" in getfunc[0]:
             self.print_clk_simple(data)
-        elif self.ramdump.is_config_defined('CONFIG_COMMON_CLK_MSM'):
+        elif self.ramdump.is_config_defined('CONFIG_COMMON_CLK_MSM') or 'of_clk_src_get' in getfunc[0]:
             self.print_clk_of_msm_provider_data(data)
         else:
             self.print_clk_onecell_data(data)
