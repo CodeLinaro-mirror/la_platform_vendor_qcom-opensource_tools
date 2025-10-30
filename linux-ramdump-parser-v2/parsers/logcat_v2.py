@@ -1,4 +1,5 @@
 # Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -121,9 +122,6 @@ def parse_logcat_v2(ramdump):
 
     offset_comm = ramdump.field_offset('struct task_struct', 'comm')
     mm_offset = ramdump.field_offset('struct task_struct', 'mm')
-    f_path_offset = ramdump.field_offset('struct file', 'f_path')
-    dentry_offset = ramdump.field_offset('struct path', 'dentry')
-    d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
 
     if ramdump.arm64:
         addr_length    = 8
