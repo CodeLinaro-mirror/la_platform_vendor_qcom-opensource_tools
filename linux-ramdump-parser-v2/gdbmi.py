@@ -335,6 +335,24 @@ class GdbMI(object):
         else:
             return addr
 
+    def address_of_symbol_from_file(self, symbol, file_name):
+        """Returns the address of the specified symbol, from a specific
+        driver file. Must skip cache to fix the case where the same
+        symbol is defined by 2 files"""
+
+        cmd = 'print /x &\'{0}\'::{1}'.format(file_name, symbol)
+        result = self._run(cmd, skip_cache=True, save_in_cache=False)
+        if len(result.lines) != 1:
+            raise GdbMIException(
+                cmd, '\n'.join(result.lines + result.oob_lines))
+
+        result = result.lines[0]
+        addr =  int(result.split(' ')[-1], 16) + self.kaslr_offset + self.gdbmi_aslr_offset
+        if (addr >> 64):
+            return addr - self.gdbmi_aslr_offset
+        else:
+            return addr
+
     def get_symbol_info(self, address):
         """Returns a GdbSymbol representing the nearest symbol found at
         ``address``."""
@@ -443,6 +461,14 @@ class GdbMI(object):
     def read_elf_memory(self, start, end, temp_file):
         self._run("dump binary memory {} {} {}".format(temp_file.name, start, end))
         return temp_file.read()
+
+    def set_priority_namespace(self, filename):
+        """Set specific file as priority namespace for symbol identification"""
+        self._run("list \'{0}\':1".format(filename), skip_cache=True, save_in_cache=False)
+
+        """ Clear all cached results with other namespace """
+        self._cache = dict()
+        return None
 
 
 if __name__ == '__main__':

@@ -305,6 +305,7 @@ if __name__ == '__main__':
         default_list.append("ipc_logging_cn")
         default_list.append("VaMinidump")
         default_list.append("SoftirqStat")
+        default_list.append("DumpTasks")
 
     if options.everything:
         everything_exclusion_list.append("ROData")
