@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -40,6 +40,7 @@ from register import Register
 from collections import namedtuple
 import shlex
 import glob
+from linux_list import ListWalker
 
 SP = 13
 LR = 14
@@ -822,6 +823,7 @@ class RamDump():
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
         self.dump = None
+        self.zram_parser_override = options.zram_parser_override
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -2409,16 +2411,29 @@ class RamDump():
         else:
             module_core_offset = self.field_offset('struct module', 'module_core')
 
-        if self.field_offset('struct module_sect_attr', 'battr') is not None:
+        is_attr_new = False
+        if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None:
+            is_attr_new = True
+
+        if is_attr_new:
+            sect_name_offset = self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
+        elif self.field_offset('struct module_sect_attr', 'battr') is not None:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'battr') + self.field_offset('struct bin_attribute', 'attr') + self.field_offset('struct attribute', 'name')
         else:
             sect_name_offset = self.field_offset('struct module_sect_attr', 'name')
 
         kallsyms_offset = self.field_offset('struct module', 'kallsyms')
-        sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
-        nsections_offset = self.field_offset('struct module_sect_attrs', 'nsections')
+        if is_attr_new:
+            bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs_new')
+            sect_addr_offset = self.field_offset('struct bin_attribute', 'private')
+        else:
+            sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
+            nsections_offset = self.field_offset('struct module_sect_attrs', 'nsections')
         section_attrs_offset = self.field_offset('struct module_sect_attrs', 'attrs')
-        section_attr_size = self.sizeof('struct module_sect_attr')
+        if is_attr_new:
+            section_attr_size = self.sizeof('struct bin_attribute')
+        else:
+            section_attr_size = self.sizeof('struct module_sect_attr')
         mod_sect_attrs_offset = self.field_offset('struct module', 'sect_attrs')
         mod_state_offset = self.field_offset('struct module', 'state')
         mod_attr_grp_name_offest = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'name')
@@ -2454,12 +2469,20 @@ class RamDump():
                 print_out_str('Unexpected variation in module section group name, skipping loading sections for {}'.format(mod_tbl_ent.name))
                 next_list_ent = self.read_pointer(next_list_ent + next_offset)
                 continue
-            for i in range(0, self.read_u32(mod_sect_attrs + nsections_offset)):
-                # attr_ptr = module.sect_attrs.attrs[i]
+
+            if is_attr_new:
+                nsections = 0
+                attr_array_ptr = self.read_word(mod_sect_attrs + bin_attrs_new_offset)
+                attr_ptr = self.read_word(attr_array_ptr)
+                while (attr_ptr != 0) and (nsections < 100):
+                    nsections += 1
+                    attr_ptr = self.read_word(attr_array_ptr+(nsections * 8))
+            else:
+                nsections = self.read_u32(mod_sect_attrs + nsections_offset)
+
+            for i in range(0, nsections):
                 attr_ptr = mod_sect_attrs + section_attrs_offset + (i * section_attr_size)
-                # sect_name = attr_ptr.battr.attr.name (for 5.4+)
                 sect_name = self.read_cstring(self.read_pointer(attr_ptr + sect_name_offset))
-                # sect_addr = attr_ptr.address
                 sect_addr = self.read_word(attr_ptr + sect_addr_offset)
                 # https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/gdb/linux/symbols.py?h=v5.14#n102
                 if sect_name not in ['.data', '.data..read_mostly', '.rodata', '.bss',
@@ -2557,20 +2580,21 @@ class RamDump():
                 self.module_table.add_entry(mod_tbl_ent)
         self.dump_mod_text_address(self.ko_text_address_dict)
 
-    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_dict):
-        name_index = [s for s in ko_file_dict.keys() if mod_tbl_ent.name in s]
-        if len(name_index) == 0:
-            print_out_str('!! Object not found for {}'.format(mod_tbl_ent.name))
-            return
+    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_dict, ko_required):
+        ko_path = ko_file_dict.get(mod_tbl_ent.name)
+        if not ko_path:
+            name_index = [s for s in ko_file_dict.keys() if mod_tbl_ent.name in s]
+            if len(name_index) == 1:
+                temp_data = ko_file_dict[name_index[0]]
+                del ko_file_dict[name_index[0]]
+                ko_file_dict[mod_tbl_ent.name] = temp_data
+                print_out_str(f'!! Object renamed to {mod_tbl_ent.name} from {name_index[0]}')
 
-        if mod_tbl_ent.name not in ko_file_dict and name_index[0] in ko_file_dict:
-            temp_data = ko_file_dict[name_index[0]]
-            del ko_file_dict[name_index[0]]
-            ko_file_dict[mod_tbl_ent.name] = temp_data
-        if not mod_tbl_ent.set_sym_path(ko_file_dict[mod_tbl_ent.name]):
-            return
+        ko_path = ko_file_dict.get(mod_tbl_ent.name)
+        if ko_path:
+            mod_tbl_ent.set_sym_path(ko_path)
 
-        if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
+        if not ko_required:
             symtab_offset = self.field_offset('struct mod_kallsyms', 'symtab')
             num_symtab_offset = self.field_offset('struct mod_kallsyms', 'num_symtab')
             strtab_offset = self.field_offset('struct mod_kallsyms', 'strtab')
@@ -2623,7 +2647,7 @@ class RamDump():
             mod_tbl_ent.kallsyms_table.sort()
             if self.dump_module_kallsyms:
                 self.dump_mod_kallsyms_sym_table(mod_tbl_ent.name, mod_tbl_ent.kallsyms_table)
-        else:
+        elif mod_tbl_ent.get_sym_path():
             args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
             p = subprocess.run(args, stdout=subprocess.PIPE)
             symbols = p.stdout.decode().splitlines()
@@ -2636,6 +2660,11 @@ class RamDump():
             mod_tbl_ent.sym_lookup_table.sort()
             if self.dump_module_symbol_table:
                 self.dump_mod_sym_table(mod_tbl_ent.name, mod_tbl_ent.sym_lookup_table)
+        else:
+            #Either CONFIG_KALLSYMS is not defined or the .ko file is unavailable.
+            print_out_str('!! Object not found for {}'.format(mod_tbl_ent.name))
+            return
+        return
 
     def dump_mod_text_address(self, mod_address_dict):
         text_dump_file = self.open_file('mod_text_address'+'.txt')
@@ -2671,11 +2700,12 @@ class RamDump():
             return False
 
     def parse_module_symbols(self):
+        ko_required = not self.is_config_defined("CONFIG_KALLSYMS") or self.minidump
         for mod_tbl_ent in self.module_table.module_table:
             if mod_tbl_ent.name is None:
                 print_out_str('!! Object name not extracted properly..checking next!!')
                 continue
-            self.parse_symbols_of_one_module(mod_tbl_ent, self.ko_file_dict)
+            self.parse_symbols_of_one_module(mod_tbl_ent, self.ko_file_dict, ko_required)
 
     def add_symbols_to_global_lookup_table(self):
         if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
@@ -2784,6 +2814,29 @@ class RamDump():
                 except gdbmi.GdbMIException:
                     pass
 
+    def address_of_symbol_from_file(self, symbol, file_name):
+
+        """Returns the address of a symbol belonging
+        to a specific file
+
+        :param symbol: name of the symbol.
+        :type symbol: str
+
+        :param file_name: name of the file
+        :type file_name: str
+
+        :return: address value
+
+        """
+        try:
+            return self.gdbmi.address_of_symbol_from_file(symbol, file_name)
+        except gdbmi.GdbMIException:
+            if self.hyp:
+                try:
+                    return self.gdbmi_hyp.address_of(symbol)
+                except gdbmi.GdbMIException:
+                    pass
+
     def symbol_at(self, addr):
         """
         Function to return symbol using gdbmi.
@@ -2883,6 +2936,21 @@ class RamDump():
         except gdbmi.GdbMIException:
             pass
 
+    def set_priority_namespace(self, filename):
+        """
+            Set specific file as priority namespace for symbol identification
+        """
+        try:
+            self.gdbmi.set_priority_namespace(filename)
+        except gdbmi.GdbMIException:
+            return
+
+        #invalidate cached data
+        self.cached_data['addrtosym'] = dict()
+        self.cached_data['addressof'] = dict()
+        self.cached_data['fieldoffset'] = dict()
+        self.cached_data['sizeof'] = dict()
+
     def field_offset(self, the_type, field):
         cached_data = self.cached_data['fieldoffset']
         if the_type in cached_data:
@@ -2967,14 +3035,15 @@ class RamDump():
 
     def setup_module_layout(self):
         mod_list = self.address_of('modules')
-        next_offset = self.field_offset('struct list_head', 'next')
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
 
-        next_list_ent = self.read_pointer(mod_list + next_offset)
-        while next_list_ent and next_list_ent != mod_list:
-            mod = next_list_ent - list_offset
+        list_walker = ListWalker(self, mod_list, list_offset)
+        for mod in list_walker:
             mod_name = self.read_cstring(mod + name_offset)
+            if mod_name == None:
+                continue
+
             ent_array = []
             # setup module init layout
             if self.kernel_version >= (6, 4, 0):
@@ -3015,7 +3084,6 @@ class RamDump():
                 ent_array.append((base, size))
 
             self.module_layout_dict[mod_name] = ent_array
-            next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
     def validate_module_sym_addr(self, sym_addr, mod_name):
         """
@@ -3122,6 +3190,9 @@ class RamDump():
             return (table[low][1] + desc, size)
 
     def unwind_lookup(self, addr, symbol_size=0):
+        if addr == None:
+            return None
+
         r = self.__unwind_lookup(addr, symbol_size)
         if r is not None:
             return r
