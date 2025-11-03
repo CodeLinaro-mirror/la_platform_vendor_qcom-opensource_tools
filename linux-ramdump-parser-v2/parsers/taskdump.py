@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2013, 2015, 2017-2020,2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -84,6 +84,7 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
     offset_pid = ramdump.field_offset('struct task_struct', 'pid')
     offset_tgid = ramdump.field_offset('struct task_struct', 'tgid')
     offset_stack = ramdump.field_offset('struct task_struct', 'stack')
+    offset_real_parent = ramdump.field_offset('struct task_struct', 'real_parent')
     if ramdump.kernel_version >= (5, 14, 0):
         offset_state = ramdump.field_offset('struct task_struct', '__state')
     else:
@@ -108,6 +109,10 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
 
     offset_exit_state = ramdump.field_offset(
         'struct task_struct', 'exit_state')
+    task_ppid = -1
+    real_parent = ramdump.read_word(task_addr + offset_real_parent)
+    if real_parent:
+        task_ppid = ramdump.read_int(real_parent + offset_pid)
     first = 0
     task_on_cpu = 0
     for next_thread_start in ramdump.for_each_thread(task_addr):
@@ -237,8 +242,9 @@ def dump_thread_group(ramdump, task_addr, task_out, taskhighlight_out, check_for
                 thread_line = ' ' + thread_line
 
             if not first:
-                task_out.write('Process: {0}, [affinity: 0x{1:x}] cpu: {2} pid: {3} start: 0x{4:x}\n'.format(
-                    thread_task_name, thread_task_affine, task_cpu, thread_task_pid, next_thread_start))
+
+                task_out.write('Process: {0}, [affinity: 0x{1:x}] cpu: {2} pid: {3} ppid: {4} start: 0x{5:x}\n'.format(
+                    thread_task_name, thread_task_affine, task_cpu, thread_task_pid, task_ppid, next_thread_start))
                 task_out.write(
                     '=====================================================\n')
                 first = 1

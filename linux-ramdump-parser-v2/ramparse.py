@@ -116,8 +116,6 @@ def prepare_vttbr_for_svm(options, dump):
 
     this method was used to generate corevcpu with host vmlinux and other host arguments
     '''
-    if has_debug_info(objdump_path, options.hyp):
-        return
 
     for _file in VCPU_CMM_FILES:
         ## find in dump folder
@@ -265,6 +263,11 @@ if __name__ == '__main__':
     parser.add_option('', '--skip_TLB_Cache_parse', action='store_true', help='Skip parsing TLB Cache Dumps in parse_debug_image')
     parser.add_option('--iommu-pg-table-format', action='store', choices=['fastrpc', 'default'],
                       default='default')
+    parser.add_option("--zram_parser_override", type='string', dest="zram_parser_override",
+                      help="""
+                      Specify a separate program to parse ZRAM-compressed pages with. The program must take in
+                      compressed input through stdin and output decompressed output through stdout.
+                      """)
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
