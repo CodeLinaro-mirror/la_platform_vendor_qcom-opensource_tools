@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -95,7 +95,10 @@ class RunQueues(RamParser):
     def print_cgroup_state(self, status, se_addr):
         se_offset = self.ramdump.field_offset('struct task_struct', 'se')
         cfs_nr_running_offset = self.ramdump.field_offset(
-            'struct cfs_rq', 'nr_running')
+            'struct cfs_rq', 'nr_queued')
+        if cfs_nr_running_offset is None:
+            cfs_nr_running_offset = self.ramdump.field_offset(
+                'struct cfs_rq', 'nr_running')
         my_q_offset = self.ramdump.field_offset('struct sched_entity', 'my_q')
 
         if se_addr == 0 or my_q_offset is None:
@@ -321,6 +324,13 @@ class RunQueues(RamParser):
         print_out_str(
             '======================= RUNQUEUE STATE ============================')
         if self.ramdump.minidump:
+            runqueue_section = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KRUNQUEUE'), None)
+            if runqueue_section:
+                runqueue_addr = int(runqueue_section.header['sh_addr'])
+                size = int(runqueue_section.header['sh_size'])
+                runqueue_buf = self.ramdump.read_binarystring(runqueue_addr, size)
+                print_out_str(runqueue_buf.decode('utf-8'))
+
             self.print_md_latest_call_stack()
             self.print_irq_context()
             return
@@ -333,7 +343,10 @@ class RunQueues(RamParser):
         cfs_rq_offset = self.ramdump.field_offset('struct rq', 'cfs')
         rt_rq_offset = self.ramdump.field_offset('struct rq', 'rt')
         cfs_nr_running_offset = self.ramdump.field_offset(
-            'struct cfs_rq', 'nr_running')
+            'struct cfs_rq', 'nr_queued')
+        if cfs_nr_running_offset is None:
+            cfs_nr_running_offset = self.ramdump.field_offset(
+                'struct cfs_rq', 'nr_running')
         rt_nr_running_offset = self.ramdump.field_offset(
             'struct rt_rq', 'rt_nr_running')
 

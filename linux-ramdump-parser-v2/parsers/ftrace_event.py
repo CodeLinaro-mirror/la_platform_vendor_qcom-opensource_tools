@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -104,7 +104,7 @@ class FtraceParser_Event(object):
         self.rb_event_typelen_offset = self.ramdump.field_offset(
             'struct ring_buffer_event', 'type_len')
         self.trace_entry_type_offset = self.ramdump.field_offset('struct trace_entry ', 'type')
-        self.pid_max = self.ramdump.read_int("pid_max")
+        self.pid_max = 0x8000 if self.ramdump.get_config_val("CONFIG_BASE_SMALL") is None else 0x1000
         self.map_cmdline_to_pid_offset = self.ramdump.field_offset(
             'struct saved_cmdlines_buffer', 'map_cmdline_to_pid')
         self.saved_cmdlines_offset = self.ramdump.field_offset(
