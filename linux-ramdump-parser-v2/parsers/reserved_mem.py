@@ -1,5 +1,5 @@
 # Copyright (c) 2018-2020,2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -145,7 +145,10 @@ def do_parse_qsee_log(ramdump):
 @register_parser('--print-reserved-mem', 'Print reserved memory info ')
 class ReservedMem(RamParser):
     def get_reserved_mem(self, ramdump, list_memory_area):
-        reserved_mem_addr = ramdump.address_of('reserved_mem')
+        if "reserved_mem *" in ramdump.type_of('reserved_mem'):
+            reserved_mem_addr = ramdump.read_pointer('reserved_mem')
+        else:
+            reserved_mem_addr = ramdump.address_of('reserved_mem')
         reserved_mem_count_addr = ramdump.address_of('reserved_mem_count')
         reserved_mem_count = ramdump.read_int(reserved_mem_count_addr)
         base_offset = ramdump.field_offset('struct reserved_mem', 'base')
@@ -185,12 +188,14 @@ class ReservedMem(RamParser):
             list_memory_area.append(memory_area_instance)
 
     def get_cma_areas(self, ramdump, list_memory_area):
+        base_pfn_offset = ramdump.field_offset('struct cma', 'base_pfn')
+        if base_pfn_offset is None:
+            base_pfn_offset = ramdump.field_offset('struct cma', 'ranges') + ramdump.field_offset('struct cma_memrange', 'base_pfn')
         cma_area_count = ramdump.read_u32('cma_area_count')
         cma_area_base_addr = ramdump.address_of('cma_areas')
         for cma_index in range(0, cma_area_count):
             cma_area = ramdump.array_index(cma_area_base_addr, 'struct cma', cma_index)
-            base_pfn = ramdump.read_structure_field(
-                cma_area, 'struct cma', 'base_pfn')
+            base_pfn = ramdump.read_word(cma_area + base_pfn_offset)
             cma_size = ramdump.read_structure_field(
                 cma_area, 'struct cma', 'count')
             if (ramdump.kernel_version >= (5, 10, 0)):
@@ -200,7 +205,7 @@ class ReservedMem(RamParser):
             else:
                 name_addr = ramdump.read_structure_field(cma_area, 'struct cma', 'name')
                 name = ramdump.read_cstring(name_addr, 48)
-            memory_area_instance = memory_area(name, base_pfn << 12, cma_size << 12)
+            memory_area_instance = memory_area(name, base_pfn << ramdump.page_shift, cma_size << ramdump.page_shift)
 
             if any(x.base == memory_area_instance.base for x in list_memory_area) == False:
                 list_memory_area.append(memory_area_instance)
