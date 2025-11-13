@@ -324,6 +324,13 @@ class RunQueues(RamParser):
         print_out_str(
             '======================= RUNQUEUE STATE ============================')
         if self.ramdump.minidump:
+            runqueue_section = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KRUNQUEUE'), None)
+            if runqueue_section:
+                runqueue_addr = int(runqueue_section.header['sh_addr'])
+                size = int(runqueue_section.header['sh_size'])
+                runqueue_buf = self.ramdump.read_binarystring(runqueue_addr, size)
+                print_out_str(runqueue_buf.decode('utf-8'))
+
             self.print_md_latest_call_stack()
             self.print_irq_context()
             return
