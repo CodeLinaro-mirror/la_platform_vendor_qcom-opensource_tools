@@ -146,7 +146,7 @@ def prepare_vttbr_for_svm(options, dump):
     print_out_str("\n######### Using host vmlinux firstly to determine vttbr end!!!##########\n")
 
 if __name__ == '__main__':
-    starttime = time.time()
+    starttime = time.perf_counter()
     usage = 'usage: %prog [options to print]. Run with --help for more details'
     parser = OptionParser(usage)
     parser.add_option('', '--logcat_limit_time_sec',
@@ -305,6 +305,7 @@ if __name__ == '__main__':
         default_list.append("ipc_logging_cn")
         default_list.append("VaMinidump")
         default_list.append("SoftirqStat")
+        default_list.append("DumpTasks")
 
     if options.everything:
         everything_exclusion_list.append("ROData")
@@ -565,8 +566,8 @@ if __name__ == '__main__':
     if options.timeout:
         from func_timeout import func_timeout, FunctionTimedOut
 
-    print_out_str("Time taken to setup the subparsers run : {}".format(time.time()-starttime))
-    starttime = time.time()
+    print_out_str("Time taken to setup the subparsers run : {:.6f}".format(time.perf_counter()-starttime))
+    starttime = time.perf_counter()
     for i,p in enumerate(parsers_to_run):
         if options.everything:
             if p.cls.__name__ in everything_exclusion_list:
@@ -583,8 +584,8 @@ if __name__ == '__main__':
 
         print("    [%d/%d] %s ... " %
                          (i + 1, len(parsers_to_run), p.longopt), end='', flush=True)
-        before = time.time()
-        print_out_str("start time {0}".format(before))
+        before = time.perf_counter()
+        print_out_str("start time {:.6f}".format(before))
         with print_out_section(p.cls.__name__):
             try:
                 if options.timeout:
@@ -602,9 +603,9 @@ if __name__ == '__main__':
                     print("FAILED! ")
                 else:
                     raise
-        after = time.time()
-        print_out_str("end time {0} time cost {1} for {2}".format(after, (after - before), p.cls.__name__))
-        print("%fs" % (after - before),  flush=True)
+        after = time.perf_counter()
+        print_out_str("end time {:.6f} time cost {:.6f} for {}".format(after, (after - before), p.cls.__name__))
+        print("{:.6f}s".format(after - before),  flush=True)
         flush_outfile()
 
     sys.stderr.write("\n")
@@ -613,7 +614,9 @@ if __name__ == '__main__':
         dump.create_t32_launcher()
 
     dump.gdbmi.close()
-    print_out_str("Time taken to complete ramparser subscripts : {}".format(time.time()-starttime))
+    print_out_str("Time taken to complete ramparser subscripts : {:.6f}".format(time.perf_counter()-starttime))
     if options.reduceddump:
         print_out_str("Number of cache hits on full cache : {}".format(elfutil.cachehits))
         print_out_str("Number of cache misses on full cache : {}".format(elfutil.cachemiss))
+    if hasattr(dump, 'phys_cache'):
+        dump.phys_cache.print_stats("phys_cache")

@@ -620,8 +620,18 @@ def do_dump_cmdline(ramdump):
 class DumpTasks(RamParser):
 
     def parse(self):
-        do_dump_stacks(self.ramdump, 0)
-        do_dump_cmdline(self.ramdump)
+        if self.ramdump.minidump:
+            task_stack_section = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KTASK_STACK'), None)
+            if task_stack_section:
+                task_stack_addr = int(task_stack_section.header['sh_addr'])
+                size = int(task_stack_section.header['sh_size'])
+                task_stack_buf = self.ramdump.read_binarystring(task_stack_addr, size)
+                task_out = self.ramdump.open_file('tasks.txt')
+                task_out.write(task_stack_buf.decode('utf-8'))
+                task_out.close()
+        else:
+            do_dump_stacks(self.ramdump, 0)
+            do_dump_cmdline(self.ramdump)
 
 @register_parser('--print-tasks-timestamps', 'Print all the task sched stats per core sorted on arrival time', shortopt='-T')
 class DumpTasksTimeStamps(RamParser):
