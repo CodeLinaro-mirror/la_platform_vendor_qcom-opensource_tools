@@ -25,6 +25,10 @@ BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
 WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Changes from Qualcomm Innovation Center are provided under the following license:
+Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+SPDX-License-Identifier: BSD-3-Clause-Clear
 """
 
 from parser_util import register_parser, RamParser
@@ -175,9 +179,7 @@ class DumpVidc(RamParser):
         offset_core = self.ramdump.field_offset('struct msm_vidc_core', 'list')
 
         core_walker = llist.ListWalker(self.ramdump, head_core, offset_core)
-        if not core_walker.is_empty():
-            head_core = core_walker.next()
-            core_walker.walk(head_core,self.core_walker)
+        core_walker.walk(self.core_walker)
         self.vidc_info.close()
 
     def core_walker(self,head):
@@ -244,9 +246,7 @@ class DumpVidc(RamParser):
         offset_inst = self.ramdump.field_offset('struct msm_vidc_inst','list')
 
         inst_walker = llist.ListWalker(self.ramdump, head_inst, offset_inst)
-        if not inst_walker.is_empty():
-            head_inst = inst_walker.next()
-            inst_walker.walk(head_inst,self.inst_walker)
+        inst_walker.walk(self.inst_walker)
 
     def inst_walker(self,head):
         self.vidc_info.write('\n========INST STATS========\n')
@@ -663,10 +663,9 @@ class DumpVidc(RamParser):
         self.vidc_info.write('\nScratch Buffers:\n')
         self.vidc_info.write('='*40+'\n')
         if not(internal_buf_walker.is_empty()):
-            scratchbufs = internal_buf_walker.next()
             self.vidc_info.write('Type\t'.expandtabs(40))
             self.vidc_info.write('Device_Addr\tSize\tFlags\n'.expandtabs(10)+'-'*80+'\n')
-            internal_buf_walker.walk(scratchbufs,self.internal_buf_walker)
+            internal_buf_walker.walk(self.internal_buf_walker)
         else:
             self.vidc_info.write('NONE\n')
 
@@ -675,10 +674,9 @@ class DumpVidc(RamParser):
         self.vidc_info.write('\nPersist Buffers:\n')
         self.vidc_info.write('='*40+'\n')
         if not(internal_buf_walker.is_empty()) :
-            persistbufs = internal_buf_walker.next()
             self.vidc_info.write('Type\t'.expandtabs(40))
             self.vidc_info.write('Device_Addr\tSize\tFlags\n'.expandtabs(10)+'-'*80+'\n')
-            internal_buf_walker.walk(persistbufs,self.internal_buf_walker)
+            internal_buf_walker.walk(self.internal_buf_walker)
         else:
             self.vidc_info.write('NONE\n')
 
@@ -688,8 +686,7 @@ class DumpVidc(RamParser):
         self.vidc_info.write('\nPending Getpropq Buffers:\n')
         self.vidc_info.write('='*40+'\n')
         if not(getprop_buf_walker.is_empty()) :
-            pending_getpropq = getprop_buf_walker.next()
-            getprop_buf_walker.walk(pending_getpropq,self.getprop_buf_walker)
+            getprop_buf_walker.walk(self.getprop_buf_walker)
         else:
             self.vidc_info.write('NONE\n')
 
@@ -698,10 +695,9 @@ class DumpVidc(RamParser):
         self.vidc_info.write('\nOutput Buffers:\n')
         self.vidc_info.write('='*40+'\n')
         if not(internal_buf_walker.is_empty()) :
-            outputbufs = internal_buf_walker.next()
             self.vidc_info.write('Type\t'.expandtabs(40))
             self.vidc_info.write('Device_Addr\tSize\tFlags\n'.expandtabs(10)+'-'*80+'\n')
-            internal_buf_walker.walk(outputbufs,self.internal_buf_walker)
+            internal_buf_walker.walk(self.internal_buf_walker)
         else:
             self.vidc_info.write('NONE\n')
 
@@ -710,9 +706,8 @@ class DumpVidc(RamParser):
         self.vidc_info.write('\nReconstruction Buffers:\n')
         self.vidc_info.write('='*40+'\n')
         if not(recon_buf_walker.is_empty()) :
-            reconbufs = recon_buf_walker.next()
             self.vidc_info.write('Index\tCR\tCF\n'.expandtabs(10)+'-'*30+'\n')
-            recon_buf_walker.walk(reconbufs,self.recon_buf_walker)
+            recon_buf_walker.walk(self.recon_buf_walker)
         else:
             self.vidc_info.write('NONE\n')'''
 
@@ -721,11 +716,10 @@ class DumpVidc(RamParser):
         self.vidc_info.write('\nEOS Buffers:\n')
         self.vidc_info.write('='*40+'\n')
         if not(eos_buf_walker.is_empty()) :
-            eosbufs = eos_buf_walker.next()
             self.vidc_info.write('Type\t'.expandtabs(40))
             self.vidc_info.write('Device_Addr\tSize\tFlags\tRefCnt\tFd\tOffset\n'\
                                  .expandtabs(10)+'-'*120+'\n')
-            eos_buf_walker.walk(eosbufs,self.eos_buf_walker)
+            eos_buf_walker.walk(self.eos_buf_walker)
         else:
             self.vidc_info.write('NONE\n')
 
@@ -734,12 +728,11 @@ class DumpVidc(RamParser):
         self.vidc_info.write('\nRegistered Buffers:\n')
         self.vidc_info.write('='*40+'\n')
         if not(vidc_buf_walker.is_empty()) :
-            registeredbufs = vidc_buf_walker.next()
             self.vidc_info.write('Vb2_Idx\tPlane\t'.expandtabs(10))
             self.vidc_info.write('Type\t'.expandtabs(40))
             self.vidc_info.write('Device_Addr\tSize\tFlags\tRefCnt\tFd\tOffset\n'
                                  .expandtabs(10)+'-'*140+'\n')
-            vidc_buf_walker.walk(registeredbufs,self.vidc_buf_walker)
+            vidc_buf_walker.walk(self.vidc_buf_walker)
         else:
             self.vidc_info.write('NONE\n')
 

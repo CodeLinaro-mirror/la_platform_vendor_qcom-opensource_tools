@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2015, 2017 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2022-2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -11,7 +11,7 @@
 # GNU General Public License for more details.
 
 import re
-import linux_list
+import linux_list, linux_hlist
 from parser_util import register_parser, RamParser, cleanupString
 
 @register_parser('--print-workqueues', 'Print the state of the workqueues', shortopt='-q')
@@ -347,7 +347,7 @@ class Workqueues(RamParser):
         try:
             last_func_offset = self.ramdump.field_offset('struct worker', 'last_func')
             last_work = self.ramdump.read_word(worker_addr + last_func_offset)
-            last_func = self.ramdump.unwind_lookup(last_work)
+            last_func = self.ramdump.unwind_lookup(last_work)[0]
         except Exception as e:
             last_func='(Unknown)'
 
@@ -386,7 +386,7 @@ class Workqueues(RamParser):
             work_func_name, foo = self.ramdump.unwind_lookup(work_func_addr)
             line  = self.get_caller(work_func_addr)
             self.f.write(
-                '       Pending entry: v.v (struct work_struct)0x{0:x} {1}  {2}\n '.format(work, work_func_name, line))
+                '       Pending entry: v.v (struct work_struct)0x{0:x} {1}  {2}\n'.format(work, work_func_name, line))
         except:
             pass
 
@@ -406,44 +406,27 @@ class Workqueues(RamParser):
             'struct worker_pool', 'worklist')
 
         hash_size = 2 ** self.ramdump.gdbmi.get_value_of('BUSY_WORKER_HASH_ORDER')
-
-        s = '<'
-        if ram_dump.arm64:
-            pool_char = 'Q'
-        else:
-            pool_char = 'I'
-        for a in range(0, hash_size):
-            s = s + pool_char
-
         for i in ram_dump.iter_cpus():
-            busy_hash = []
-
             worker_pool = cpu_worker_pools_addr + ram_dump.per_cpu_offset(i)
             self.f.write('\nCPU {0}\n'.format(i))
             n_pools = self.ramdump.gdbmi.get_value_of('NR_STD_WORKER_POOLS')
             for k in range(0, n_pools):
                 self.f.write('pool {0}\n'.format(k))
                 worker_pool_i = worker_pool + k * worker_pool_size
-                busy_hashi = ram_dump.read_string(
-                    worker_pool_i + busy_hash_offset, s)
-                for a in busy_hashi:
-                    busy_hash.append(a)
-
-                for k in range(0, hash_size):
-                    next_busy_worker = busy_hash[k]
-                    if busy_hash[k] != 0:
-                        busy_list_walker = linux_list.ListWalker(ram_dump, next_busy_worker, work_hentry_offset)
-                        busy_list_walker.walk(next_busy_worker, self.walk_workers, 'BUSY')
+                for j in range(0, hash_size):
+                    busy_list = worker_pool_i + busy_hash_offset + j * ram_dump.sizeof('struct hlist_head')
+                    busy_list_walker = linux_hlist.hListWalker(ram_dump, busy_list, work_hentry_offset)
+                    busy_list_walker.walk(self.walk_workers, 'BUSY')
 
                 idle_list_addr = worker_pool_i + pool_idle_offset
-
                 idle_list_walker = linux_list.ListWalker(ram_dump, idle_list_addr, worker_entry_offset)
-                idle_list_walker.walk(self.ramdump.read_word(idle_list_addr), self.walk_workers, 'IDLE')
+                idle_list_walker.walk(self.walk_workers, 'IDLE')
 
                 worklist_addr = worker_pool_i + pending_work_offset
-
                 pending_list = linux_list.ListWalker(ram_dump, worklist_addr, work_entry_offset)
-                pending_list.walk(self.ramdump.read_word(worklist_addr), self.pending_list_walk)
+                if not pending_list.is_empty():
+                    self.f.write('pending works:\n')
+                pending_list.walk(self.pending_list_walk)
 
     def get_workqueues_func(self, workqueue_struct_base):
         name_offset = self.ramdump.field_offset('struct workqueue_struct', 'name')
@@ -460,13 +443,26 @@ class Workqueues(RamParser):
               % (workqueue_struct_base, name, flags, aList), file=self.f)
 
     def get_workqueues_list(self):
-        print("\n\n", file = self.f)
-        self.flags_array = {'WQ_UNBOUND':1<<1,'WQ_FREEZABLE':1 << 2,'WQ_MEM_RECLAIM':1 << 3,
-                            'WQ_HIGHPRI':1 << 4,'WQ_CPU_INTENSIVE':1 << 5,'WQ_SYSFS':1 << 6}
+        print("\n==========>workqueues", file = self.f)
+        self.flags_array = {
+                            'WQ_BH':              1 << 0,
+                            'WQ_UNBOUND':         1 << 1,
+                            'WQ_FREEZABLE':       1 << 2,
+                            'WQ_MEM_RECLAIM':     1 << 3,
+                            'WQ_HIGHPRI':         1 << 4,
+                            'WQ_CPU_INTENSIVE':   1 << 5,
+                            'WQ_SYSFS':           1 << 6,
+                            'WQ_POWER_EFFICIENT': 1 << 7,
+                            '__WQ_DESTROYING':    1 << 15,
+                            '__WQ_DRAINING':      1 << 16,
+                            '__WQ_ORDERED':       1 << 17,
+                            '__WQ_LEGACY':        1 << 18,
+                            }
+
         workqueues = self.ramdump.address_of('workqueues')
         list_offset = self.ramdump.field_offset('struct workqueue_struct', 'list')
         list_walker = linux_list.ListWalker(self.ramdump, workqueues, list_offset)
-        list_walker.walk(workqueues, self.get_workqueues_func)
+        list_walker.walk(self.get_workqueues_func)
 
     def get_busy_hash(self, worker_pool_addr):
         busy_hash_offset  = self.ramdump.field_offset('struct worker_pool', 'busy_hash')
@@ -485,7 +481,7 @@ class Workqueues(RamParser):
                 next_busy_worker = first_worker_pool
                 current_work = self.ramdump.read_pointer(next_busy_worker + current_work_offset)
                 func = self.ramdump.read_pointer(current_work + func_offset)
-                wname = self.ramdump.unwind_lookup(func)
+                wname = self.ramdump.unwind_lookup(func)[0]
                 print("     v.v (struct worker*)0x%x v.v (struct work_struct*)0x%x  %s"
                       % (next_busy_worker, current_work, wname), file=self.f)
             busy_hash_index =  busy_hash_index + 1
@@ -501,7 +497,7 @@ class Workqueues(RamParser):
         first_offset  = self.ramdump.field_offset('struct hlist_head', 'first')
         next_offset = self.ramdump.field_offset('struct hlist_node', 'next')
         worklist_offset = self.ramdump.field_offset('struct worker_pool', 'worklist')
-        print("==========>Unbound wqs", file = self.f)
+        print("\n==========>Unbound wqs", file = self.f)
         while (hash_index < nr_busy_hash_entries):
             first_worker_pool = self.ramdump.read_pointer(unbound_pool_hash + first_offset)
 
@@ -514,17 +510,20 @@ class Workqueues(RamParser):
 
                     list_offset = self.ramdump.field_offset('struct  work_struct', 'entry')
                     list_walker = linux_list.ListWalker(self.ramdump, worklist, list_offset)
-                    list_walker.walk(worklist, self.pending_list_walk)
+                    if not list_walker.is_empty():
+                        self.f.write('  pending works:\n')
+                    list_walker.walk(self.pending_list_walk)
                     '''
                     walk the busy_hash
                     '''
+                    self.f.write('  busy works:\n')
                     self.get_busy_hash(worker_pool_addr)
                     next_worker_pool = self.ramdump.read_pointer(next_worker_pool + next_offset)
             hash_index = hash_index + 1
             unbound_pool_hash =  unbound_pool_hash_base + hash_entry_size * hash_index
 
     def parse(self):
-            self.f = open(self.ramdump.outdir + "/workqueue.txt", "w")
+            self.f = self.ramdump.open_file('workqueue.txt')
             major, minor, patch = self.ramdump.kernel_version
             if (major, minor) == (3, 0):
                     print_workqueue_state_3_0(self.ramdump)
@@ -546,3 +545,4 @@ class Workqueues(RamParser):
             self.get_unbound_pool_hash()
             self.get_workqueues_list()
             self.f.close()
+

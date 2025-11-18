@@ -1,5 +1,5 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 from print_out import print_out_str
 from parser_util import cleanupString
@@ -46,6 +46,8 @@ class UTaskLib:
         self.f_path_offset = ramdump.field_offset('struct file', 'f_path')
         self.dentry_offset = ramdump.field_offset('struct path', 'dentry')
         self.d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
+        if self.d_iname_offset is None:
+            self.d_iname_offset = ramdump.field_offset('struct dentry', 'd_shortname')
         self.active_mm_offset = ramdump.field_offset('struct task_struct', 'active_mm')
         self.pid_offset = ramdump.field_offset('struct task_struct', 'pid')
         self.ramdump = ramdump
@@ -79,7 +81,10 @@ class UTaskLib:
                 return _utask
             pgd = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct',
                                                 'pgd')
-            pgdp = self.ramdump.virt_to_phys(pgd)
+            if self.ramdump.s2_walk:
+                pgdp = self.ramdump.mmu.virt_to_physel1(pgd)
+            else:
+                pgdp = self.ramdump.virt_to_phys(pgd)
             if self.ramdump.arm64:
                 mmu = Armv8MMU(self.ramdump, pgdp)
             else:
@@ -313,5 +318,4 @@ class UTaskLib:
             vfsmnt = path_struct.mnt
             if (dentry_addr != 0x0):
                 file_name = self.__get_path_name(dentry_addr, vfsmnt)
-                if task_name in file_name:
-                    yield cmdline_obj(pid, task_name, file_name)
+                yield cmdline_obj(pid, task_name, file_name)
