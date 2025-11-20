@@ -92,11 +92,19 @@ class Zram(RamParser):
 
             self.ZRAM_FLAG_SHIFT = 24
             self.HUGE_BITS = 0
-        else:
+            self.__SWP_OFFSET_SHIFT = (self.__SWP_TYPE_BITS + self.__SWP_TYPE_SHIFT)
+        elif self.ramdump.kernel_version < (6, 12, 0):
             self.__SWP_TYPE_SHIFT = 3
             self.__SWP_TYPE_BITS = 5
             self.ZRAM_FLAG_SHIFT = self.ramdump.page_shift + 1
             self.HUGE_BITS = 1
+            self.__SWP_OFFSET_SHIFT = (self.__SWP_TYPE_BITS + self.__SWP_TYPE_SHIFT)
+        else:
+            self.__SWP_TYPE_SHIFT = 6
+            self.__SWP_TYPE_BITS = 5
+            self.ZRAM_FLAG_SHIFT = self.ramdump.page_shift + 1
+            self.HUGE_BITS = 1
+            self.__SWP_OFFSET_SHIFT = 12
 
         if self.ramdump.kernel_version >= (6, 4, 0):
             self.FULLNESS_BITS = 4
@@ -110,9 +118,7 @@ class Zram(RamParser):
             self.__SWP_OFFSET_BITS = 0
 
         self.__SWP_TYPE_MASK = ((1 << self.__SWP_TYPE_BITS) - 1)
-        self.__SWP_OFFSET_SHIFT = (self.__SWP_TYPE_BITS + self.__SWP_TYPE_SHIFT)
         self.__SWP_OFFSET_MASK = ((1 << self.__SWP_OFFSET_BITS) - 1)
-
 
         self.ZRAM_SAME = self.ZRAM_FLAG_SHIFT + 1
         self.ZRAM_WB = self.ZRAM_FLAG_SHIFT + 2
