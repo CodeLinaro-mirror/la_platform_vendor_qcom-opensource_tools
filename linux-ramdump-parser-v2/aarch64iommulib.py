@@ -422,8 +422,11 @@ def create_flat_mappings(ramdump, pg_table, level):
             continue
 
         for sl_index in range(0, NUM_SL_PTE):
-
-            sl_pg_table_entry = ramdump.read_u64(sl_pte)
+            if skip_fl == 0:
+                sl_pte_virt = mm.phys_to_virt(ramdump, sl_pte)
+            else:
+                sl_pte_virt = sl_pte
+            sl_pg_table_entry = ramdump.read_u64(sl_pte_virt)
 
             if sl_pg_table_entry == 0 or sl_pg_table_entry is None:
                 tmp_mapping = add_flat_mapping(ramdump, tmp_mapping,
