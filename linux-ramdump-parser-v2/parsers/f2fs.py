@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -16,6 +16,8 @@ from struct_print import struct_print_class
 
 def parse_mountpoint(ramdump, dentry):
     d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
+    if d_iname_offset is None:
+        d_iname_offset = ramdump.field_offset('struct dentry', 'd_shortname')
     d_iname_last = cleanupString(ramdump.read_cstring(dentry + d_iname_offset, 40))
     d_parent = ramdump.read_structure_field(dentry, 'struct dentry', 'd_parent')
     d_parent_prev = 0
@@ -50,6 +52,8 @@ def print_f2fs_data(ramdump):
     count_o = ramdump.field_offset('struct rw_semaphore', 'count')
     s_id_o = ramdump.field_offset('struct super_block', 's_id')
     d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
+    if d_iname_offset is None:
+        d_iname_offset = ramdump.field_offset('struct dentry', 'd_shortname')
 
     dentry_d_child_o = ramdump.field_offset('struct dentry', 'd_child')
     output_file.write("(struct mount *)     (struct super_block *)    [FS_TYPE]   \t\t[DEVNAME]                               [DIRNAME]                       [SB_ID]       [umount_RW_LOCK_count]  [READ_ONLY]  [writer FROZEN (1=YES,generally)]\n")

@@ -26,8 +26,8 @@ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Changes from Qualcomm Innovation Center are provided under the following license:
-Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+Changes from Qualcomm Technologies, Inc. are provided under the following license:
+Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 SPDX-License-Identifier: BSD-3-Clause-Clear
 """
 
@@ -75,9 +75,11 @@ def get_dname_of_dentry(ramdump, dentry):
     name_address = ramdump.read_word(dentry + dentry_name_offset + qst_name_offset)
     len_address = dentry + dentry_name_offset + len_offset
     len = ramdump.read_u32(len_address)
-    name = cleanupString(ramdump.read_cstring(
-        name_address, len))
-    return name
+    name = ""
+    if len > 0:
+        name = cleanupString(ramdump.read_cstring(
+            name_address, len))
+    return name if name else ""
 
 def get_pathname_by_file(ramdump, file):
     f_pathoffset = ramdump.field_offset(
