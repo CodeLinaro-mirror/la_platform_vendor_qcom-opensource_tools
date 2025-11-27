@@ -13,6 +13,7 @@
 import os,re
 from collections import OrderedDict
 
+import minidump_util
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from tempfile import NamedTemporaryFile
@@ -369,21 +370,14 @@ class FtraceParser(RamParser):
         return
 
     def ftrace_extract_minidump(self):
-        ftrace_section = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KFTRACE'), None)
-
-        if ftrace_section:
+        ftrace_text = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
+                                                                      self.ramdump.ebi_files,
+                                                                      self.ramdump.elffile, "KFTRACE")
+        if ftrace_text:
             try:
-                ftrace_addr = int(ftrace_section.header['sh_addr'])
-                size = int(ftrace_section.header['sh_size'])
-                ftrace_buf = self.ramdump.read_binarystring(ftrace_addr, size)
-                # Remove trailing NULL bytes before decoding
-                ftrace_buf = ftrace_buf.rstrip(b'\x00')
-                ftrace_text = ftrace_buf.decode('utf-8', errors='ignore')
-
                 # Use 'with' statement to ensure file is properly closed
                 with self.ramdump.open_file('ftrace.txt') as ftrace_out:
                     ftrace_out.write(ftrace_text)
-
             except Exception as e:
                 print_out_str("Error extracting ftrace from minidump: {}".format(str(e)))
         else:
