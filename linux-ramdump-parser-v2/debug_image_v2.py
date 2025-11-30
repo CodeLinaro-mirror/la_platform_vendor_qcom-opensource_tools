@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -523,7 +523,9 @@ class DebugImage_v2():
         class_offset = ram_dump.field_offset(self.event_call, 'class')
         flags_offset = ram_dump.field_offset(self.event_call, 'flags')
         flags = ram_dump.read_word(ftrace_list + flags_offset)
-        if ram_dump.kernel_version >= (4, 14):
+        if ram_dump.kernel_version >= (6, 15):
+            TRACE_EVENT_FL_TRACEPOINT = 0x8
+        elif ram_dump.kernel_version >= (4, 14):
             TRACE_EVENT_FL_TRACEPOINT = 0x10
         elif ram_dump.kernel_version >= (4, 9):
             TRACE_EVENT_FL_TRACEPOINT = 0x20
