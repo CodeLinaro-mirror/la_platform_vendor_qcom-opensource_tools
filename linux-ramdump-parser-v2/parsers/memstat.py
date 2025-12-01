@@ -11,6 +11,7 @@
 # GNU General Public License for more details.
 
 from parser_util import register_parser, RamParser
+import minidump_util
 import os
 import linux_radix_tree
 from .vmalloc import Vmalloc
@@ -396,16 +397,11 @@ class MemStats(RamParser):
                             "Total Unaccounted Memory ",unaccounted_mem))
 
     def print_mem_stats_minidump(self, out_mem_stat):
-        mem_stat = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'MEMINFO'), None)
-        if mem_stat:
+        memstat_text = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
+                                                                      self.ramdump.ebi_files,
+                                                                      self.ramdump.elffile, "MEMINFO")
+        if memstat_text:
             try:
-                memstat_addr = int(mem_stat.header['sh_addr'])
-                size = int(mem_stat.header['sh_size'])
-                memstat_buf = self.ramdump.read_binarystring(memstat_addr, size)
-                # Remove trailing NULL bytes before decoding
-                memstat_buf = memstat_buf.rstrip(b'\x00')
-                memstat_text = memstat_buf.decode('utf-8', errors='ignore')
-
                 # Field name mapping for renaming specific fields to align with Fulldump format
                 field_mapping = {
                     'MemTotal': 'Total RAM',
