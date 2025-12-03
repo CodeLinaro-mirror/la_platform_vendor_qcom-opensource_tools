@@ -40,6 +40,10 @@ from register import Register
 from collections import namedtuple
 import shlex
 import glob
+from linux_list import ListWalker
+import mmap
+import bisect
+from lrucachedict import LRUCacheDict
 
 SP = 13
 LR = 14
@@ -685,7 +689,7 @@ class RamDump():
            r |= 1 << i
            i = i +1
 
-       return r;
+       return r
 
     def pac_ignore(self, data):
         kernel_pac_mask = self.createMask(self.vabits_actual, 63)
@@ -818,7 +822,10 @@ class RamDump():
         self.available_cores = []
         self.skip_TLB_Cache_parse = options.skip_TLB_Cache_parse
         self.module_layout_dict = {}
-        self.cached_data = {'addrtosym':{}, 'addressof':{}, 'fieldoffset':{}, 'sizeof':{}}
+        self.cached_data = {
+            'addrtosym':{}, 'addressof':{}, 'fieldoffset':{},
+            'sizeof':{}, 'unwindsym':{}
+        }
         self.ko_file_dict = {}
         self.ko_text_address_dict = {}
         self.dump = None
@@ -910,6 +917,8 @@ class RamDump():
                         'Could not open {0}. Will not be part of dump'.format(file_path))
                     continue
                 self.ebi_files.append((fd, start, end, file_path))
+            if self.ebi_files:
+                self.ebi_files.sort(key=lambda x: x[1])
 
         elif not options.reduceddump:
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
@@ -920,6 +929,8 @@ class RamDump():
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & HLOS elf files manually.")
                 sys.exit(1)
+
+        self.ebi_file_starts = [start for _, start, _, _ in self.ebi_files]
 
         if self.elf_addr is not None:
             # Setup the needed vector and hash table for binary search in read_physical
@@ -991,6 +1002,8 @@ class RamDump():
                 self.ebi_start = self.ebi_files[0][1]
         if self.phys_offset is None:
             self.get_hw_id()
+
+        self.setup_cached_mmap()
 
         if options.phys_offset is not None:
             print_out_str(
@@ -1287,8 +1300,10 @@ class RamDump():
             raise InvalidInput
 
     def __del__(self):
-        self.gdbmi.close()
-        if self.hyp:
+        self.clear_mmap_regions()
+        if self.gdbmi:
+            self.gdbmi.close()
+        if self.gdbmi_hyp:
             self.gdbmi_hyp.close()
 
     def open_file(self, file_name, mode='wt'):
@@ -1584,322 +1599,342 @@ class RamDump():
         out_path = os.path.abspath(self.outdir)
 
         t32_host_system = self.t32_host_system or platform.system()
-
-        launch_config = self.open_file('t32_config.t32')
-        launch_config.write('OS=\n')
-        launch_config.write('ID=T32_1000002\n')
-        if t32_host_system != 'Linux':
-            launch_config.write('TMP=C:\\TEMP\n')
-            launch_config.write('SYS=C:\\T32\n')
-            launch_config.write('HELP=C:\\T32\\pdf\n')
-        else:
-            launch_config.write('TMP=/tmp\n')
-            launch_config.write('SYS=/opt/t32\n')
-            launch_config.write('HELP=/opt/t32/pdf\n')
-        launch_config.write('\n')
-        launch_config.write('PBI=SIM\n')
-        launch_config.write('\n')
-        launch_config.write('SCREEN=\n')
-        launch_config.write('FONT=LARGE\n')
-        launch_config.write('HEADER=Trace32-ScorpionSimulator\n')
-        launch_config.write('\n')
-        if t32_host_system != 'Linux':
-            launch_config.write('PRINTER=WINDOWS\n')
-        launch_config.write('\n')
-        launch_config.write('RCL=NETASSIST\n')
-        launch_config.write('PACKLEN=1024\n')
-        launch_config.write('PORT=%d\n' % random.randint(20000, 30000))
-        launch_config.write('\n')
-
-        launch_config.close()
-
-        startup_script = self.open_file('t32_startup_script.cmm')
-
-        startup_script.write('title \"' + out_path + '\"\n')
-
+        t32_machine_id = None
+        newer_awareness = True if self.get_kernel_version() >= (6, 12, 0) else False
+        if newer_awareness and hasattr(self, 'vttbr_data'):
+            t32_machine_id = 3
         is_cortex_a53 = self.hw_id in ["8916", "8939", "8936", "bengal", "scuba"]
 
-        if self.arm64 and is_cortex_a53:
-            startup_script.write('sys.cpu CORTEXA53\n')
-        else:
-            if self.cpu_type == "ARMv8.2-A":
-                startup_script.write("sys.cpu CORTEXA55\n")
+        with self.open_file('t32_config.t32') as launch_config:
+            launch_config.write('OS=\n')
+            launch_config.write('ID=T32_1000002\n')
+            if t32_host_system != 'Linux':
+                launch_config.write('TMP=C:\\TEMP\n')
+                launch_config.write('SYS=C:\\T32\n')
+                launch_config.write('HELP=C:\\T32\\pdf\n')
             else:
-                startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
-            if self.minidump:
-                startup_script.write('SYStem.Option MMUSPACES OFF\n')
+                launch_config.write('TMP=/tmp\n')
+                launch_config.write('SYS=/opt/t32\n')
+                launch_config.write('HELP=/opt/t32/pdf\n')
+            launch_config.write('\n')
+            launch_config.write('PBI=SIM\n')
+            launch_config.write('\n')
+            launch_config.write('SCREEN=\n')
+            launch_config.write('FONT=LARGE\n')
+            launch_config.write('HEADER=Trace32-ScorpionSimulator\n')
+            launch_config.write('\n')
+            if t32_host_system != 'Linux':
+                launch_config.write('PRINTER=WINDOWS\n')
+            launch_config.write('\n')
+            launch_config.write('RCL=NETASSIST\n')
+            launch_config.write('PACKLEN=1024\n')
+            launch_config.write('PORT=%d\n' % random.randint(20000, 30000))
+            launch_config.write('\n')
+
+        with self.open_file('t32_startup_script.cmm') as startup_script:
+            startup_script.write('title \"' + out_path + '\"\n')
+            if self.arm64 and is_cortex_a53:
+                startup_script.write('sys.cpu CORTEXA53\n')
             else:
-                startup_script.write('SYStem.Option MMUSPACES ON\n')
-            startup_script.write('SYStem.Option ZONESPACES OFF\n')
-
-        startup_script.write('sys.up\n')
-
-        if is_cortex_a53 and not self.arm64:
-            startup_script.write('r.s m 0x13\n')
-        for ram in self.ebi_files:
-            ebi_path = os.path.abspath(ram[3])
-            startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
-                ebi_path, ram[1]))
-        # Check to include Reduced dump elf's
-        if self.elf_addr:
-            for file in self.elf_addr:
-                startup_script.write('data.load.elf {0} /noclear\n'.format(file))
-
-        if not self.minidump:
-            if self.arm64:
-                if self.svm:
-                    startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
-                    self.ttbr_data))
-                    startup_script.write('Data.Set SPR:0x34210 %Quad 0x{0:x}\n'.format(
-                    self.vttbr_data))
-                    startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
-                    self.SCTLR_EL1))
-                    startup_script.write('Data.Set SPR:0x30200 %Quad 0x{0:x}\n'.format(
-                    self.TTBR0_EL1))
-                    startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:x}\n'.format(
-                    self.TCR_EL1))
-                    startup_script.write('Data.Set SPR:0x34110 %Quad 0x{0:x}\n'.format(
-                    self.HCR_EL2))
-                    startup_script.write('Data.Set SPR:0x34212 %Quad 0x{0:x}\n'.format(
-                    self.VTCR_EL2))
+                if self.cpu_type == "ARMv8.2-A":
+                    startup_script.write("sys.cpu CORTEXA55\n")
                 else:
-                    startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
-                        self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
-                    tcr_el1 = self.get_tcr_el1(is_cortexa=is_cortex_a53)
-                    if is_cortex_a53:
-                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
-                        startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
-                        startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
-                        startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000034D5D91D\n')
-                    elif self.cpu_type == 'ARMV9-A':
-                        if self.hlos_tcr_el1:
-                            startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:x}\n'.format(
-                            self.hlos_tcr_el1))
+                    startup_script.write('sys.cpu {0}\n'.format(self.cpu_type))
+                if self.minidump:
+                    startup_script.write('SYStem.Option MMUSPACES OFF\n')
+                else:
+                    startup_script.write('SYStem.Option MMUSPACES ON\n')
+                startup_script.write('SYStem.Option ZONESPACES OFF\n')
+                if t32_machine_id:
+                    startup_script.write('SYStem.Option MACHINESPACES ON\n')
+                    startup_script.write('TASK.Create.MACHINE , {}. /CORE 0.\n'.format(t32_machine_id))
+
+            startup_script.write('sys.up\n')
+
+            if is_cortex_a53 and not self.arm64:
+                startup_script.write('r.s m 0x13\n')
+            for ram in self.ebi_files:
+                ebi_path = os.path.abspath(ram[3])
+                startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
+                    ebi_path, ram[1]))
+            # Check to include Reduced dump elf's
+            if self.elf_addr:
+                for file in self.elf_addr:
+                    startup_script.write('data.load.elf {0} /noclear\n'.format(file))
+
+            if not self.minidump:
+                if self.arm64:
+                    if self.svm:
+                        startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
+                        self.ttbr_data))
+                        startup_script.write('Data.Set SPR:0x34210 %Quad 0x{0:x}\n'.format(
+                        self.vttbr_data))
+                        startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
+                        self.SCTLR_EL1))
+                        startup_script.write('Data.Set SPR:0x30200 %Quad 0x{0:x}\n'.format(
+                        self.TTBR0_EL1))
+                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:x}\n'.format(
+                        self.TCR_EL1))
+                        startup_script.write('Data.Set SPR:0x34110 %Quad 0x{0:x}\n'.format(
+                        self.HCR_EL2))
+                        startup_script.write('Data.Set SPR:0x34212 %Quad 0x{0:x}\n'.format(
+                        self.VTCR_EL2))
+                    else:
+                        startup_script.write('Data.Set SPR:0x30201 %Quad 0x{0:x}\n'.format(
+                            self.kernel_virt_to_phys(self.swapper_pg_dir_addr)))
+                        tcr_el1 = self.get_tcr_el1(is_cortexa=is_cortex_a53)
+                        if is_cortex_a53:
+                            startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
+                            startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
+                            startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
+                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000034D5D91D\n')
+                        elif self.cpu_type == 'ARMV9-A':
+                            if self.hlos_tcr_el1:
+                                startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:x}\n'.format(
+                                self.hlos_tcr_el1))
+                            else:
+                                startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
+                            startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
+                            startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
+                            if self.hlos_sctlr_el1:
+                                startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
+                                self.hlos_sctlr_el1))
+                            else:
+                                startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000084C5D93D\n')
+                            corevcpu_path = os.path.join(self.outdir,'corevcpu0_regs.cmm')
+                            if os.path.exists(corevcpu_path):
+                                startup_script.write('do ' + corevcpu_path + '\n')
                         else:
                             startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
-                        startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
-                        startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
-                        if self.hlos_sctlr_el1:
-                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x{0:x}\n'.format(
-                            self.hlos_sctlr_el1))
+                            startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
+                            startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
+                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
+                    startup_script.write('Register.Set NS 1\n')
+                    startup_script.write('Register.Set CPSR 0x1C5\n')
+                else:
+                    # ARM-32: MMU is enabled by default on most platforms.
+                    mmu_enabled = 1
+                    if self.mmu is None:
+                        mmu_enabled = 0
+                    startup_script.write(
+                        'PER.S.simple C15:0x1 %L 0x{0:x}\n'.format(mmu_enabled))
+                    startup_script.write(
+                        'PER.S.simple C15:0x2 %L 0x{0:x}\n'.format(self.mmu.ttbr))
+                    if isinstance(self.mmu, Armv7LPAEMMU):
+                        # TTBR1. This gets setup once and never change again even if TTBR0
+                        # changes
+                        startup_script.write('PER.S.F C15:0x102 %L 0x{0:x}\n'.format(
+                            self.mmu.ttbr + 0x4000))
+                        # TTBCR with EAE and T1SZ set approprately
+                        startup_script.write(
+                            'PER.S.F C15:0x202 %L 0x80030000\n')
+                    startup_script.write('mmu.on\n')
+                    startup_script.write('mmu.scan\n')
+
+            where = os.path.abspath(self.vmlinux)
+            kaslr_offset = self.get_kaslr_offset()
+            if t32_machine_id:
+                where += ' NS:{}:::{}'.format(hex(t32_machine_id), hex(kaslr_offset))
+            elif kaslr_offset != 0:
+                where += ' {}'.format(hex(kaslr_offset))
+            if not self.minidump:
+                dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+            else:
+                dloadelf = 'data.load.elf {}\n'.format(where)
+            startup_script.write(dloadelf)
+            if self.minidump:
+                dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
+                startup_script.write(dload_ram_elf)
+
+            if self.arm64 and not self.minidump:
+                transcmd = 'TRANSlation.COMMON NS:'
+                if t32_machine_id:
+                    transcmd += "{}:::".format(hex(t32_machine_id))
+                transcmd += '0xf000000000000000--0xffffffffffffffff'
+                if t32_machine_id:
+                    transcmd += " /MACHINE {}.".format(t32_machine_id)
+                startup_script.write('{}\n'.format(transcmd))
+                startup_script.write('trans.tablewalk on\n')
+                startup_script.write('trans.on\n')
+                if not self.svm and self.cpu_type != 'ARMV9-A':
+                    startup_script.write('MMU.Delete\n')
+                    startup_script.write('MMU.SCAN PT 0xFFFFFF8000000000--0xFFFFFFFFFFFFFFFF\n')
+                    startup_script.write('mmu.on\n')
+                    startup_script.write('mmu.pt.list 0xffffff8000000000\n')
+
+            if self.minidump:
+                startup_script.write('y.pointer x29\n')
+                startup_script.write('frame.config.eabi on\n')
+                if self.arm64:
+                    startup_script.write('Register.Set CPSR 0x1C5\n')
+                # md_KVA_DUMP.BIN is ELF format. Load it in T32
+                for i in self.ebi_files:
+                    fd, start, end, path = i
+                    if "md_KVA_DUMP" in path:
+                        startup_script.write('data.load.elf {} /LOGLOAD /nosymbol\n'.format(path))
+                        break
+
+            def get_awareness_path(afilename, atarget):
+                if t32_host_system != 'Linux':
+                    if self.arm64:
+                        apath = 'C:\\T32\\demo\\{}\\kernel\\linux\\awareness\\{}'.format(atarget, afilename)
+                    else:
+                        if self.kernel_version > (3, 0, 0):
+                            apath = 'C:\\T32\\demo\\{}\\kernel\\linux\\linux-3.x\\{}'.format(atarget, afilename)
                         else:
-                            startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000084C5D93D\n')
-                        corevcpu_path = os.path.join(self.outdir,'corevcpu0_regs.cmm')
-                        if os.path.exists(corevcpu_path):
-                            startup_script.write('do ' + corevcpu_path + '\n')
+                            apath = 'C:\\t32\\demo\\{}\\kernel\\linux\\{}'.format(atarget, afilename)
+                else:
+                    if self.arm64:
+                        apath = '/opt/t32/demo/{}/kernel/linux/linux-3.x/{}'.format(atarget, afilename)
                     else:
-                        startup_script.write('Data.Set SPR:0x30202 %Quad 0x{0:016X}\n'.format(tcr_el1))
-                        startup_script.write('Data.Set SPR:0x30A20 %Quad 0x000000FF440C0400\n')
-                        startup_script.write('Data.Set SPR:0x30A30 %Quad 0x0000000000000000\n')
-                        startup_script.write('Data.Set SPR:0x30100 %Quad 0x0000000004C5D93D\n')
+                        if self.kernel_version > (3, 0, 0):
+                            apath = '/opt/t32/demo/{}/kernel/linux/linux-3.x/{}'.format(atarget, afilename)
+                        else:
+                            apath = '/opt/t32/demo/{}/kernel/linux/{}'.format(atarget, afilename)
+                if ".t32" in afilename:
+                    apath += ' /ACCESS NS:'
+                    if t32_machine_id:
+                        apath += '{}:::0x0 /Machine {}.'.format(hex(t32_machine_id), t32_machine_id)
+                return apath
 
-                startup_script.write('Register.Set NS 1\n')
-                startup_script.write('Register.Set CPSR 0x1C5\n')
-            else:
-                # ARM-32: MMU is enabled by default on most platforms.
-                mmu_enabled = 1
-                if self.mmu is None:
-                    mmu_enabled = 0
-                startup_script.write(
-                    'PER.S.simple C15:0x1 %L 0x{0:x}\n'.format(mmu_enabled))
-                startup_script.write(
-                    'PER.S.simple C15:0x2 %L 0x{0:x}\n'.format(self.mmu.ttbr))
-                if isinstance(self.mmu, Armv7LPAEMMU):
-                    # TTBR1. This gets setup once and never change again even if TTBR0
-                    # changes
-                    startup_script.write('PER.S.F C15:0x102 %L 0x{0:x}\n'.format(
-                        self.mmu.ttbr + 0x4000))
-                    # TTBCR with EAE and T1SZ set approprately
-                    startup_script.write(
-                        'PER.S.F C15:0x202 %L 0x80030000\n')
-                startup_script.write('mmu.on\n')
-                startup_script.write('mmu.scan\n')
-
-        where = os.path.abspath(self.vmlinux)
-        kaslr_offset = self.get_kaslr_offset()
-        if kaslr_offset != 0:
-            where += ' 0x{0:x}'.format(kaslr_offset)
-        if not self.minidump:
-            dloadelf = 'data.load.elf {} /nocode\n'.format(where)
-        else:
-            dloadelf = 'data.load.elf {}\n'.format(where)
-        startup_script.write(dloadelf)
-        if self.minidump:
-            dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
-            startup_script.write(dload_ram_elf)
-
-        if self.arm64 and not self.minidump:
-            startup_script.write('TRANSlation.COMMON NS:0xF000000000000000--0xffffffffffffffff\n')
-            startup_script.write('trans.tablewalk on\n')
-            startup_script.write('trans.on\n')
-            if not self.svm and self.cpu_type != 'ARMV9-A':
-                startup_script.write('MMU.Delete\n')
-                startup_script.write('MMU.SCAN PT 0xFFFFFF8000000000--0xFFFFFFFFFFFFFFFF\n')
-                startup_script.write('mmu.on\n')
-                startup_script.write('mmu.pt.list 0xffffff8000000000\n')
-
-        if self.minidump:
-            startup_script.write('y.pointer x29\n')
-            startup_script.write('frame.config.eabi on\n')
-            if self.arm64:
-                startup_script.write('Register.Set CPSR 0x1C5\n')
-            # md_KVA_DUMP.BIN is ELF format. Load it in T32
-            for i in self.ebi_files:
-                fd, start, end, path = i
-                if "md_KVA_DUMP" in path:
-                    startup_script.write('data.load.elf {} /LOGLOAD /nosymbol\n'.format(path))
-                    break
-
-        if t32_host_system != 'Linux':
-            if self.arm64:
-                startup_script.write('IF OS.DIR("C:\\T32\\demo\\arm64")\n')
-                startup_script.write('(\n')
-                startup_script.write(
-                     'task.config C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\linux.t32 /ACCESS NS:\n')
-                startup_script.write(
-                     'menu.reprogram C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\linux.men\n')
-                startup_script.write(')\n')
-                startup_script.write('ELSE\n')
-                startup_script.write('(\n')
-                startup_script.write(
-                    'task.config C:\\T32\\demo\\arm\\kernel\\linux\\awareness\\linux.t32 /ACCESS NS:\n')
-                startup_script.write(
-                    'menu.reprogram C:\\T32\\demo\\arm\\kernel\\linux\\awareness\\linux.men\n')
-                startup_script.write(')\n')
-            else:
-                if self.kernel_version > (3, 0, 0):
-                    startup_script.write(
-                        'task.config c:\\t32\\demo\\arm\\kernel\\linux\\linux-3.x\\linux3.t32\n')
-                    startup_script.write(
-                        'menu.reprogram c:\\t32\\demo\\arm\\kernel\\linux\\linux-3.x\\linux.men\n')
-                else:
-                    startup_script.write(
-                        'task.config c:\\t32\\demo\\arm\\kernel\\linux\\linux.t32\n')
-                    startup_script.write(
-                        'menu.reprogram c:\\t32\\demo\\arm\\kernel\\linux\\linux.men\n')
-        else:
-            if self.arm64:
-                startup_script.write('IF OS.DIR("/opt/t32/demo/arm64")\n')
-                startup_script.write('(\n')
-                startup_script.write(
-                    'task.config /opt/t32/demo/arm64/kernel/linux/linux-3.x/linux3.t32\n')
-                startup_script.write(
-                    'menu.reprogram /opt/t32/demo/arm64/kernel/linux/linux-3.x/linux.men\n')
-                startup_script.write(')\n')
-                startup_script.write('ELSE\n')
-                startup_script.write('(\n')
-                startup_script.write(
-                    'task.config /opt/t32/demo/arm/kernel/linux/linux-3.x/linux3.t32\n')
-                startup_script.write(
-                    'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux-3.x/linux.men\n')
-                startup_script.write(')\n')
-            else:
-                if self.kernel_version > (3, 0, 0):
-                    startup_script.write(
-                        'task.config /opt/t32/demo/arm/kernel/linux/linux-3.x/linux3.t32\n')
-                    startup_script.write(
-                        'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux-3.x/linux.men\n')
-                else:
-                    startup_script.write(
-                        'task.config /opt/t32/demo/arm/kernel/linux/linux.t32\n')
-                    startup_script.write(
-                        'menu.reprogram /opt/t32/demo/arm/kernel/linux/linux.men\n')
-
-        if self.get_kernel_version() >= (5, 10) and not self.minidump:
-            mod_dir = os.path.dirname(self.vmlinux)
-            mod_dir = os.path.abspath(mod_dir)
             if t32_host_system != 'Linux':
-                startup_script.write('IF OS.DIR("C:\\T32\\demo\\arm64")\n')
-                startup_script.write('(\n')
-                startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\autoload.cmm"' + '\n')
-                startup_script.write(')\n')
-                startup_script.write('ELSE\n')
-                startup_script.write('(\n')
-                startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm\\kernel\\linux\\etc\\gdb\\gdb_autoload.cmm"' + '\n')
-                startup_script.write(')\n')
-            else:
-                startup_script.write('IF OS.DIR("/opt/t32/demo/arm64")\n')
-                startup_script.write('(\n')
-                startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm64/kernel/linux/awareness/autoload.cmm"' + '\n')
-                startup_script.write(')\n')
-                startup_script.write('ELSE\n')
-                startup_script.write('(\n')
-                startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm/kernel/linux/etc/gdb/gdb_autoload.cmm"' + '\n')
-                startup_script.write(')\n')
-            if self.module_table.sym_path_list:
-                startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
-                if len(self.module_table.sym_path_list) > 1 :
-                    for path in self.module_table.sym_path_list[1:]:
-                        startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
-            else:
-                startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
-            startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
-            startup_script.write('TASK.sYmbol.Option AutoLoad noprocess\n')
-            startup_script.write('sYmbol.AutoLOAD.List\n')
-            startup_script.write('sYmbol.AutoLOAD.CHECK\n')
-        else:
-            for mod_tbl_ent in self.module_table.module_table:
-                mod_sym_path = mod_tbl_ent.get_sym_path()
-                if mod_sym_path != '':
-                    ld_mod_sym = ''
-                    where = os.path.abspath(mod_sym_path)
-                    if self.minidump:
-                        if mod_tbl_ent.section_offsets:
-                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /CODESEC /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
-                            if ".data" in mod_tbl_ent.section_offsets.keys():
-                                ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
-                            if ".bss" in mod_tbl_ent.section_offsets.keys() :
-                                ld_mod_sym += " /RELOC .bss at " + str(hex(mod_tbl_ent.section_offsets['.bss']))
-                            ld_mod_sym += "\n"
-                    elif 'wlan' in mod_tbl_ent.name:
-                        ld_mod_sym = "Data.LOAD.Elf " + where + " " + str(hex(mod_tbl_ent.module_offset)) +  " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
+                if self.arm64:
+                    if newer_awareness:
+                        startup_script.write('EXT.LOAD {}\n'.format(get_awareness_path('linux.t32', 'arm')))
                     else:
-                        ld_mod_sym = "Data.LOAD.Elf " + where + " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
-                    startup_script.write(ld_mod_sym)
+                        startup_script.write('IF OS.DIR("C:\\T32\\demo\\arm64")\n')
+                        startup_script.write('(\n')
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux.t32', 'arm64')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm64')))
+                        startup_script.write(')\n')
+                        startup_script.write('ELSE\n')
+                        startup_script.write('(\n')
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux.t32', 'arm')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm')))
+                        startup_script.write(')\n')
+                else:
+                    if self.kernel_version > (3, 0, 0):
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux3.t32', 'arm')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm')))
+                    else:
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux.t32', 'arm')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm')))
+            else:
+                if self.arm64:
+                    if newer_awareness:
+                        startup_script.write('EXT.LOAD {}\n'.format(get_awareness_path('linux3.t32', 'arm64')))
+                    else:
+                        startup_script.write('IF OS.DIR("/opt/t32/demo/arm64")\n')
+                        startup_script.write('(\n')
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux3.t32', 'arm64')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm64')))
+                        startup_script.write(')\n')
+                        startup_script.write('ELSE\n')
+                        startup_script.write('(\n')
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux3.t32', 'arm')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm')))
+                        startup_script.write(')\n')
+                else:
+                    if self.kernel_version > (3, 0, 0):
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux3.t32', 'arm')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm')))
+                    else:
+                        startup_script.write('task.config {}\n'.format(get_awareness_path('linux.t32', 'arm')))
+                        startup_script.write('menu.reprogram {}\n'.format(get_awareness_path('linux.men', 'arm')))
 
-        if not self.minidump:
-            startup_script.write('task.dtask\n')
+            if self.get_kernel_version() >= (5, 10) and not self.minidump:
+                mod_dir = os.path.dirname(self.vmlinux)
+                mod_dir = os.path.abspath(mod_dir)
+                if not newer_awareness:
+                    if t32_host_system != 'Linux':
+                        startup_script.write('IF OS.DIR("C:\\T32\\demo\\arm64")\n')
+                        startup_script.write('(\n')
+                        startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm64\\kernel\\linux\\awareness\\autoload.cmm"' + '\n')
+                        startup_script.write(')\n')
+                        startup_script.write('ELSE\n')
+                        startup_script.write('(\n')
+                        startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do C:\\T32\\demo\\arm\\kernel\\linux\\etc\\gdb\\gdb_autoload.cmm"' + '\n')
+                        startup_script.write(')\n')
+                    else:
+                        startup_script.write('IF OS.DIR("/opt/t32/demo/arm64")\n')
+                        startup_script.write('(\n')
+                        startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm64/kernel/linux/awareness/autoload.cmm"' + '\n')
+                        startup_script.write(')\n')
+                        startup_script.write('ELSE\n')
+                        startup_script.write('(\n')
+                        startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm/kernel/linux/etc/gdb/gdb_autoload.cmm"' + '\n')
+                        startup_script.write(')\n')
+                if self.module_table.sym_path_list:
+                    startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
+                    if len(self.module_table.sym_path_list) > 1 :
+                        for path in self.module_table.sym_path_list[1:]:
+                            startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
+                else:
+                    startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
+                startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
+                startup_script.write('TASK.sYmbol.Option AutoLoad noprocess\n')
+                startup_script.write('sYmbol.AutoLOAD.List\n')
+                startup_script.write('sYmbol.AutoLOAD.CHECK\n')
+            else:
+                for mod_tbl_ent in self.module_table.module_table:
+                    mod_sym_path = mod_tbl_ent.get_sym_path()
+                    if mod_sym_path != '':
+                        ld_mod_sym = ''
+                        where = os.path.abspath(mod_sym_path)
+                        if self.minidump:
+                            if mod_tbl_ent.section_offsets:
+                                ld_mod_sym = "Data.LOAD.Elf " + where + " /NoClear /CODESEC /RELOC .text at " + str(hex(mod_tbl_ent.module_offset))
+                                if ".data" in mod_tbl_ent.section_offsets.keys():
+                                    ld_mod_sym += " /RELOC .data at " + str(hex(mod_tbl_ent.section_offsets['.data']))
+                                if ".bss" in mod_tbl_ent.section_offsets.keys() :
+                                    ld_mod_sym += " /RELOC .bss at " + str(hex(mod_tbl_ent.section_offsets['.bss']))
+                                ld_mod_sym += "\n"
+                        elif 'wlan' in mod_tbl_ent.name:
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " " + str(hex(mod_tbl_ent.module_offset)) +  " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
+                        else:
+                            ld_mod_sym = "Data.LOAD.Elf " + where + " /NoCODE /NoClear /NAME " + mod_tbl_ent.name + " /reloctype 0x3" + "\n"
+                        startup_script.write(ld_mod_sym)
 
-        startup_script.write(
-            'v.v  %ASCII %STRING linux_banner\n')
+            if not self.minidump:
+                startup_script.write('task.dtask\n')
 
-        if not self.is_config_defined('CONFIG_SMP'):
-            if self.get_kernel_version() >= (6, 6):
-                if not self.arm64:
-                    startup_script.write('SYStem.Option MMUSPACES OFF\n')
-
-        if os.path.exists(os.path.join(out_path, 'regs_panic.cmm')):
             startup_script.write(
-                'do {0}\n'.format(out_path + '/regs_panic.cmm'))
-        elif os.path.exists(os.path.join(out_path, '/core0_regs.cmm')):
-            startup_script.write(
-                'do {0}\n'.format(out_path + '/core0_regs.cmm'))
-        startup_script.close()
+                'v.v  %ASCII %STRING linux_banner\n')
+
+            if not self.is_config_defined('CONFIG_SMP'):
+                if self.get_kernel_version() >= (6, 6):
+                    if not self.arm64:
+                        startup_script.write('SYStem.Option MMUSPACES OFF\n')
+
+            if os.path.exists(os.path.join(out_path, 'regs_panic.cmm')):
+                startup_script.write(
+                    'do {0}\n'.format(out_path + '/regs_panic.cmm'))
+            elif os.path.exists(os.path.join(out_path, '/core0_regs.cmm')):
+                startup_script.write(
+                    'do {0}\n'.format(out_path + '/core0_regs.cmm'))
 
         if t32_host_system != 'Linux':
             launch_file = 'launch_t32.bat'
-            t32_bat = self.open_file(launch_file)
-            if self.arm64:
-                t32_binary = 'C:\\T32\\bin\\windows64\\t32MARM64.exe'
-            elif is_cortex_a53:
-                t32_binary = 'C:\\T32\\bin\\windows64\\t32MARM64.exe'
-            else:
-                t32_binary = 'c:\\T32\\bin\\windows64\\t32MARM.exe'
-            t32_bat.write(('start '+ t32_binary + ' -c ' + out_path + '/t32_config.t32, ' +
-                          out_path + '/t32_startup_script.cmm'))
-            t32_bat.close()
+            with self.open_file(launch_file) as t32_bat:
+                if self.arm64:
+                    t32_binary = 'C:\\T32\\bin\\windows64\\t32MARM64.exe'
+                elif is_cortex_a53:
+                    t32_binary = 'C:\\T32\\bin\\windows64\\t32MARM64.exe'
+                else:
+                    t32_binary = 'c:\\T32\\bin\\windows64\\t32MARM.exe'
+                t32_bat.write(('start '+ t32_binary + ' -c ' + out_path + '/t32_config.t32, ' +
+                              out_path + '/t32_startup_script.cmm'))
         else:
             launch_file = 'launch_t32.sh'
-            t32_sh = self.open_file(launch_file)
-            if self.arm64:
-                t32_binary = '/opt/t32/bin/pc_linux64/t32marm64-qt'
-            elif is_cortex_a53:
-                t32_binary = '/opt/t32/bin/pc_linux64/t32marm-qt'
-            else:
-                t32_binary = '/opt/t32/bin/pc_linux64/t32marm-qt'
-            t32_sh.write('#!/bin/sh\n\n')
-            t32_sh.write('{0} -c {1}/t32_config.t32, {1}/t32_startup_script.cmm &\n'.format(t32_binary, out_path))
-            t32_sh.close()
+            with self.open_file(launch_file) as t32_sh:
+                if self.arm64:
+                    t32_binary = '/opt/t32/bin/pc_linux64/t32marm64-qt'
+                elif is_cortex_a53:
+                    t32_binary = '/opt/t32/bin/pc_linux64/t32marm-qt'
+                else:
+                    t32_binary = '/opt/t32/bin/pc_linux64/t32marm-qt'
+                t32_sh.write('#!/bin/sh\n\n')
+                t32_sh.write('{0} -c {1}/t32_config.t32, {1}/t32_startup_script.cmm &\n'.format(t32_binary, out_path))
             self.chmod(launch_file, stat.S_IRWXU)
 
         print_out_str(
@@ -2262,7 +2297,7 @@ class RamDump():
                         continue
                 socinfo_id = self.read_int(socinfo_start + 4, False)
                 if socinfo_id is None:
-                    break
+                    continue
                 if (socinfo_id & 0xFFFF) != board.socid:
                     continue
 
@@ -2579,20 +2614,21 @@ class RamDump():
                 self.module_table.add_entry(mod_tbl_ent)
         self.dump_mod_text_address(self.ko_text_address_dict)
 
-    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_dict):
-        name_index = [s for s in ko_file_dict.keys() if mod_tbl_ent.name in s]
-        if len(name_index) == 0:
-            print_out_str('!! Object not found for {}'.format(mod_tbl_ent.name))
-            return
+    def parse_symbols_of_one_module(self, mod_tbl_ent, ko_file_dict, ko_required):
+        ko_path = ko_file_dict.get(mod_tbl_ent.name)
+        if not ko_path:
+            name_index = [s for s in ko_file_dict.keys() if mod_tbl_ent.name in s]
+            if len(name_index) == 1:
+                temp_data = ko_file_dict[name_index[0]]
+                del ko_file_dict[name_index[0]]
+                ko_file_dict[mod_tbl_ent.name] = temp_data
+                print_out_str(f'!! Object renamed to {mod_tbl_ent.name} from {name_index[0]}')
 
-        if mod_tbl_ent.name not in ko_file_dict and name_index[0] in ko_file_dict:
-            temp_data = ko_file_dict[name_index[0]]
-            del ko_file_dict[name_index[0]]
-            ko_file_dict[mod_tbl_ent.name] = temp_data
-        if not mod_tbl_ent.set_sym_path(ko_file_dict[mod_tbl_ent.name]):
-            return
+        ko_path = ko_file_dict.get(mod_tbl_ent.name)
+        if ko_path:
+            mod_tbl_ent.set_sym_path(ko_path)
 
-        if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
+        if not ko_required:
             symtab_offset = self.field_offset('struct mod_kallsyms', 'symtab')
             num_symtab_offset = self.field_offset('struct mod_kallsyms', 'num_symtab')
             strtab_offset = self.field_offset('struct mod_kallsyms', 'strtab')
@@ -2645,7 +2681,7 @@ class RamDump():
             mod_tbl_ent.kallsyms_table.sort()
             if self.dump_module_kallsyms:
                 self.dump_mod_kallsyms_sym_table(mod_tbl_ent.name, mod_tbl_ent.kallsyms_table)
-        else:
+        elif mod_tbl_ent.get_sym_path():
             args = [self.nm_path, '-n', mod_tbl_ent.get_sym_path()]
             p = subprocess.run(args, stdout=subprocess.PIPE)
             symbols = p.stdout.decode().splitlines()
@@ -2658,6 +2694,11 @@ class RamDump():
             mod_tbl_ent.sym_lookup_table.sort()
             if self.dump_module_symbol_table:
                 self.dump_mod_sym_table(mod_tbl_ent.name, mod_tbl_ent.sym_lookup_table)
+        else:
+            #Either CONFIG_KALLSYMS is not defined or the .ko file is unavailable.
+            print_out_str('!! Object not found for {}'.format(mod_tbl_ent.name))
+            return
+        return
 
     def dump_mod_text_address(self, mod_address_dict):
         text_dump_file = self.open_file('mod_text_address'+'.txt')
@@ -2693,11 +2734,12 @@ class RamDump():
             return False
 
     def parse_module_symbols(self):
+        ko_required = not self.is_config_defined("CONFIG_KALLSYMS") or self.minidump
         for mod_tbl_ent in self.module_table.module_table:
             if mod_tbl_ent.name is None:
                 print_out_str('!! Object name not extracted properly..checking next!!')
                 continue
-            self.parse_symbols_of_one_module(mod_tbl_ent, self.ko_file_dict)
+            self.parse_symbols_of_one_module(mod_tbl_ent, self.ko_file_dict, ko_required)
 
     def add_symbols_to_global_lookup_table(self):
         if self.is_config_defined("CONFIG_KALLSYMS") and not self.minidump:
@@ -2806,6 +2848,29 @@ class RamDump():
                 except gdbmi.GdbMIException:
                     pass
 
+    def address_of_symbol_from_file(self, symbol, file_name):
+
+        """Returns the address of a symbol belonging
+        to a specific file
+
+        :param symbol: name of the symbol.
+        :type symbol: str
+
+        :param file_name: name of the file
+        :type file_name: str
+
+        :return: address value
+
+        """
+        try:
+            return self.gdbmi.address_of_symbol_from_file(symbol, file_name)
+        except gdbmi.GdbMIException:
+            if self.hyp:
+                try:
+                    return self.gdbmi_hyp.address_of(symbol)
+                except gdbmi.GdbMIException:
+                    pass
+
     def symbol_at(self, addr):
         """
         Function to return symbol using gdbmi.
@@ -2905,6 +2970,21 @@ class RamDump():
         except gdbmi.GdbMIException:
             pass
 
+    def set_priority_namespace(self, filename):
+        """
+            Set specific file as priority namespace for symbol identification
+        """
+        try:
+            self.gdbmi.set_priority_namespace(filename)
+        except gdbmi.GdbMIException:
+            return
+
+        #invalidate cached data
+        self.cached_data['addrtosym'] = dict()
+        self.cached_data['addressof'] = dict()
+        self.cached_data['fieldoffset'] = dict()
+        self.cached_data['sizeof'] = dict()
+
     def field_offset(self, the_type, field):
         cached_data = self.cached_data['fieldoffset']
         if the_type in cached_data:
@@ -2989,14 +3069,15 @@ class RamDump():
 
     def setup_module_layout(self):
         mod_list = self.address_of('modules')
-        next_offset = self.field_offset('struct list_head', 'next')
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
 
-        next_list_ent = self.read_pointer(mod_list + next_offset)
-        while next_list_ent and next_list_ent != mod_list:
-            mod = next_list_ent - list_offset
+        list_walker = ListWalker(self, mod_list, list_offset)
+        for mod in list_walker:
             mod_name = self.read_cstring(mod + name_offset)
+            if mod_name == None:
+                continue
+
             ent_array = []
             # setup module init layout
             if self.kernel_version >= (6, 4, 0):
@@ -3037,7 +3118,6 @@ class RamDump():
                 ent_array.append((base, size))
 
             self.module_layout_dict[mod_name] = ent_array
-            next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
     def validate_module_sym_addr(self, sym_addr, mod_name):
         """
@@ -3144,12 +3224,16 @@ class RamDump():
             return (table[low][1] + desc, size)
 
     def unwind_lookup(self, addr, symbol_size=0):
+        unwind_key = addr + symbol_size
+        cached_data = self.cached_data['unwindsym']
+        if unwind_key in cached_data:
+            return cached_data[unwind_key]
         r = self.__unwind_lookup(addr, symbol_size)
-        if r is not None:
-            return r
-
-        # when fail to lookup the symbol name, show the module name as much as possible.
-        return self.match_name_for_module_sym_addr(addr)
+        if r is None:
+            # when fail to lookup the symbol name, show the module name as much as possible.
+            r = self.match_name_for_module_sym_addr(addr)
+        cached_data[unwind_key] = r
+        return r
 
     def read_elf_memory(self, addr, length, temp_file):
         s = self.gdbmi.read_elf_memory(addr, length, temp_file)
@@ -3158,6 +3242,52 @@ class RamDump():
             return a.split('\0')[0]
         else:
             return s
+
+    def clear_mmap_regions(self):
+        if hasattr(self, 'mmap_regions'):
+            for mm, _, _ in self.mmap_regions:
+                if mm: mm.close()
+            self.mmap_regions.clear()
+        return
+
+    def setup_cached_mmap(self):
+        if self.minidump or self.reduceddump:
+            return
+        self.mmap_regions = []
+        self.phys_cache = LRUCacheDict(max_bytes=500<<20)
+        self.phys_cache_get = self.phys_cache.get
+        self.phys_cache_put = self.phys_cache.put
+        self.phys_cache_size = self.phys_cache.cache_size
+        self.large_size = self.phys_cache.large_size
+        try:
+            import local_settings
+        except:
+            local_settings = None
+        if local_settings and hasattr(local_settings, 'phys_cache_max_bytes'):
+            self.phys_cache.set_max_bytes(local_settings.phys_cache_max_bytes)
+
+        def is_unc_path(path):
+            unc_path = path
+            if not os.path.isabs(path):
+                unc_path = os.path.abspath(path)
+            return unc_path.startswith('\\\\')
+
+        for fd, start, end, path in self.ebi_files:
+            try:
+                if is_unc_path(path):
+                    self.clear_mmap_regions()
+                    break
+                mm = mmap.mmap(fd.fileno(), 0, access=mmap.ACCESS_READ)
+                self.mmap_regions.append((mm, start, end))
+            except Exception as e:
+                print_out_str(f'Failed to memory map {path}: {str(e)}')
+                self.clear_mmap_regions()
+
+        if self.mmap_regions:
+            self.__read_physical_cache = self.___read_physical_mmap_cache
+        else:
+            self.__read_physical_cache = self.___read_physical_cache
+        return
 
     def read_physical(self, addr, length):
         if not isinstance(addr, int) or not isinstance(length, int):
@@ -3173,8 +3303,6 @@ class RamDump():
             data = elfutil.read_physical(self.elf_vector, self.elf_htable,
                                             self.elf_filemap, self.ebi_files,
                                             addr, length)
-            #if addr == 0x83cc09268:
-            #    print("addr read yielded none : {:x}".format(addr))
             return data
 
         else:
@@ -3186,18 +3314,93 @@ class RamDump():
                 return self.__read_physical(addr, length, self.ebi_files)
 
     def __read_physical(self, addr, length, ebi_files):
-        ebi = (-1, -1, -1)
-        for a in ebi_files:
-            fd, start, end, path = a
-            if addr >= start and addr <= end:
-                ebi = a
-                break
-        if ebi[0] == -1:
+        max_loop = 20
+        loop_cnt = 0
+        result = bytearray()
+        current_addr = addr
+        remaining = length
+        use_cache = not self.use_multithread and length < self.large_size
+        if use_cache:
+            max_loop += (length // self.phys_cache_size)
+        while remaining > 0 and loop_cnt < max_loop:
+            if use_cache:
+                data = self.__read_physical_cache(current_addr, remaining, ebi_files)
+            else:
+                data = self.___read_physical(current_addr, remaining, ebi_files)
+            if not data:
+                return bytes(result) if result else None
+            actual_read_len = len(data)
+            result.extend(data)
+            current_addr += actual_read_len
+            remaining -= actual_read_len
+            loop_cnt += 1
+        return bytes(result) if result else None
+
+    def ___read_physical(self, addr, length, ebi_files):
+        chunk = None
+        idx = bisect.bisect_right(self.ebi_file_starts, addr) - 1
+        if idx >= 0:
+            fd, start, end, path  = self.ebi_files[idx]
+            if start <= addr <= end:
+                available = end - addr + 1
+                read_len = min(length, available)
+                offset = addr - start
+                fd.seek(offset)
+                chunk = fd.read(read_len)
+        return chunk
+
+    def ___read_physical_mmap_cache(self, addr, length, ebi_files):
+        cache_size = self.phys_cache_size
+        page_base = addr & ~(cache_size - 1)
+        page_offset = addr - page_base
+        read_len = min(length, cache_size - page_offset)
+        page_data = self.phys_cache_get(page_base)
+        if page_data is None:
+            page_data = b''
+            idx = bisect.bisect_right(self.ebi_file_starts, addr) - 1
+            if idx >= 0:
+                mm, start, end  = self.mmap_regions[idx]
+                if start <= page_base <= end:
+                    offset = page_base - start
+                    available = end - page_base + 1
+                    page_read_len = min(cache_size, available)
+                    page_data = mm[offset:offset + page_read_len]
+            if not page_data:
+                return None
+            if len(page_data) < cache_size:
+                page_data += b'\x00' * (cache_size - len(page_data))
+            self.phys_cache_put(page_base, page_data)
+        actual_read_len = min(read_len, len(page_data) - page_offset)
+        if actual_read_len <= 0:
             return None
-        offset = addr - ebi[1]
-        ebi[0].seek(offset)
-        a = ebi[0].read(length)
-        return a
+        return page_data[page_offset:page_offset + actual_read_len]
+
+    def ___read_physical_cache(self, addr, length, ebi_files):
+        cache_size = self.phys_cache_size
+        page_base = addr & ~(cache_size - 1)
+        page_offset = addr - page_base
+        read_len = min(length, cache_size - page_offset)
+        page_data = self.phys_cache_get(page_base)
+        if page_data is None:
+            page_data = b''
+            idx = bisect.bisect_right(self.ebi_file_starts, addr) - 1
+            if idx >= 0:
+                fd, start, end, path  = self.ebi_files[idx]
+                if start <= page_base <= end:
+                    offset = page_base - start
+                    available = end - page_base + 1
+                    page_read_len = min(cache_size, available)
+                    fd.seek(offset)
+                    page_data = fd.read(page_read_len)
+            if not page_data:
+                return None
+            if len(page_data) < cache_size:
+                page_data += b'\x00' * (cache_size - len(page_data))
+            self.phys_cache_put(page_base, page_data)
+        actual_read_len = min(read_len, len(page_data) - page_offset)
+        if actual_read_len <= 0:
+            return None
+        return page_data[page_offset:page_offset + actual_read_len]
 
     def enable_multithread(self, thread_max_count, thread_name_prefix):
         if self.use_multithread:
