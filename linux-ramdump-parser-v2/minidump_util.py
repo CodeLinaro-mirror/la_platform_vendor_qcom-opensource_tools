@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -31,7 +31,7 @@ def minidump_virt_to_phys(ebi_files,addr):
             return pa_addr
     return pa_addr
 
-def read_physical_minidump(ebi_files,ebi_files_ramfile,elffile,addr,length):
+def read_physical_minidump(ebi_files, ebi_files_ramfile, elffile,addr, length):
     ebi = [-1, -1, -1, -1, -1]
     for a in ebi_files:
         idx, start, end, va, size = a
@@ -60,6 +60,40 @@ def read_physical_minidump(ebi_files,ebi_files_ramfile,elffile,addr,length):
         ebi[0].seek(offset)
         a = ebi[0].read(length)
         return a
+
+def read_binarystring_minidump(ebi_files_minidump, ebi_files, elffile, addr_or_name, length):
+    if not isinstance(length, int):
+        print_out_str("Invalid minidump section length parameter")
+        return None
+
+    try:
+        addr = minidump_virt_to_phys(ebi_files_minidump, addr_or_name)
+
+        if not isinstance(addr, int):
+            print_out_str("Invalid minidump section address")
+            return None
+
+        return read_physical_minidump(ebi_files_minidump, ebi_files, elffile, addr, length)
+    except:
+        print_out_str("Error reading minidump memory at address: 0x{:x}".format(addr))
+        return None
+
+def minidump_extract_section_context(ebi_files_minidump, ebi_files, elffile, name):
+    section = elffile.get_section_by_name(name)
+    if section:
+        try:
+            section_addr = int(section.header['sh_addr'])
+            size = int(section.header['sh_size'])
+            section_buf = read_binarystring_minidump(ebi_files_minidump, ebi_files, elffile, section_addr, size)
+            # Remove trailing NULL bytes before decoding
+            section_buf = section_buf.rstrip(b'\x00')
+            section_text = section_buf.decode('utf-8', errors='ignore')
+        except Exception as e:
+            print_out_str("Error reading minidump section {}: {}".format(name, str(e)))
+    else:
+        print_out_str("Minidump section {} not found".format(name))
+
+    return section_text
 
 def add_file(fo, outdir, path):
         try:

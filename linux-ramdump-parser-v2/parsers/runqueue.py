@@ -11,6 +11,7 @@
 # GNU General Public License for more details.
 
 import rb_tree
+import minidump_util
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
 
@@ -324,12 +325,13 @@ class RunQueues(RamParser):
         print_out_str(
             '======================= RUNQUEUE STATE ============================')
         if self.ramdump.minidump:
-            runqueue_section = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KRUNQUEUE'), None)
-            if runqueue_section:
-                runqueue_addr = int(runqueue_section.header['sh_addr'])
-                size = int(runqueue_section.header['sh_size'])
-                runqueue_buf = self.ramdump.read_binarystring(runqueue_addr, size)
-                print_out_str(runqueue_buf.decode('utf-8'))
+            runqueue_text = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
+                                                                           self.ramdump.ebi_files,
+                                                                           self.ramdump.elffile, "KRUNQUEUE")
+            if runqueue_text:
+                print_out_str(runqueue_text)
+            else:
+                print_out_str("KRUNQUEUE section not found in minidump\n")
 
             self.print_md_latest_call_stack()
             self.print_irq_context()
