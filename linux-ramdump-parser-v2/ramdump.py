@@ -2295,7 +2295,7 @@ class RamDump():
                         continue
                 socinfo_id = self.read_int(socinfo_start + 4, False)
                 if socinfo_id is None:
-                    break
+                    continue
                 if (socinfo_id & 0xFFFF) != board.socid:
                     continue
 
