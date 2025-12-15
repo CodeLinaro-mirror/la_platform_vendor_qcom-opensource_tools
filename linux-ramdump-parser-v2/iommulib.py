@@ -11,6 +11,8 @@
 # GNU General Public License for more details.
 
 import rb_tree
+import math
+import re
 import linux_list as llist
 from mm import phys_to_virt
 from print_out import print_out_str
@@ -18,7 +20,7 @@ from print_out import print_out_str
 ARM_SMMU_DOMAIN = 0
 MSM_SMMU_DOMAIN = 1
 MSM_SMMU_AARCH64_DOMAIN = 2
-
+ARM_LPAE_MAX_LEVELS=4
 
 class Domain(object):
     def __init__(self, pg_table, redirect, ctx_list, client_name,
@@ -192,13 +194,22 @@ class IommuLib(object):
             client_name_addr = self.ramdump.read_structure_field(dev, 'struct device', 'kobj.name')
             client_name = self.ramdump.read_cstring(client_name_addr)
 
+            """
+            Skip KGSL SID0 client as GPU per-process pagetable feature has many
+            pagetables associated with a device. Extracting these is not currently supported
+            """
+            if re.match("[0-9]+\.vfio_kgsl", client_name) :
+                continue
+
+            iommu_ptr = self.ramdump.read_structure_field(dev, 'struct device', 'iommu')
+            iommu_dev = self.ramdump.read_structure_field(iommu_ptr, 'struct dev_iommu', 'iommu_dev')
+            iommu_ops = self.ramdump.read_structure_field(iommu_dev, 'struct iommu_device', 'ops')
             if self.arm_smmu_v12:
                 self._find_iommu_domains_arm_smmu_v12(domain_ptr, client_name, self.domain_list)
             else:
-                self._find_iommu_domains_arm_smmu(domain_ptr, client_name, self.domain_list)
+                self._find_iommu_domains_arm_smmu(domain_ptr, client_name, self.domain_list, iommu_ops, iommu_group)
 
         return True
-
 
     def _find_iommu_domains_arm_smmu_v12(self, domain_ptr, client_name, domain_list):
         if self.ramdump.field_offset('struct iommu_domain', 'priv') \
@@ -255,9 +266,7 @@ class IommuLib(object):
                                ARM_SMMU_DOMAIN, level)
         domain_list.append(domain_create)
 
-
-
-    def _find_iommu_domains_arm_smmu(self, domain_ptr, client_name, domain_list):
+    def _find_iommu_domains_arm_smmu(self, domain_ptr, client_name, domain_list, iommu_ops, group_ptr):
         if self.ramdump.field_offset('struct iommu_domain', 'priv') \
                 is not None:
             priv_ptr = self.ramdump.read_structure_field(
@@ -270,8 +279,12 @@ class IommuLib(object):
 
         if self.ramdump.kernel_version >= (5, 4, 0):
             smmu_iommu_ops_offset = self.ramdump.field_offset('struct msm_iommu_ops','iommu_ops')
-            arm_smmu_ops_data = self.ramdump.address_of('arm_smmu_ops')
-            arm_smmu_ops = arm_smmu_ops_data + smmu_iommu_ops_offset
+            if smmu_iommu_ops_offset is not None:
+                arm_smmu_ops_data = self.ramdump.address_of('arm_smmu_ops')
+                arm_smmu_ops = arm_smmu_ops_data + smmu_iommu_ops_offset
+            else:
+                """ Required to specify driver in case both SMMUv2 and SMMUv3 driver are enabled """
+                arm_smmu_ops = self.ramdump.address_of_symbol_from_file('arm_smmu_ops', 'arm-smmu.c')
         else:
             arm_smmu_ops = self.ramdump.address_of('arm_smmu_ops')
 
@@ -280,18 +293,22 @@ class IommuLib(object):
         if iommu_domain_ops is None or iommu_domain_ops == 0:
             return
 
-        if iommu_domain_ops == arm_smmu_ops:
+        if iommu_domain_ops == arm_smmu_ops or iommu_ops == arm_smmu_ops:
             if priv_ptr is not None:
                 arm_smmu_domain_ptr = priv_ptr
             elif self.ramdump.kernel_version >= (5, 4, 0):
                 arm_smmu_domain_ptr_wrapper = self.ramdump.container_of(
                         domain_ptr, 'struct msm_iommu_domain', 'iommu_domain')
-                arm_smmu_domain_ptr = self.ramdump.container_of(
+                if arm_smmu_domain_ptr_wrapper is not None:
+                    arm_smmu_domain_ptr = self.ramdump.container_of(
                         arm_smmu_domain_ptr_wrapper, 'struct arm_smmu_domain', 'domain')
+                else:
+                    self.ramdump.set_priority_namespace('arm-smmu.h')
+                    arm_smmu_domain_ptr = self.ramdump.container_of(
+                        domain_ptr, 'struct arm_smmu_domain', 'domain')
             else:
                 arm_smmu_domain_ptr = self.ramdump.container_of(
                     domain_ptr, 'struct arm_smmu_domain', 'domain')
-
             pgtbl_ops_ptr = self.ramdump.read_structure_field(
                 arm_smmu_domain_ptr, 'struct arm_smmu_domain', 'pgtbl_ops')
             if pgtbl_ops_ptr is None or pgtbl_ops_ptr == 0:
@@ -312,12 +329,28 @@ class IommuLib(object):
 
             if self.ramdump.kernel_version >= (5, 4, 0):
                 pgtbl_info_offset = self.ramdump.field_offset('struct arm_smmu_domain','pgtbl_info')
-                pgtbl_info_data = arm_smmu_domain_ptr + pgtbl_info_offset
-                pg_table = self.ramdump.read_structure_field(pgtbl_info_data,'struct msm_io_pgtable_info','pgtbl_cfg.arm_lpae_s1_cfg.ttbr[0]')
-            else:
-                pg_table = self.ramdump.read_structure_field(
-                    arm_smmu_domain_ptr, 'struct arm_smmu_domain',
-                    'pgtbl_cfg.arm_lpae_s1_cfg.ttbr[0]')
+                if pgtbl_info_offset is not None:
+                    pgtbl_info_data = arm_smmu_domain_ptr + pgtbl_info_offset
+                    pg_table = self.ramdump.read_structure_field(pgtbl_info_data,'struct msm_io_pgtable_info','pgtbl_cfg.arm_lpae_s1_cfg.ttbr[0]')
+                else:
+                    """ Set arm-smmu-v2 as priority for symbol identification """
+                    """ Required in case both SMMUv2 and SMMUv3 driver are enabled together """
+                    self.ramdump.set_priority_namespace('arm-smmu.h')
+                    arm_smmu_cfg_offset = self.ramdump.field_offset('struct arm_smmu_domain','cfg')
+                    arm_smmu_ptr = self.ramdump.read_structure_field(arm_smmu_domain_ptr, 'struct arm_smmu_domain', 'smmu')
+                    cbs = self.ramdump.read_structure_field(arm_smmu_ptr, 'struct arm_smmu_device', 'cbs')
+                    arm_smmu_cfg_ptr = arm_smmu_domain_ptr + arm_smmu_cfg_offset
+                    cbndx = self.ramdump.read_structure_field(arm_smmu_cfg_ptr, 'struct arm_smmu_cfg', 'cbndx')
+                    cb_offset = cbndx * self.ramdump.sizeof('struct arm_smmu_cb')
+                    cb = cbs + cb_offset
+                    pg_table =  self.ramdump.read_structure_field(cb, 'struct arm_smmu_cb', 'ttbr[0]')
+                    mask = 0xffffffffffff
+                    pg_table = pg_table & mask
+                    arm_lpae_io_pgtable_ptr = self.ramdump.container_of(
+                        pgtbl_ops_ptr, 'struct arm_lpae_io_pgtable', 'iop.ops')
+                    start_level = self.ramdump.read_structure_field(
+                         arm_lpae_io_pgtable_ptr, 'struct arm_lpae_io_pgtable', 'start_level')
+                    level = ARM_LPAE_MAX_LEVELS - start_level
 
             pg_table = phys_to_virt(self.ramdump, pg_table)
 
