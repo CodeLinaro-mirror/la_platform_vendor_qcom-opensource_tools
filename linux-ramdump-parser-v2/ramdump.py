@@ -1602,7 +1602,7 @@ class RamDump():
         t32_machine_id = None
         newer_awareness = True if self.get_kernel_version() >= (6, 12, 0) else False
         if newer_awareness and hasattr(self, 'vttbr_data'):
-            t32_machine_id = 3 if self.svm else 2
+            t32_machine_id = 3
         is_cortex_a53 = self.hw_id in ["8916", "8939", "8936", "bengal", "scuba"]
 
         with self.open_file('t32_config.t32') as launch_config:
@@ -1751,6 +1751,8 @@ class RamDump():
                 if t32_machine_id:
                     transcmd += "{}:::".format(hex(t32_machine_id))
                 transcmd += '0xf000000000000000--0xffffffffffffffff'
+                if t32_machine_id:
+                    transcmd += " /MACHINE {}.".format(t32_machine_id)
                 startup_script.write('{}\n'.format(transcmd))
                 startup_script.write('trans.tablewalk on\n')
                 startup_script.write('trans.on\n')
