@@ -253,6 +253,32 @@ class FtraceParser(RamParser):
                 evt.ring_buffer_per_cpu_parsing(per_cpu_buffer, nrpages_limit)
         return ftrace_time_data
 
+    def _dump_enabled_ftrace_events(self, fevent_list):
+        """
+        Dump the list of ftrace events present in ftrace_events at dump time.
+        This approximates the 'enabled' events (those registered with the tracer).
+        """
+        try:
+            fout = self.ramdump.open_file('ftrace_enabled_events.txt', 'w')
+        except Exception as e:
+            print_out_str("Failed to open ftrace_enabled_events.txt: {}".format(e))
+            return
+
+        # Header
+        print("# ftrace events present in ftrace_events list at dump time", file=fout)
+        print("# event_type_id  event_name  raw_struct", file=fout)
+
+        # fevent_list.ftrace_event_type and ftrace_raw_struct_type are dicts:
+        #   key: type id as string, value: name/struct
+        for type_id in sorted(fevent_list.ftrace_event_type.keys(),
+                              key=lambda x: int(x)):
+            name = fevent_list.ftrace_event_type.get(type_id, "")
+            raw = fevent_list.ftrace_raw_struct_type.get(type_id, "")
+            print("{:>4s}  {:<30s}  {}".format(type_id, str(name), str(raw)),
+                  file=fout)
+        fout.close()
+        print_out_str("Wrote ftrace enabled events summary to ftrace_enabled_events.txt")
+
     def ftrace_extract(self):
         trace_array_list = self.ramdump.address_of('ftrace_trace_arrays')
         list_offset = self.ramdump.field_offset('struct trace_array', 'list')
@@ -271,7 +297,12 @@ class FtraceParser(RamParser):
         ftrace_event_time = 0
         post_ftrace_event_time = 0
         log_pattern = re.compile(r'\s*(.*)-(\d+)\s*\[(\d+)\]\s*.*')
-        fevent_list = self.ftrace_get_format();
+        # Build event type/name maps and write enabled events summary
+        fevent_list = self.ftrace_get_format()
+        try:
+            self._dump_enabled_ftrace_events(fevent_list)
+        except Exception as e:
+            print_out_str("failed to get_enabled_ftrace_events: %s\n".format(e))
         for trace_buffer_name, trace_buffer_info in self.trace_buffers.items():
             trace_array = trace_buffer_info['addr']
             trace_name = trace_buffer_name
