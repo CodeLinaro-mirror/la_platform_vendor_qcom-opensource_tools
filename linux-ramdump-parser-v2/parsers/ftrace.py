@@ -279,6 +279,48 @@ class FtraceParser(RamParser):
         fout.close()
         print_out_str("Wrote ftrace enabled events summary to ftrace_enabled_events.txt")
 
+    def _dump_ftrace_buffer_info(self):
+        """
+        Dump ftrace buffer size information derived from the dump:
+        - number of CPUs
+        - nr_pages per CPU
+        - total pages and bytes per trace buffer
+        """
+        page_size = self.ramdump.get_page_size()
+        try:
+            fout = self.ramdump.open_file('ftrace_buffer_info.txt', 'w')
+        except Exception as e:
+            print_out_str("Failed to open ftrace_buffer_info.txt: {}".format(e))
+            return
+
+        print("# ftrace ring buffer size information from dump", file=fout)
+        print("# page_size: {} bytes".format(page_size), file=fout)
+        print("#", file=fout)
+
+        for name, info in self.trace_buffers.items():
+            cpus = info.get('cpus', 0)
+            nr_pages_per_buffer = info.get('nr_pages_per_buffer', [])
+            nr_total_pages = info.get('nr_total_buffer_pages', 0)
+
+            total_bytes = nr_total_pages * page_size
+            print("buffer: {}".format(name), file=fout)
+            print("  cpus: {}".format(cpus), file=fout)
+            print("  total_pages: {} ({} KiB)".format(
+                nr_total_pages, total_bytes >> 10), file=fout)
+
+            # per-CPU details
+            for cpu_idx in range(cpus):
+                pages = nr_pages_per_buffer[cpu_idx]
+                if pages is None:
+                    continue
+                bytes_cpu = pages * page_size
+                print("    cpu{:03d}: pages={} ({} KiB)".format(
+                    cpu_idx, pages, bytes_cpu >> 10), file=fout)
+            print("", file=fout)
+
+        fout.close()
+        print_out_str("Wrote ftrace buffer size info to ftrace_buffer_info.txt")
+
     def ftrace_extract(self):
         trace_array_list = self.ramdump.address_of('ftrace_trace_arrays')
         list_offset = self.ramdump.field_offset('struct trace_array', 'list')
@@ -292,6 +334,10 @@ class FtraceParser(RamParser):
             print_out_str("A ftrace buffer is not found")
             return
         self.ftrace_get_buffer_pages()
+        try:
+            self._dump_ftrace_buffer_info()
+        except Exception as e:
+            print_out_str("failed to dump ftrace buffer info: %s".format(e))
         main_trace = self.ftrace_main_buffer()
 
         ftrace_event_time = 0
