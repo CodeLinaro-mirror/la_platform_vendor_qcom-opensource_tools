@@ -1,5 +1,5 @@
 # Copyright (c) 2017-2022, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -33,7 +33,8 @@ class FtraceParser(RamParser):
         self.whitelisted_trace_names = []
         self.ftrace_buffer_size_kb = None
         self.per_cpu_buffer_pages = None
-        self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
+        if not self.ramdump.minidump:
+            self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
         if len(self.ramdump.ftrace_args):
             self.whitelisted_trace_names = self.ramdump.ftrace_args
         if self.ramdump.ftrace_max_size:
@@ -93,7 +94,9 @@ class FtraceParser(RamParser):
         class_offset = ram_dump.field_offset(self.event_call, 'class')
         flags_offset = ram_dump.field_offset(self.event_call, 'flags')
         flags = ram_dump.read_word(ftrace_list + flags_offset)
-        if ram_dump.kernel_version >= (4, 14):
+        if ram_dump.kernel_version >= (6, 15):
+            TRACE_EVENT_FL_TRACEPOINT = 0x8
+        elif ram_dump.kernel_version >= (4, 14):
             TRACE_EVENT_FL_TRACEPOINT = 0x10
         elif ram_dump.kernel_version >= (4, 9):
             TRACE_EVENT_FL_TRACEPOINT = 0x20
@@ -365,10 +368,34 @@ class FtraceParser(RamParser):
         #print("Post Ftrace Event Sorting and Write took {} secs".format(post_ftrace_event_time))
         return
 
-    def parse(self):
-        if self.ramdump.ftrace_limit_time == 0:
-            self.ftrace_extract()
+    def ftrace_extract_minidump(self):
+        ftrace_section = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KFTRACE'), None)
+
+        if ftrace_section:
+            try:
+                ftrace_addr = int(ftrace_section.header['sh_addr'])
+                size = int(ftrace_section.header['sh_size'])
+                ftrace_buf = self.ramdump.read_binarystring(ftrace_addr, size)
+                # Remove trailing NULL bytes before decoding
+                ftrace_buf = ftrace_buf.rstrip(b'\x00')
+                ftrace_text = ftrace_buf.decode('utf-8', errors='ignore')
+
+                # Use 'with' statement to ensure file is properly closed
+                with self.ramdump.open_file('ftrace.txt') as ftrace_out:
+                    ftrace_out.write(ftrace_text)
+
+            except Exception as e:
+                print_out_str("Error extracting ftrace from minidump: {}".format(str(e)))
         else:
-            from func_timeout import func_timeout
-            print_out_str("Limit ftrace parser running time to {}s".format(self.ramdump.ftrace_limit_time))
-            func_timeout(self.ramdump.ftrace_limit_time, self.ftrace_extract)
+            print_out_str("No KFTRACE section found in minidump")
+
+    def parse(self):
+        if self.ramdump.minidump:
+            self.ftrace_extract_minidump()
+        else:
+            if self.ramdump.ftrace_limit_time == 0:
+                self.ftrace_extract()
+            else:
+                from func_timeout import func_timeout
+                print_out_str("Limit ftrace parser running time to {}s".format(self.ramdump.ftrace_limit_time))
+                func_timeout(self.ramdump.ftrace_limit_time, self.ftrace_extract)
