@@ -187,7 +187,7 @@ def dump_cpufreq_data(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
     print_out_str("\nCPU Frequency information:\n" + "-" * 10)
     for i in ramdump.iter_cpus():
-        cpu_data_addr = ramdump.read_u64(cpufreq_data_addr, cpu=i)
+        cpu_data_addr = ramdump.read_pointer(cpufreq_data_addr, cpu=i)
         if not cpu_data_addr:
             print_out_str("cpufreq_cpu_data for cpu{} is not available.".format(i))
             continue
