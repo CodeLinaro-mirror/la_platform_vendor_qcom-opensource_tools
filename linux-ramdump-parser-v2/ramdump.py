@@ -14,6 +14,7 @@ from __future__ import print_function
 import sys
 import re
 import os
+from typing import List, Tuple
 import struct
 import gzip
 import functools
@@ -2777,6 +2778,39 @@ class RamDump():
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
 
+
+
+    def win_safe_name_for_path(self, name: str) -> str:
+        """
+        Sanitize a string to be safe for use as a Windows file or folder name.
+        - Replaces invalid characters with underscores.
+        - Removes trailing spaces and dots.
+        - Handles Windows reserved filenames.
+        """
+        # Replace reserved characters and control chars with '_'
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '_', name)
+
+        # Remove trailing spaces or dots
+        name = re.sub(r'[ .]+$', '', name)
+
+        # Ensure name is not empty
+        if not name:
+            name = "_unknown"
+
+        # Check for Windows reserved names (case-insensitive)
+        reserved_names = {
+            'CON', 'PRN', 'AUX', 'NUL',
+            'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+            'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+        }
+
+        # Split name and extension to check base name
+        base_name = name.split('.')[0].upper()
+        if base_name in reserved_names:
+            name = '_' + name
+
+        return name
+
     def setup_module_symbols(self):
         self.traverse_module()
         if self.minidump:
@@ -2786,33 +2820,105 @@ class RamDump():
         self.parse_module_symbols();
         self.add_symbols_to_global_lookup_table()
 
-    def dump_mod_sym_table(self, mod_name, sym_lookup_tbl):
-        sym_dump_file = self.open_file('sym_tbl_'+mod_name+'.txt')
-        for line in sym_lookup_tbl:
-            sym_dump_file.write('0x{0:x} {1}\n'.format(line[0], line[1]))
-        sym_dump_file.close()
 
-    def dump_mod_kallsyms_sym_table(self, mod_name, mod_kallsyms_table):
-        kallsyms_header_format = '{0: >18} {1} {2: >64} {3} {4} {5} {6}\n'
-        kallsyms_record_format = '0x{0:0>16x} {1: >8} {2: >64} {3: >11} {4: >7} {5: >8} {6: >7}\n'
-        kallsyms_file = self.open_file('sym_tbl_kallsyms_'+mod_name+'.txt')
-        kallsyms_file.write('KALLSYMS symbol lookup table['+mod_name+']\n')
-        kallsyms_file.write(
-            kallsyms_header_format.format(
-                'sym_addr', 'sym_type', 'syn_name[mod_name]', 'idx_elf_sym',
-                'st_name', 'st_shndx', 'st_size'))
-        for mod_sym_line in mod_kallsyms_table:
-            kallsyms_file.write(
-                kallsyms_record_format.format(
-                    mod_sym_line[0], mod_sym_line[2], mod_sym_line[1], mod_sym_line[3],
-                    hex(mod_sym_line[4]), mod_sym_line[5], mod_sym_line[6]))
-        kallsyms_file.close()
 
-    def dump_global_symbol_lookup_table(self):
-        sym_dump_file = self.open_file('sym_table.txt')
-        for line in self.lookup_table:
-            sym_dump_file.write('0x{0:x} {1}\n'.format(line[0], line[1]))
-        sym_dump_file.close()
+    def dump_mod_sym_table(self, mod_name: str, sym_lookup_tbl: List[Tuple[int, str]]) -> None:
+        """
+        Dump a module's symbol lookup table to a text file.
+        Each line contains the symbol address and name.
+        """
+
+        sym_tbl_folder = os.path.join(self.outdir, "sym_tbl")
+
+        # Ensure directory exists with error handling
+        try:
+            os.makedirs(sym_tbl_folder, exist_ok=True)
+        except OSError as e:
+            print_out_str(f"Error creating directory {sym_tbl_folder}: {e}")
+            return
+
+        safe_mod_name = self.win_safe_name_for_path(mod_name)
+        sym_tbl_out = os.path.join(sym_tbl_folder, f"{safe_mod_name}.txt")
+
+        try:
+            with open(sym_tbl_out, "w") as sym_dump_file:
+                for line in sym_lookup_tbl:
+                    sym_dump_file.write('0x{0:x} {1}\n'.format(line[0], line[1]))
+        except OSError as e:
+            print_out_str(f"Error writing to file {sym_tbl_out}: {e}")
+
+
+    def dump_mod_kallsyms_sym_table(self, mod_name: str, mod_kallsyms_table: List[Tuple]) -> None:
+        """
+        Dump the module's KALLSYMS symbol lookup table to a text file.
+        Each line contains symbol details such as address, type, name, ELF index, etc.
+        """
+
+        kallsyms_header_format = "{0: >18} {1} {2: >64} {3} {4} {5} {6}\n"
+        kallsyms_record_format = "0x{0:0>16x} {1: >8} {2: >64} {3: >11} {4: >7} {5: >8} {6: >7}\n"
+
+        sym_tbl_folder = os.path.join(self.outdir, "sym_tbl")
+
+        # Ensure directory exists with error handling
+        try:
+            os.makedirs(sym_tbl_folder, exist_ok=True)
+        except OSError as e:
+            print_out_str(f"Error creating directory {sym_tbl_folder}: {e}")
+            return
+
+        safe_mod_name = self.win_safe_name_for_path(mod_name)
+        sym_tbl_out = os.path.join(sym_tbl_folder, f"{safe_mod_name}.txt")
+
+        try:
+            with open(sym_tbl_out, "w") as kallsyms_file:
+                # Header
+                kallsyms_file.write(f"KALLSYMS symbol lookup table[{safe_mod_name}]\n")
+                kallsyms_file.write(
+                    kallsyms_header_format.format(
+                        "sym_addr", "sym_type", "syn_name[mod_name]", "idx_elf_sym",
+                        "st_name", "st_shndx", "st_size"
+                    )
+                )
+
+                # Records
+                for mod_sym_line in mod_kallsyms_table:
+                    try:
+                        kallsyms_file.write(
+                            kallsyms_record_format.format(
+                                mod_sym_line[0], mod_sym_line[2], mod_sym_line[1],
+                                mod_sym_line[3], hex(mod_sym_line[4]),
+                                mod_sym_line[5], mod_sym_line[6]
+                            )
+                        )
+                    except Exception as e:
+                        print_out_str(f"Error writing symbol line {mod_sym_line}: {e}")
+        except OSError as e:
+            print_out_str(f"Error writing to file {sym_tbl_out}: {e}")
+
+
+    def dump_global_symbol_lookup_table(self) -> None:
+        """
+        Dump the global symbol lookup table to a text file.
+        Each line contains the symbol address and name.
+        """
+        sym_tbl_folder = os.path.join(self.outdir, "sym_tbl")
+
+        try:
+            os.makedirs(sym_tbl_folder, exist_ok=True)
+        except OSError as e:
+            # Handle errors gracefully (e.g., log them, raise, or fallback)
+            print_out_str(f"Error creating directory {sym_tbl_folder}: {e}")
+            return  # Exit early if folder creation fails
+        sym_tbl_out = os.path.join(sym_tbl_folder, "sym_table.txt")
+        try:
+            with open(sym_tbl_out, "w") as sym_dump_file:
+                for entry in self.lookup_table:
+                    if len(entry) >= 2:
+                        addr, name = entry[0], entry[1]
+                        sym_dump_file.write(f"0x{addr:x} {name}\n")
+        except OSError as e:
+            print_out_str(f"Error writing to file {sym_tbl_out}: {e}")
+
 
     def address_of(self, symbol):
         cached_data = self.cached_data['addressof']
