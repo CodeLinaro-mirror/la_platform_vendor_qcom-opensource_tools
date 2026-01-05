@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -16,27 +16,36 @@ import math
 
 
 def page_buddy(ramdump, page):
-    if  ramdump.kernel_version >= (4, 19, 0):
+    if  ramdump.kernel_version >= (6, 11, 0):
+        #PGTY_buddy
+        page_type = ramdump.read_structure_field(page, 'struct page', 'page_type')
+        return (page_type >> 24) == 0xf0
+    elif  ramdump.kernel_version >= (4, 19, 0):
         # Check if the PG_buddy bit is unset in the page->page_type field
         # Initial value of page_type is -1, hence cleared bit indicates type
         page_type = ramdump.read_structure_field(page, 'struct page', 'page_type')
         return (page_type & 0xf0000080) == 0xf0000000
-
     else:
         mapcount_offset = ramdump.field_offset('struct page', '_mapcount')
         val = ramdump.read_int(page + mapcount_offset)
         # -128 is the magic for in the buddy allocator
         return val == 0xffffff80
 
-def page_count(ramdump, page):
-    """Commit: 0139aa7b7fa12ceef095d99dc36606a5b10ab83a
-    mm: rename _count, field of the struct page, to _refcount"""
-    if (ramdump.kernel_version < (4, 6, 0)):
-        count = ramdump.read_structure_field(page, 'struct page',
-                                             '_count.counter')
+def page_slab(ramdump, page):
+    if  ramdump.kernel_version >= (6, 11, 0):
+        #PGTY_slab
+        page_type = ramdump.read_structure_field(page, 'struct page', 'page_type')
+        return (page_type >> 24) == 0xf5
     else:
+        return False
+
+def page_count(ramdump, page):
+    if (ramdump.kernel_version >= (4, 6, 0)):
         count = ramdump.read_structure_field(page, 'struct page',
                                              '_refcount.counter')
+    else:
+        count = ramdump.read_structure_field(page, 'struct page',
+                                             '_count.counter')
     return count
 
 
