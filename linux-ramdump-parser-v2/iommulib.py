@@ -303,12 +303,12 @@ class IommuLib(object):
                     arm_smmu_domain_ptr = self.ramdump.container_of(
                         arm_smmu_domain_ptr_wrapper, 'struct arm_smmu_domain', 'domain')
                 else:
+                    self.ramdump.set_priority_namespace('arm-smmu.h')
                     arm_smmu_domain_ptr = self.ramdump.container_of(
                         domain_ptr, 'struct arm_smmu_domain', 'domain')
             else:
                 arm_smmu_domain_ptr = self.ramdump.container_of(
                     domain_ptr, 'struct arm_smmu_domain', 'domain')
-
             pgtbl_ops_ptr = self.ramdump.read_structure_field(
                 arm_smmu_domain_ptr, 'struct arm_smmu_domain', 'pgtbl_ops')
             if pgtbl_ops_ptr is None or pgtbl_ops_ptr == 0:
@@ -327,7 +327,6 @@ class IommuLib(object):
                     arm_lpae_io_pgtable_ptr, 'struct arm_lpae_io_pgtable',
                     'levels')
 
-
             if self.ramdump.kernel_version >= (5, 4, 0):
                 pgtbl_info_offset = self.ramdump.field_offset('struct arm_smmu_domain','pgtbl_info')
                 if pgtbl_info_offset is not None:
@@ -336,7 +335,7 @@ class IommuLib(object):
                 else:
                     """ Set arm-smmu-v2 as priority for symbol identification """
                     """ Required in case both SMMUv2 and SMMUv3 driver are enabled together """
-                    self.ramdump.set_priority_namespace('arm_smmu.h')
+                    self.ramdump.set_priority_namespace('arm-smmu.h')
                     arm_smmu_cfg_offset = self.ramdump.field_offset('struct arm_smmu_domain','cfg')
                     arm_smmu_ptr = self.ramdump.read_structure_field(arm_smmu_domain_ptr, 'struct arm_smmu_domain', 'smmu')
                     cbs = self.ramdump.read_structure_field(arm_smmu_ptr, 'struct arm_smmu_device', 'cbs')
