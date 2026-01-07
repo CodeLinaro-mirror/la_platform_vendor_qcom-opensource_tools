@@ -27,6 +27,8 @@ class Logcat(RamParser):
         self.f_path_offset = self.ramdump.field_offset('struct file', 'f_path')
         self.dentry_offset = self.ramdump.field_offset('struct path', 'dentry')
         self.d_iname_offset = self.ramdump.field_offset('struct dentry', 'd_iname')
+        if self.d_iname_offset is None:
+            self.d_iname_offset = self.ramdump.field_offset('struct dentry', 'd_shortname')
         self.limit_size = int("0x20000000", 16)
         self.vma_list = []
 
