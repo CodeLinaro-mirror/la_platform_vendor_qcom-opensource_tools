@@ -255,29 +255,96 @@ class FtraceParser(RamParser):
 
     def _dump_enabled_ftrace_events(self, fevent_list):
         """
-        Dump the list of ftrace events present in ftrace_events at dump time.
-        This approximates the 'enabled' events (those registered with the tracer).
+        Dump enabled trace events using existing FtraceParser_Event_List info.
+        Only checks the static_key of each tracepoint; does not re-derive names.
         """
+        out_path = self.ramdump.outdir + "/ftrace_enabled_events.txt"
+        rd = self.ramdump
+
         try:
-            fout = self.ramdump.open_file('ftrace_enabled_events.txt', 'w')
+            with open(out_path, "w") as fout:
+                print(
+                    "---------------------enabled events list "
+                    "cat /sys/kernel/tracing/set_event ---------------- \n",
+                    file=fout,
+                )
+
+                trace_event_call_struct_name="struct ftrace_event_call"
+                trace_event_file_struct_name="struct ftrace_event_file"
+
+                if self.ramdump.kernel_version >= (4, 4, 0):
+                    trace_event_call_struct_name="struct trace_event_call"
+                    trace_event_file_struct_name="struct trace_event_file"
+
+                # Walk trace_event_call list once more, just to inspect keys.
+                event_call_off = rd.field_offset(trace_event_call_struct_name, "event")
+                tp_off = rd.field_offset(trace_event_call_struct_name, "tp")
+                tp_name_off = rd.field_offset("struct tracepoint", "name")
+                list_off = rd.field_offset(trace_event_call_struct_name, "list")
+                head = rd.address_of("ftrace_events")
+                list_next_off = rd.field_offset("struct list_head", "next")
+
+                if rd.arm64:
+                    entry = rd.read_u64(head + list_next_off)
+                else:
+                    entry = rd.read_u32(head + list_next_off)
+
+                key_off = rd.field_offset("struct tracepoint", "key")
+                enabled_off = rd.field_offset("struct static_key", "enabled")
+                type_off = rd.field_offset("struct trace_event", "type")
+                max_iterations = 10000  # Reasonable upper bound for number of events
+                iteration_count = 0
+                visited_entries = set()
+                while entry != head and iteration_count < max_iterations:
+                    if entry in visited_entries:
+                        print_out_str("Circular reference detected in ftrace_events list")
+                        break
+                    visited_entries.add(entry)
+                    iteration_count += 1
+
+                    call = entry - list_off
+                    call_event = call + event_call_off
+                    tp_data = call + tp_off
+
+                    if not call_event:
+                        break
+                    etype = rd.read_u16(call_event + type_off)
+                    etype_str = str(etype)
+
+                    if rd.arm64:
+                        tp_ptr = rd.read_u64(tp_data)
+                        name_ptr = rd.read_u64(tp_ptr + tp_name_off)
+                    else:
+                        tp_ptr = rd.read_u32(tp_data)
+                        name_ptr = rd.read_u32(tp_ptr + tp_name_off)
+
+                    # Event name is already known via fevent_list.event_name_by_type
+                    event_name = fevent_list.event_name_by_type.get(etype)
+                    if not event_name:
+                        event_name = rd.read_cstring(name_ptr) or "<unknown>"
+
+                    enabled = None
+                    if tp_ptr:
+                        try:
+                            key = tp_ptr + key_off
+                            enabled = rd.read_u32(key + enabled_off)
+                        except Exception:
+                            enabled = None
+
+                    if enabled is not None and enabled == 1:
+                        print("%-48s" % event_name, file=fout)
+
+                    # Advance to next
+                    if rd.arm64:
+                        entry = rd.read_u64(entry + list_next_off)
+                    else:
+                        entry = rd.read_u32(entry + list_next_off)
+            if iteration_count >= max_iterations:
+                print_out_str("Warning: Maximum iteration limit reached in ftrace_events traversal")
+            print_out_str("Wrote enabled ftrace events to %s" % out_path)
+
         except Exception as e:
-            print_out_str("Failed to open ftrace_enabled_events.txt: {}".format(e))
-            return
-
-        # Header
-        print("# ftrace events present in ftrace_events list at dump time", file=fout)
-        print("# event_type_id  event_name  raw_struct", file=fout)
-
-        # fevent_list.ftrace_event_type and ftrace_raw_struct_type are dicts:
-        #   key: type id as string, value: name/struct
-        for type_id in sorted(fevent_list.ftrace_event_type.keys(),
-                              key=lambda x: int(x)):
-            name = fevent_list.ftrace_event_type.get(type_id, "")
-            raw = fevent_list.ftrace_raw_struct_type.get(type_id, "")
-            print("{:>4s}  {:<30s}  {}".format(type_id, str(name), str(raw)),
-                  file=fout)
-        fout.close()
-        print_out_str("Wrote ftrace enabled events summary to ftrace_enabled_events.txt")
+            print_out_str("failed to _dump_enabled_ftrace_events: %s" % e)
 
     def _dump_ftrace_buffer_info(self):
         """
@@ -296,7 +363,7 @@ class FtraceParser(RamParser):
         print("# ftrace ring buffer size information from dump", file=fout)
         print("# page_size: {} bytes".format(page_size), file=fout)
         print("#", file=fout)
-
+        total_bytes_all = 0
         for name, info in self.trace_buffers.items():
             cpus = info.get('cpus', 0)
             nr_pages_per_buffer = info.get('nr_pages_per_buffer', [])
@@ -307,7 +374,7 @@ class FtraceParser(RamParser):
             print("  cpus: {}".format(cpus), file=fout)
             print("  total_pages: {} ({} KiB)".format(
                 nr_total_pages, total_bytes >> 10), file=fout)
-
+            total_bytes_all +=total_bytes >> 10
             # per-CPU details
             for cpu_idx in range(cpus):
                 pages = nr_pages_per_buffer[cpu_idx]
@@ -317,7 +384,7 @@ class FtraceParser(RamParser):
                 print("    cpu{:03d}: pages={} ({} KiB)".format(
                     cpu_idx, pages, bytes_cpu >> 10), file=fout)
             print("", file=fout)
-
+        print("Total buffer size: %dKB" %(total_bytes_all), file = fout)
         fout.close()
         print_out_str("Wrote ftrace buffer size info to ftrace_buffer_info.txt")
 
