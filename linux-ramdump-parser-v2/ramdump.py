@@ -2447,7 +2447,7 @@ class RamDump():
             module_core_offset = self.field_offset('struct module', 'module_core')
 
         is_attr_new = False
-        if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None:
+        if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None or self.field_offset('struct attribute_group', 'bin_attrs') is not None:
             is_attr_new = True
 
         if is_attr_new:
@@ -2459,7 +2459,10 @@ class RamDump():
 
         kallsyms_offset = self.field_offset('struct module', 'kallsyms')
         if is_attr_new:
-            bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs_new')
+            if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None:
+                bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs_new')
+            else:
+                bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs')
             sect_addr_offset = self.field_offset('struct bin_attribute', 'private')
         else:
             sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
