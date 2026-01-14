@@ -1,6 +1,5 @@
 # Copyright (c) 2016-2018, 2020 The Linux Foundation. All rights reserved.
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
-# SPDX-License-Identifier: BSD-3-Clause-Clear
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
