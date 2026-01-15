@@ -1,4 +1,4 @@
-# Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -40,7 +40,7 @@ class DevicesList(RamParser):
         cma_area = self.ramdump.read_structure_field(device, 'struct device', 'cma_area')
         archdata =  (device + self.archdata_offset)
         cma_name = ''
-        if cma_area != 0:
+        if cma_area:
             cma_name_addr_offset = self.ramdump.field_offset('struct cma', 'name')
             cma_name = self.ramdump.read_cstring(cma_area + cma_name_addr_offset, 48)
         a_ops_name = self.ramdump.unwind_lookup(dma_ops)
