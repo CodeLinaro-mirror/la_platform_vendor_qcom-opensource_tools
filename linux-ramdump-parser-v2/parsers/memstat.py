@@ -1,5 +1,5 @@
 # Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -395,8 +395,73 @@ class MemStats(RamParser):
         out_mem_stat.write('\n\n{0:30}: {1:8} MB'.format(
                             "Total Unaccounted Memory ",unaccounted_mem))
 
+    def print_mem_stats_minidump(self, out_mem_stat):
+        mem_stat = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'MEMINFO'), None)
+        if mem_stat:
+            try:
+                memstat_addr = int(mem_stat.header['sh_addr'])
+                size = int(mem_stat.header['sh_size'])
+                memstat_buf = self.ramdump.read_binarystring(memstat_addr, size)
+                # Remove trailing NULL bytes before decoding
+                memstat_buf = memstat_buf.rstrip(b'\x00')
+                memstat_text = memstat_buf.decode('utf-8', errors='ignore')
+
+                # Field name mapping for renaming specific fields to align with Fulldump format
+                field_mapping = {
+                    'MemTotal': 'Total RAM',
+                    'MemFree': 'Free memory:',
+                    'Slab': 'Total Slab memory:',
+                    'VmallocUsed': 'vmalloc',
+                    'Cached': 'Cached'
+                }
+
+                first_line = True
+                # Process each line from MEMINFO section
+                for line in memstat_text.split('\n'):
+                    try:
+                        # Skip the lines without colon
+                        if ':' not in line:
+                            continue
+
+                        # Parse line: "MemTotal:        : 11533328 KB" -> key="MemTotal", value="  : 11533328 KB"
+                        key, value = line.split(':', 1)
+                        key = key.strip()
+
+                        # Extract number and convert KB to MB: ": 11533328 KB" -> skip ":" -> "11533328" -> 11263 MB
+                        value_parts = value.strip().split()
+                        # Skip the first ":" if present, take the number
+                        value_kb = int(value_parts[1] if value_parts[0] == ':' else value_parts[0])
+                        value_mb = value_kb // 1024
+
+                        # Use mapped name if exists, otherwise keep original
+                        display_name = field_mapping.get(key, key)
+
+                        # Format control: add newline before each line except first
+                        prefix = '' if first_line else '\n'
+                        # Add extra newline after "Free memory:" for spacing
+                        suffix = '\n' if display_name == 'Free memory:' else ''
+
+                        # Write formatted output such as: "Total RAM      :    11263 MB"
+                        out_mem_stat.write('{0}{1:30}: {2:8} MB{3}'.format(
+                            prefix, display_name, value_mb, suffix))
+
+                        first_line = False
+                    except (ValueError, IndexError):
+                        # Skip lines with invalid format or non-numeric values
+                        continue
+
+            except Exception as e:
+                print_out_str("Error extracting memstat from minidump: {}\n".format(str(e)))
+        else:
+            print_out_str("No MEMINFO section found in minidump\n")
+
+
     def parse(self):
         with self.ramdump.open_file('mem_stat.txt') as out_mem_stat:
+            if (self.ramdump.minidump):
+                self.print_mem_stats_minidump(out_mem_stat)
+                return
+
             if (self.ramdump.kernel_version < (3, 18, 0)):
                 out_mem_stat.write('Kernel version 3.18 \
                 and above are supported, current version {0}.\
