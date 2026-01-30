@@ -1,5 +1,5 @@
 # Copyright (c) 2016-2018, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -422,8 +422,11 @@ def create_flat_mappings(ramdump, pg_table, level):
             continue
 
         for sl_index in range(0, NUM_SL_PTE):
-
-            sl_pg_table_entry = ramdump.read_u64(sl_pte)
+            if skip_fl == 0:
+                sl_pte_virt = mm.phys_to_virt(ramdump, sl_pte)
+            else:
+                sl_pte_virt = sl_pte
+            sl_pg_table_entry = ramdump.read_u64(sl_pte_virt)
 
             if sl_pg_table_entry == 0 or sl_pg_table_entry is None:
                 tmp_mapping = add_flat_mapping(ramdump, tmp_mapping,
@@ -452,12 +455,13 @@ def create_flat_mappings(ramdump, pg_table, level):
     return tmp_mapping
 
 
+
+
 def parse_aarch64_tables(ramdump, d, domain_num):
-    device_name = re.sub(r'[^a-zA-Z0-9]', '_', d.client_name.strip())
+    device_name = ramdump.win_safe_name_for_path(d.client_name.strip())
     if device_name is None:
         device_name = "xxxx"
-    fname = 'arm_iommu_domain_%02d_%s_0x%12X.txt' % (domain_num, device_name,
-                                                     d.pg_table)
+    fname = '%s_%02d_0x%12X_arm_iommu_domain.txt' % (device_name, domain_num, d.pg_table)
     with ramdump.open_file('smmu_info/'+ fname, 'w') as outfile:
 
         redirect = 'OFF'

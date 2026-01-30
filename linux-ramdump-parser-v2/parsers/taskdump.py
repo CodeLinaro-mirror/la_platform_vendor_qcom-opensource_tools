@@ -11,6 +11,7 @@
 # GNU General Public License for more details.
 
 import string
+import minidump_util
 from print_out import print_out_str
 from parser_util import register_parser, RamParser, cleanupString
 taskhighlight_out = None
@@ -620,8 +621,20 @@ def do_dump_cmdline(ramdump):
 class DumpTasks(RamParser):
 
     def parse(self):
-        do_dump_stacks(self.ramdump, 0)
-        do_dump_cmdline(self.ramdump)
+        if self.ramdump.minidump:
+            task_stack = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
+                                                                        self.ramdump.ebi_files,
+                                                                        self.ramdump.elffile, "KTASK_STACK")
+            if task_stack:
+                try:
+                    # Use 'with' statement to ensure file is properly closed
+                    with self.ramdump.open_file('tasks.txt') as tasks_out:
+                        tasks_out.write(task_stack)
+                except Exception as e:
+                    print_out_str("Error extracting tasks from minidump: {}".format(str(e)))
+        else:
+            do_dump_stacks(self.ramdump, 0)
+            do_dump_cmdline(self.ramdump)
 
 @register_parser('--print-tasks-timestamps', 'Print all the task sched stats per core sorted on arrival time', shortopt='-T')
 class DumpTasksTimeStamps(RamParser):
