@@ -1,5 +1,5 @@
 # Copyright (c) 2016-2018, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -455,13 +455,10 @@ def create_flat_mappings(ramdump, pg_table, level):
     return tmp_mapping
 
 
-def win_safe(name: str):
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '_', name)
-    name = re.sub(r'[ .]+$', '', name)
-    return name
+
 
 def parse_aarch64_tables(ramdump, d, domain_num):
-    device_name = win_safe(d.client_name.strip())
+    device_name = ramdump.win_safe_name_for_path(d.client_name.strip())
     if device_name is None:
         device_name = "xxxx"
     fname = '%s_%02d_0x%12X_arm_iommu_domain.txt' % (device_name, domain_num, d.pg_table)
