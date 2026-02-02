@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 from parser_util import register_parser, RamParser
 
@@ -30,9 +30,15 @@ class IccSummary(RamParser):
             sname = self.ramdump.read_cstring(node.name)
             sid = node.id
             if node.provider == dnode.provider:
-                self.fop_provider.write("    | {0:5}:{1:30} -> {2:5}:{3:30}\n".format(sid, sname, did, dname))
+                self.fop_provider.write("    | {0:5}:{1:30} -> {2:5}:{3:30}\n".format(sid if sid is not None else "N/A",
+                 sname if sname is not None else "N/A",
+                 did if did is not None else "N/A",
+                 dname if dname is not None else "N/A"))
             else:
-                data = "+ {0:5}:{1:30} -> {2:5}:{3:30}\n".format(sid, sname, did, dname)
+                data = "+ {0:5}:{1:30} -> {2:5}:{3:30}\n".format(sid if sid is not None else "N/A",
+                 sname if sname is not None else "N/A",
+                 did if did is not None else "N/A",
+                 dname if dname is not None else "N/A")
                 self.external_link_data.append(data)
 
     def extract_icc_summary(self):
@@ -62,7 +68,7 @@ class IccSummary(RamParser):
                                                "struct device",
                                                attr_list=['kobj.name'])
             label_name = self.ramdump.read_cstring(label.kobj.name)
-            self.fop_provider.write("  + label = {}\n".format(label_name))
+            self.fop_provider.write("  + label = {}\n".format(label_name or "N/A"))
             node = provider[i].nodes.next - node_list_offset
             nodes = self.ramdump.read_linkedlist('struct icc_node',
                                                  'node_list.next', node)
@@ -73,10 +79,15 @@ class IccSummary(RamParser):
                 peak_bw = nodes[j].peak_bw
                 node_id = nodes[j].id
                 self.fop_provider.write(
-                    formatProvider.format(node_id, icc_node_name, avg_bw,
-                                          peak_bw))
+                    formatProvider.format(node_id if node_id is not None else "N/A",
+                        icc_node_name if icc_node_name is not None else "N/A",
+                        avg_bw if avg_bw is not None else "N/A",
+                        peak_bw if peak_bw is not None else "N/A"))
                 self.fop.write(
-                    formatStr.format(node_id, icc_node_name, avg_bw, peak_bw))
+                    formatStr.format(node_id if node_id is not None else "N/A",
+                        icc_node_name if icc_node_name is not None else "N/A",
+                        avg_bw if avg_bw is not None else "N/A",
+                        peak_bw if peak_bw is not None else "N/A"))
                 req_list = nodes[j].req_list.first
                 req = self.ramdump.read_linkedlist('struct icc_req',
                                                    'req_node.next', req_list,
@@ -99,10 +110,15 @@ class IccSummary(RamParser):
                             self.fop_provider.write(
                                 "    + reqs (active only)\n")
                         self.fop_provider.write(
-                            format_req_str.format(dev_name, req_avg, req_peak))
+                            format_req_str.format(dev_name if dev_name is not None else "N/A",
+                                req_avg if req_avg is not None else "N/A",
+                                req_peak if req_peak is not None else "N/A"))
                         print_seq = 1
                     self.fop.write(
-                        reqStr.format(dev_name, req_tag, req_avg, req_peak))
+                        reqStr.format(dev_name if dev_name is not None else "N/A",
+                            req_tag if req_tag is not None else "N/A",
+                            req_avg if req_avg is not None else "N/A",
+                            req_peak if req_peak is not None else "N/A"))
                 self.fop.write("\n\n")
                 self.fop_provider.write("\n")
             self.fop_provider.write('  + intenral links\n')
