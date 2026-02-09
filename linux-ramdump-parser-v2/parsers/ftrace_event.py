@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -104,7 +104,7 @@ class FtraceParser_Event(object):
         self.rb_event_typelen_offset = self.ramdump.field_offset(
             'struct ring_buffer_event', 'type_len')
         self.trace_entry_type_offset = self.ramdump.field_offset('struct trace_entry ', 'type')
-        self.pid_max = self.ramdump.read_int("pid_max")
+        self.pid_max = 0x8000 if self.ramdump.get_config_val("CONFIG_BASE_SMALL") is None else 0x1000
         self.map_cmdline_to_pid_offset = self.ramdump.field_offset(
             'struct saved_cmdlines_buffer', 'map_cmdline_to_pid')
         self.saved_cmdlines_offset = self.ramdump.field_offset(
@@ -797,7 +797,11 @@ class FtraceParser_Event(object):
                                 pr_f.append(str(ki).replace(" ",""))
                 for item,item_list in offset_data.items():
                     type_str,offset,size = item_list
-                    if 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
+                    if 'char *' in type_str:
+                        v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
+                        v = self.ramdump.read_cstring(v)
+                        fmt_name_value_map[item] = v
+                    elif 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
                         v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
                         if "rwmmio" in event_name and "addr" in item:
                             phys = self.ramdump.virt_to_phys(v)
@@ -811,10 +815,6 @@ class FtraceParser_Event(object):
                         fmt_name_value_map[item] = v
                     elif 'u8' in type_str:
                         v = self.ramdump.read_byte(ftrace_raw_entry + offset)
-                        fmt_name_value_map[item] = v
-                    elif 'const' in type_str and 'char *' in type_str:
-                        v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
-                        v = self.ramdump.read_cstring(v)
                         fmt_name_value_map[item] = v
                     elif type_str.startswith('__data_loc') and type_str.endswith('char[]'):
                         v = self.ramdump.read_u32(ftrace_raw_entry + offset)
