@@ -1245,10 +1245,14 @@ class RamDump():
 
         self.unwind = self.Unwinder(self)
         if self.module_table.sym_paths_exist():
-            self.setup_module_symbols()
-            self.gdbmi.setup_module_table(self.module_table)
-            if self.dump_global_symbol_table:
-                self.dump_global_symbol_lookup_table()
+            try:
+                self.setup_module_symbols()
+                self.gdbmi.setup_module_table(self.module_table)
+                if self.dump_global_symbol_table:
+                    self.dump_global_symbol_lookup_table()
+            except Exception as e:
+                print_out_str("module table is not setup")
+                print_out_str(str(e))
 
         if not self.minidump:
             self.setup_module_layout()
