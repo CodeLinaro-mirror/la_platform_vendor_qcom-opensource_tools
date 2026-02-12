@@ -85,7 +85,9 @@ def get_dmabuf_heap_names(self, ramdump, ion_info):
 def ion_buffer_info(self, ramdump, ion_info):
     ion_info = ramdump.open_file('ionbuffer.txt')
     head_offset = 0
-    if ramdump.address_of('debugfs_list'):
+    if ramdump.address_of('dmabuf_list'):
+        db_list = ramdump.address_of('dmabuf_list')
+    elif ramdump.address_of('debugfs_list'):
         db_list = ramdump.address_of('debugfs_list')
     elif ramdump.address_of('db_list'):
         db_list = ramdump.address_of('db_list')
@@ -186,7 +188,7 @@ def get_bufs(self, task, bufs, ion_info, ramdump):
         return 0
     fd = ramdump.read_pointer(fdt + self.fd_offset)
     max_fds = ramdump.read_halfword(fdt + self.max_fds_offset)
-    stime = ramdump.read_word(self.timekeeper + self.stime_offset)
+    stime = ramdump.read_word(self.timekeeper + self.stime_offset) if self.timekeeper else None
     ctime_offset = ramdump.field_offset('struct dma_buf', 'ktime')
     if ctime_offset is not None:
         ctime_offset += ramdump.field_offset('struct timespec', 'tv_sec')
@@ -200,7 +202,7 @@ def get_bufs(self, task, bufs, ion_info, ramdump):
         dmabuf = ramdump.read_pointer(file + self.private_data_offset)
         size = ramdump.read_word(dmabuf + self.size_offset)
         time = 0
-        if ctime_offset is not None:
+        if ctime_offset is not None and stime is not None:
             ctime = ramdump.read_word(dmabuf + ctime_offset)
             ctime = ctime // 1000000000
             time = stime - ctime
@@ -569,9 +571,16 @@ class DumpIonBuffer(RamParser):
 
     def __init__(self, *args):
         super(DumpIonBuffer, self).__init__(*args)
-        self.timekeeper = self.ramdump.address_of('shadow_timekeeper')
-        if self.timekeeper is None:
-            self.timekeeper = self.ramdump.address_of('tk_core.shadow_timekeeper')
+        timekeeper_symbols = ['timekeeper_data[0].shadow_timekeeper', 
+                    'tk_core.shadow_timekeeper', 'shadow_timekeeper']
+        for tk in timekeeper_symbols:
+            self.timekeeper = self.ramdump.address_of(tk)
+            if self.timekeeper:
+                break
+
+        if not self.timekeeper:
+            print_out_str("timekeeper is not found!!!")
+
         self.files_offset = self.ramdump.field_offset(
                                      'struct task_struct', 'files')
         self.fdt_offset = self.ramdump.field_offset(
