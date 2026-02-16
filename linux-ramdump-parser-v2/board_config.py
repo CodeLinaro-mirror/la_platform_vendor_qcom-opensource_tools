@@ -115,6 +115,22 @@ class BoardQCS615(Board):
         self.wdog_addr = 0x146aa658
         self.imem_file_name = 'OCIMEM.BIN'
 
+class BoardHamoa(Board):
+    def __init__(self, socid):
+        super(BoardHamoa, self).__init__()
+        self.socid = socid
+        self.board_num = "hamoa"
+        self.cpu = 'ARMv9-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x7FE00000
+        self.smem_addr_buildinfo = 0x7FE09c98
+        self.phys_offset = 0xA8000000
+        self.imem_start = 0x14680000
+        self.kaslr_addr = 0x146aa6d0
+        self.wdog_addr = 0x146aa658
+        self.imem_file_name = 'OCIMEM.BIN'
+        self.arm_smmu_v12 = True
+
 BoardQCM6490(socid=475)
 BoardQCM6490SVM(socid=475)
 BoardQCM6490(socid=499)
@@ -142,3 +158,8 @@ BoardQCS615(socid=377)
 BoardQCS615(socid=380)
 BoardQCS615(socid=384)
 BoardQCS615(socid=680)
+BoardHamoa(socid=555)
+BoardHamoa(socid=615)
+BoardHamoa(socid=616)
+BoardHamoa(socid=709)
+BoardHamoa(socid=710)

@@ -306,6 +306,8 @@ if __name__ == '__main__':
         default_list.append("VaMinidump")
         default_list.append("SoftirqStat")
         default_list.append("DumpTasks")
+        default_list.append("FtraceParser")
+        default_list.append("MemStats")
 
     if options.everything:
         everything_exclusion_list.append("ROData")

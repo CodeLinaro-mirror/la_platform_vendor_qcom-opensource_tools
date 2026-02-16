@@ -11,6 +11,7 @@
 # GNU General Public License for more details.
 
 import string
+import minidump_util
 from print_out import print_out_str
 from parser_util import register_parser, RamParser, cleanupString
 taskhighlight_out = None
@@ -621,14 +622,16 @@ class DumpTasks(RamParser):
 
     def parse(self):
         if self.ramdump.minidump:
-            task_stack_section = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KTASK_STACK'), None)
-            if task_stack_section:
-                task_stack_addr = int(task_stack_section.header['sh_addr'])
-                size = int(task_stack_section.header['sh_size'])
-                task_stack_buf = self.ramdump.read_binarystring(task_stack_addr, size)
-                task_out = self.ramdump.open_file('tasks.txt')
-                task_out.write(task_stack_buf.decode('utf-8'))
-                task_out.close()
+            task_stack = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
+                                                                        self.ramdump.ebi_files,
+                                                                        self.ramdump.elffile, "KTASK_STACK")
+            if task_stack:
+                try:
+                    # Use 'with' statement to ensure file is properly closed
+                    with self.ramdump.open_file('tasks.txt') as tasks_out:
+                        tasks_out.write(task_stack)
+                except Exception as e:
+                    print_out_str("Error extracting tasks from minidump: {}".format(str(e)))
         else:
             do_dump_stacks(self.ramdump, 0)
             do_dump_cmdline(self.ramdump)
