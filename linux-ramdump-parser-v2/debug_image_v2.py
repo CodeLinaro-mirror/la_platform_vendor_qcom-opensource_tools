@@ -982,6 +982,16 @@ class DebugImage_v2():
                         getattr(DebugImage_v2, func)(
                             self, 20, client_entry,
                             client_end, client_id, ram_dump)
+
+            md_pattern = re.compile(r'md_vm_3_vcpu', re.IGNORECASE)
+            for a in ram_dump.ebi_files:
+                if len(a) < 4:
+                    continue
+                if re.search(md_pattern, a[3]):
+                    getattr(DebugImage_v2, 'parse_cpu_ctx')(
+                        self, 32, a[1],
+                        a[2], client.MSM_DUMP_DATA_CPU_CTX, ram_dump)
+
         if ram_dump.sysreg:
             self.parse_sysreg(ram_dump)
         self.qdss.dump_standard(ram_dump)
