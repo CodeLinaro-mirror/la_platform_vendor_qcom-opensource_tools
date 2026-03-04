@@ -226,7 +226,7 @@ def dump_cpufreq_data(ramdump):
                 freq_table_index = ramdump.array_index(freq_table, 'struct cpufreq_frequency_table', j)
                 frequency = ramdump.read_structure_field(freq_table_index, 'struct cpufreq_frequency_table', 'frequency')
                 print("%2d:%-10d" %(j, frequency), end= '', file = print_out.out_file)
-                if max_freq == frequency:
+                if cpuinfo_max_freq  == frequency:
                     break
         except Exception as err:
             print(err)

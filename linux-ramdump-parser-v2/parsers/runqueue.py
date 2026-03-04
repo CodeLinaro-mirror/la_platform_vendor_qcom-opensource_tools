@@ -226,6 +226,8 @@ class RunQueues(RamParser):
 
         for i in range(stack_addr, stack_addr + stack_size, stack_align):
             callstack_addr = self.ramdump.read_word(i)
+            if callstack_addr == None:
+                continue
             if text_start_addr <= callstack_addr and callstack_addr < text_end_addr:
                 wname = self.ramdump.unwind_lookup(callstack_addr)
                 if wname is not None:
