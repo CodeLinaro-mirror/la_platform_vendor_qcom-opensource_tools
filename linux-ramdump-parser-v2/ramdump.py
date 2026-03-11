@@ -3037,6 +3037,33 @@ class RamDump():
                 except gdbmi.GdbMIException:
                     pass
 
+    def read_pid_max(self):
+        # Method 1: Try old kernel's global pid_max symbol
+        pid_max_addr = self.address_of('pid_max')
+        if pid_max_addr is not None:
+            val = self.read_u32(pid_max_addr)
+            if val is not None and val > 0:
+                return val
+
+        # Method 2: Try new kernel's init_pid_ns.pid_max
+        init_pid_ns_addr = self.address_of('init_pid_ns')
+        if init_pid_ns_addr is not None:
+            pid_max_offset = self.field_offset('struct pid_namespace', 'pid_max')
+            if pid_max_offset is not None and pid_max_offset != -1:
+                val = self.read_u32(init_pid_ns_addr + pid_max_offset)
+                if val is not None and val > 0:
+                    return val
+
+        # Method 3: Use default based on CONFIG_BASE_SMALL
+        try:
+            if int(self.get_config_val("CONFIG_BASE_SMALL")) == 1:
+                return 0x1000  # 4096
+        except (TypeError, ValueError):
+            pass
+
+        # Final fallback: use default for most embedded systems
+        return 0x8000  # 32768
+
     def sizeof(self, the_type):
         cached_data = self.cached_data['sizeof']
         if the_type in cached_data:
