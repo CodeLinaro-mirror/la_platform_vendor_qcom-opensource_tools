@@ -68,14 +68,5 @@ class FtraceParser_Event_List(object):
 
             self.ftrace_event_type[str(event_type)] = name
             self.ftrace_raw_struct_type[str(event_type)] = raw
-
-            # Debug output
-            print_out_str(
-                f"ftrace_event_data => {hex(ftrace_event_data)} "
-                f"ftrace_event >> {hex(ftrace_event)} tp_data >> {hex(tp_data)} "
-                f"event_name >> {hex(event_name)} event_name_value >> {hex(event_name_value)} "
-                f"event_name2 {event_name2} event_type {event_type} mapped to {name}"
-            )
-
             # Advance to next entry
             ftrace_events_entry = self.ramdump.read_pointer(ftrace_events_entry + ftrace_events_entry_offset)
