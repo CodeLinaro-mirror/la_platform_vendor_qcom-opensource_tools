@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -523,7 +523,9 @@ class DebugImage_v2():
         class_offset = ram_dump.field_offset(self.event_call, 'class')
         flags_offset = ram_dump.field_offset(self.event_call, 'flags')
         flags = ram_dump.read_word(ftrace_list + flags_offset)
-        if ram_dump.kernel_version >= (4, 14):
+        if ram_dump.kernel_version >= (6, 15):
+            TRACE_EVENT_FL_TRACEPOINT = 0x8
+        elif ram_dump.kernel_version >= (4, 14):
             TRACE_EVENT_FL_TRACEPOINT = 0x10
         elif ram_dump.kernel_version >= (4, 9):
             TRACE_EVENT_FL_TRACEPOINT = 0x20
@@ -980,6 +982,16 @@ class DebugImage_v2():
                         getattr(DebugImage_v2, func)(
                             self, 20, client_entry,
                             client_end, client_id, ram_dump)
+
+            md_pattern = re.compile(r'md_vm_3_vcpu', re.IGNORECASE)
+            for a in ram_dump.ebi_files:
+                if len(a) < 4:
+                    continue
+                if re.search(md_pattern, a[3]):
+                    getattr(DebugImage_v2, 'parse_cpu_ctx')(
+                        self, 32, a[1],
+                        a[2], client.MSM_DUMP_DATA_CPU_CTX, ram_dump)
+
         if ram_dump.sysreg:
             self.parse_sysreg(ram_dump)
         self.qdss.dump_standard(ram_dump)
