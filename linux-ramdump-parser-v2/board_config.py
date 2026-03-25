@@ -131,6 +131,21 @@ class BoardHamoa(Board):
         self.imem_file_name = 'OCIMEM.BIN'
         self.arm_smmu_v12 = True
 
+class BoardKaanapali(Board):
+    def __init__(self, socid):
+        super(BoardKaanapali, self).__init__()
+        self.socid = socid
+        self.board_num = "kaanapali"
+        self.cpu = 'ARMV9-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x1D00000
+        self.smem_addr_buildinfo = 0x1D0A5B8
+        self.phys_offset = 0xC7800000
+        self.imem_start = 0x14680000
+        self.kaslr_addr = 0x146806d0
+        self.imem_file_name = 'OCIMEM.BIN'
+        self.arm_smmu_v12 = True
+
 BoardQCM6490(socid=475)
 BoardQCM6490SVM(socid=475)
 BoardQCM6490(socid=499)
@@ -163,3 +178,7 @@ BoardHamoa(socid=615)
 BoardHamoa(socid=616)
 BoardHamoa(socid=709)
 BoardHamoa(socid=710)
+BoardKaanapali(socid=660)
+BoardKaanapali(socid=661)
+BoardKaanapali(socid=730)
+BoardKaanapali(socid=743)
