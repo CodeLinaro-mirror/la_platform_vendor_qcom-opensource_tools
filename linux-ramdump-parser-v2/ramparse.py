@@ -308,6 +308,7 @@ if __name__ == '__main__':
         default_list.append("DumpTasks")
         default_list.append("FtraceParser")
         default_list.append("MemStats")
+        default_list.append("DumpProcessMemory")
 
     if options.everything:
         everything_exclusion_list.append("ROData")
