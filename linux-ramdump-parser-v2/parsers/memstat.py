@@ -10,6 +10,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
+from print_out import print_out_str
 from parser_util import register_parser, RamParser
 import minidump_util
 import os
