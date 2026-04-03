@@ -45,6 +45,7 @@ from linux_list import ListWalker
 import mmap
 import bisect
 from lrucachedict import LRUCacheDict
+from elftools.elf.elffile import ELFFile
 
 SP = 13
 LR = 14
@@ -2763,18 +2764,12 @@ class RamDump():
         except Exception as e:
             print_out_str(str(e))
 
-    def has_debug_info(self, file):
-        cmd = self.objdump_path + ' -h ' + file
-        if platform.system() != "Linux":
-            objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       universal_newlines=True, )
-        else:
-            objdump = subprocess.Popen(shlex.split(cmd), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       universal_newlines=True, )
-        out, err = objdump.communicate()
-        if '.debug_info' in out:
-            return True
-        else:
+    def has_debug_info(self, filepath):
+        try:
+            with open(filepath, 'rb') as f:
+                elf = ELFFile(f)
+                return elf.get_section_by_name('.debug_info') is not None
+        except Exception:
             return False
 
     def parse_module_symbols(self):
