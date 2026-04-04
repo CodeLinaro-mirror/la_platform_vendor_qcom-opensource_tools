@@ -16,7 +16,6 @@ import re
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from tempfile import NamedTemporaryFile
-from struct_print import struct_print_class
 
 comm_pid_dict = {}
 
@@ -143,12 +142,10 @@ class FtraceParser_Event(object):
     def parse_buffer_page_entry(self, buffer_page_entry):
         buffer_data_page = None
         buffer_data_page_end = None
-        #buffer_data_page_data_offset = None
         rb_event = None
         rb_event_timestamp = 0
         time_delta = 0
         record_length = 0
-        #rb_event_array_offset = 0
         tr_entry  = None
         tr_event_type = None
         commit = 0
@@ -512,7 +509,7 @@ class FtraceParser_Event(object):
                 s for string
                 e for floating-point in an exponent format
             """
-            regex = re.compile('%[\*]*[a-zA-Z]+')
+            regex = re.compile(r'%[\*]*[a-zA-Z]+')
             length = 0
             print_buffer = []
             print_buffer_offset = ftrace_raw_entry + print_entry_buf_offset
@@ -894,12 +891,6 @@ class FtraceParser_Event(object):
                 pass
 
     def ring_buffer_per_cpu_parsing(self, ring_trace_buffer_cpu, max_page=None):
-        page_index = 0
-        buffer_page_list_offset = self.ramdump.field_offset(
-            'struct buffer_page ', 'list')
-        buffer_page_list_prev_offset = self.ramdump.field_offset(
-            'struct list_head ', 'prev')
-        trace_ring_buffer_per_cpu_data = struct_print_class(self.ramdump, 'ring_buffer_per_cpu', ring_trace_buffer_cpu, None)
         '''
             crash> struct ring_buffer_per_cpu -x -o
             struct ring_buffer_per_cpu {
@@ -915,21 +906,32 @@ class FtraceParser_Event(object):
             [0xa8] struct buffer_page *commit_page;
             [0xb0] struct buffer_page *reader_page;
         '''
-        if self.ramdump.arm64:
-            trace_ring_buffer_per_cpu_data.append('nr_pages', 'u64')
-        else:
-            trace_ring_buffer_per_cpu_data.append('nr_pages', 'u32')
-        trace_ring_buffer_per_cpu_data.append('tail_page', 'ptr')
-        trace_ring_buffer_per_cpu_data.process()
-        nr_pages = trace_ring_buffer_per_cpu_data.get_val('nr_pages')
-        buffer_page_entry = trace_ring_buffer_per_cpu_data.get_val('tail_page')
-
-        while page_index < nr_pages:
-            if buffer_page_entry:
-                self.parse_buffer_page_entry(buffer_page_entry)
-                buffer_page_entry_list = buffer_page_entry + buffer_page_list_offset
-                buffer_page_entry = self.ramdump.read_pointer(buffer_page_entry_list + buffer_page_list_prev_offset)
+        page_index = 0
+        buffer_page_list_offset = self.ramdump.field_offset(
+            'struct buffer_page ', 'list')
+        buffer_page_list_prev_offset = self.ramdump.field_offset(
+            'struct list_head ', 'prev')
+        trace_ring_buffer_per_cpu_data = self.ramdump.read_datatype(ring_trace_buffer_cpu, 'struct ring_buffer_per_cpu')
+        nr_pages = trace_ring_buffer_per_cpu_data.nr_pages
+        buffer_page_list = self.ramdump.read_structure_field(trace_ring_buffer_per_cpu_data.tail_page, 'struct buffer_page', 'list.prev')
+        buffer_page_list_head = buffer_page_list
+        buffer_page_entry_list = []
+        while buffer_page_list and page_index < nr_pages:
+            if (buffer_page_list & 0x3) != 0x0:
+                print_out_str(f"Found non-zero attr in page {hex(buffer_page_list)}")
+                break
+            buffer_page_entry_list.append(buffer_page_list - buffer_page_list_offset)
+            buffer_page_list = self.ramdump.read_pointer(buffer_page_list + buffer_page_list_prev_offset)
+            if buffer_page_list_head == buffer_page_list:
+                break
             if max_page and page_index >= max_page:
                 print_out_str("Reached to the max page = {0} nr_pages = {1}".format(max_page, nr_pages))
                 break
             page_index = page_index + 1
+
+        tail_page = trace_ring_buffer_per_cpu_data.tail_page
+        if tail_page and tail_page not in buffer_page_entry_list:
+            buffer_page_entry_list.append(tail_page)
+
+        for buffer_page_entry in buffer_page_entry_list:
+            self.parse_buffer_page_entry(buffer_page_entry)
