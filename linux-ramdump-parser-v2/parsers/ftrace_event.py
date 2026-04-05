@@ -332,12 +332,9 @@ class FtraceParser_Event(object):
         local_timestamp = time / 1000000000.0
         if not (local_timestamp in self.ftrace_time_data):
             self.ftrace_time_data[local_timestamp] = []
-        #print("type = {0}".format(type))
         if str(type) not in self.ftrace_event_type:
-            #print_out_str("unknown event type = {0}".format(str(type)))
             return
         event_name = str(self.ftrace_event_type[str(type)])
-        #print("event_name  {0}".format(event_name))
         if event_name is None or event_name == 'None' or 'None' in event_name or len(event_name) <= 1:
             return
         ftrace_raw_entry = entry
@@ -355,7 +352,6 @@ class FtraceParser_Event(object):
         lat_fmt = self.get_lat_fmt(flags, preempt_count)
         head_data_fmt = " {0:>25}   {1} {2}  {3:.6f}: {4:<25}".format(comm,self.cpu,lat_fmt,
                                         round(local_timestamp,6),"{}:".format(event_name))
-        #print("ftrace_raw_entry of {0} = {1}".format(event_name, hex(ftrace_raw_entry)))
         if event_name == "scm_call_start":
             trace_event_raw_offset = self.ramdump.field_offset('struct ' + struct_type, "x0")
             trace_event_raw_next_comm = self.ramdump.field_offset('struct ' + struct_type, "arginfo")
@@ -370,10 +366,10 @@ class FtraceParser_Event(object):
             for i in range(1, 9):
                 ptr = self.ramdump.read_pointer(args + (i*ptr_size))
                 arr.append(hex(ptr))
-            temp_data = "{0} func id={1}:(args:{2}, {3}, {4} ,{5} ,{6})\n".format(
+            temp_data = "{0} func id={1}:(args:{2}, {3}, {4} ,{5} ,{6})".format(
                             head_data_fmt,hex(x0),hex(arginfo),arr[0],arr[1],arr[2],hex(x5))
+            temp_data = temp_data.rstrip("\n") + "\n"
             self.ftrace_time_data[local_timestamp].append(temp_data)
-            #self.ftrace_out.write(" <TBD>-{}".format(temp_data))
         elif event_name == "scm_call_end":
             trace_event_raw_offset = self.ramdump.field_offset('struct ' + struct_type, "ret")
             rets = self.ramdump.read_pointer(ftrace_raw_entry + trace_event_raw_offset)
@@ -382,7 +378,8 @@ class FtraceParser_Event(object):
             for i in range(1, 4):
                 ptr = self.ramdump.read_pointer(rets + (i*ptr_size))
                 arr.append(ptr)
-            temp_data = "{0} ret:{1}, {2}, {3}\n)\n".format(head_data_fmt,arr[0],arr[1],arr[2])
+            temp_data = "{0} (ret:{1}, {2}, {3})".format(head_data_fmt,arr[0],arr[1],arr[2])
+            temp_data = temp_data.rstrip("\n") + "\n"
             self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "sched_switch":
                 trace_event_raw_offset = self.ramdump.field_offset('struct ' + struct_type, "prev_state")
@@ -419,11 +416,9 @@ class FtraceParser_Event(object):
                     prev_state_info = "P"
                 elif ( prev_state_info == 128):
                     prev_state_info = "I"
-                prev_state_info2 = ""
-                if prev_state_info:
-                    prev_state_info2 = "+"
-                temp_data = "{0} prev_comm={1} prev_pid={2} prev_prio={3} prev_state={4} ==> next_comm={5} next_pid={6} next_prio={7}\n".format(
+                temp_data = "{0} prev_comm={1} prev_pid={2} prev_prio={3} prev_state={4} ==> next_comm={5} next_pid={6} next_prio={7}".format(
                                 head_data_fmt,prev_comm,prev_pid,prev_prio,prev_state_info,next_comm,next_pid,next_prio)
+                temp_data = temp_data.rstrip("\n") + "\n"
                 self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "softirq_raise":
             trace_event_softirq_vec_offset = self.ramdump.field_offset('struct ' + 'trace_event_raw_softirq', "vec")
@@ -434,10 +429,10 @@ class FtraceParser_Event(object):
                 except Exception as err:
                     print_out_str("failed to find a softirq action = {0}".format(vector))
                     action = "unknown vector"
-                temp_data = "{0} vec={1} [action={2}]\n".format(head_data_fmt,vector,action)
+                temp_data = "{0} vec={1} [action={2}]".format(head_data_fmt,vector,action)
             else:
-                action = "unknown vector"
-                temp_data = "{0} vec=unknown\n".format(head_data_fmt)
+                temp_data = "{0} vec=unknown".format(head_data_fmt)
+            temp_data = temp_data.rstrip("\n") + "\n"
             self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "workqueue_activate_work":
             trace_event_raw_work_offset = self.ramdump.field_offset('struct ' + 'trace_event_raw_workqueue_activate_work', "work")
@@ -452,10 +447,11 @@ class FtraceParser_Event(object):
                 else:
                     function = 0
                     function_name = 'none'
-                temp_data = "{0} work struct {1} function 0x{2:x} {3}\n".format(head_data_fmt,
+                temp_data = "{0} work struct {1} function 0x{2:x} {3}".format(head_data_fmt,
                              str(hex(work)).replace("L",""),function,function_name)
             else:
-                temp_data = "{0} work struct unknown\n".format(head_data_fmt)
+                temp_data = "{0} work struct unknown".format(head_data_fmt)
+            temp_data = temp_data.rstrip("\n") + "\n"
             self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "workqueue_execute_start" or event_name == "workqueue_execute_end" or event_name == "workqueue_queue_work":
             trace_event_raw_work_offset = None
@@ -485,10 +481,11 @@ class FtraceParser_Event(object):
                     function_name = 'none'
             if trace_event_raw_work_offset is not None:
                 work = self.ramdump.read_pointer(ftrace_raw_entry + trace_event_raw_work_offset)
-                temp_data = "{0} work_struct {1} function 0x{2:x} {3}\n".format(head_data_fmt,
+                temp_data = "{0} work_struct {1} function 0x{2:x} {3}".format(head_data_fmt,
                             str(hex(work)).replace("L",""),function,function_name)
             else:
-                temp_data = "{0} work_struct unknown\n".format(head_data_fmt)
+                temp_data = "{0} work_struct unknown".format(head_data_fmt)
+            temp_data = temp_data.rstrip("\n") + "\n"
             self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "bprint":
             MAX_LEN = 1000
@@ -649,10 +646,11 @@ class FtraceParser_Event(object):
                     align = self.ramdump.sizeof("int") - 1
                     print_buffer_offset = (print_buffer_offset + (align)) & (~align)
                 try:
-                    temp_data = "{0} {1}: {2}\n".format(head_data_fmt,
+                    temp_data = "{0} {1}: {2}".format(head_data_fmt,
                                     function,print_entry_fmt_data % (tuple(print_buffer)))
                 except Exception as err:
                     temp_data = "{0} Error parsing bprint event entry".format(head_data_fmt)
+                temp_data = temp_data.rstrip("\n") + "\n"
                 self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "print":
                 print_entry_ip_offset = self.ramdump.field_offset('struct print_entry' , "ip")
@@ -665,8 +663,7 @@ class FtraceParser_Event(object):
                 else:
                     function = "unknown"
                 temp_data = "{0} {1}: {2}".format(head_data_fmt,function,print_buffer)
-                if not print_buffer.endswith("\n"):
-                    temp_data += "\n"
+                temp_data = temp_data.rstrip("\n") + "\n"
                 self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "bputs":
                 entry_ip_offset = self.ramdump.field_offset('struct bputs_entry' , "ip")
@@ -680,8 +677,7 @@ class FtraceParser_Event(object):
                 else:
                     function = "unknown"
                 temp_data = "{0} {1}: {2}".format(head_data_fmt,function,str_buffer)
-                if not str_buffer.endswith("\n"):
-                    temp_data += "\n"
+                temp_data = temp_data.rstrip("\n") + "\n"
                 self.ftrace_time_data[local_timestamp].append(temp_data)
         elif event_name == "kernel_stack":
                 '''
@@ -707,9 +703,8 @@ class FtraceParser_Event(object):
                 caller_offset = self.ramdump.field_offset('struct stack_entry', "caller")
                 caller = self.ramdump.read_word(ftrace_raw_entry + caller_offset)
                 size = self.ramdump.read_int(ftrace_raw_entry + size_offset)
-                call_string_hex =''
+                call_string_hex = ""
                 if size != 0 and caller != 0:
-                    #print("v.v (struct stack_entry)0x%x"%(ftrace_raw_entry))
                     for i in range(0, 8):
                         caller = self.ramdump.read_word(ftrace_raw_entry + caller_offset + i * 8)
                         function = "unknown"
@@ -717,13 +712,10 @@ class FtraceParser_Event(object):
                         if function_lookup is not None:
                             function, offset = function_lookup
                         print_buffer = " 0x{0:x} {1} ".format(caller, function)
-                        call_string_hex +=print_buffer
-                    call_string_hex +="\n"
+                        call_string_hex += print_buffer
                     temp_data = "{0} {1}: {2}".format(head_data_fmt, 'kernel_stack', call_string_hex)
-                    if not call_string_hex.endswith("\n"):
-                        temp_data += "\n"
+                    temp_data = temp_data.rstrip("\n") + "\n"
                     self.ftrace_time_data[local_timestamp].append(temp_data)
-                    #print(temp_data)
         elif event_name == "user_stack":
                 '''
                     crash> struct userstack_entry -o -x
@@ -740,19 +732,15 @@ class FtraceParser_Event(object):
                 ent = self.ramdump.read_word(ftrace_raw_entry + ent_offset)
                 tgid = self.ramdump.read_word(ftrace_raw_entry + tgid_offset)
                 caller = self.ramdump.read_word(ftrace_raw_entry + caller_offset)
-                call_string_hex =''
+                call_string_hex = ""
                 if caller != 0:
-                    #print("v.v (struct userstack_entry)0x%x"%(ftrace_raw_entry))
                     for i in range(0, 8):
                         caller = self.ramdump.read_word(ftrace_raw_entry + caller_offset + i * 8)
                         print_buffer = " 0x{0:x} ".format(caller)
-                        call_string_hex +=print_buffer
-                    call_string_hex +="\n"
+                        call_string_hex += print_buffer
                     temp_data = "{0} {1}: {2}".format(head_data_fmt, tgid, call_string_hex)
-                    if not call_string_hex.endswith("\n"):
-                        temp_data += "\n"
+                    temp_data = temp_data.rstrip("\n") + "\n"
                     self.ftrace_time_data[local_timestamp].append(temp_data)
-                    #print(temp_data)
         else:
             event_data = self.format_event_map[event_name]
             fmt_str = event_data[1]
@@ -878,8 +866,7 @@ class FtraceParser_Event(object):
                     #print_out_str("missing event = {0} err = {1}".format(event_name,str(err)))
                     pass
                 try:
-                    if not temp.endswith("\n"):
-                        temp += "\n"
+                    temp = temp.rstrip("\n") + "\n"
                     temp_data = "{0} {1}".format(head_data_fmt,temp)
                     self.ftrace_time_data[local_timestamp].append(temp_data)
                     temp = ""
