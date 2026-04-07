@@ -1,5 +1,5 @@
 # Copyright (c) 2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -14,78 +14,61 @@ from parser_util import register_parser, RamParser
 from print_out import print_out_str
 
 class FtraceParser_Event_List(object):
+    EVENT_TYPE_MAP = {
+        4: ("kernel_stack", "kernel_stack"),   # TRACE_STACK
+        5: ("print", "print"),                 # TRACE_PRINT
+        6: ("bprint", "bprint"),               # TRACE_BPRINT
+        12: ("user_stack", "user_stack"),      # TRACE_USER_STACK
+        14: ("bputs", "bputs"),                # TRACE_BPUTS
+    }
+
     def __init__(self, ramdump):
         self.ramdump = ramdump
-        ftrace_event_call_list_offset = self.ramdump.field_offset("struct trace_event_call" , "list")
-        #print ("self.ftrace_event_call_list_offset = {0}".format(hex(self.ftrace_event_call_list_offset)))
+        self.ftrace_event_type = {}
+        self.ftrace_raw_struct_type = {}
+        self.event_name_by_type = {}
+
+        # Offsets
+        ftrace_event_call_list_offset = self.ramdump.field_offset("struct trace_event_call", "list")
         ftrace_events_head = self.ramdump.address_of("ftrace_events")
         ftrace_events_entry_offset = self.ramdump.field_offset("struct list_head", "next")
-        ftrace_events_entry = self.ramdump.read_pointer(ftrace_events_head + ftrace_events_entry_offset)
-        #print ("self.ftrace_events_entry = {0}".format(hex(self.ftrace_events_entry)))
-
-        ftrace_event_call_offset = self.ramdump.field_offset("struct trace_event_call" , "event")
+        ftrace_event_call_offset = self.ramdump.field_offset("struct trace_event_call", "event")
         tp_offset = self.ramdump.field_offset("struct trace_event_call", "tp")
         ftrace_event_call_name_offset = self.ramdump.field_offset("struct tracepoint", "name")
         ftrace_event_offset = self.ramdump.field_offset("struct trace_event", "type")
 
-        self.ftrace_event_type = {}
-        self.ftrace_raw_struct_type = {}
-
+        # Walk the linked list
+        ftrace_events_entry = self.ramdump.read_pointer(ftrace_events_head + ftrace_events_entry_offset)
         while ftrace_events_entry != ftrace_events_head:
             ftrace_event = ftrace_events_entry - ftrace_event_call_list_offset
-            #ftrace_event_data = self.ramdump.read_u64(ftrace_event + ftrace_event_call_offset)
             ftrace_event_data = ftrace_event + ftrace_event_call_offset
             tp_data = ftrace_event + tp_offset
-            if ftrace_event_data:
-                #print ("ftrace_event_data +++ {0}".format(hex(ftrace_event_data)))
-                event_type = self.ramdump.read_u16(ftrace_event_data + ftrace_event_offset)
-                if self.ramdump.arm64:
-                    event_name = self.ramdump.read_u64(tp_data)
-                    #print ("event_name +++ {0}".format((hex(event_name))))
 
-                    event_name_value = self.ramdump.read_u64(event_name + ftrace_event_call_name_offset)
-                else:
-                    event_name = self.ramdump.read_u32(tp_data)
-                    #print ("event_name +++ {0}".format((hex(event_name))))
-
-                    event_name_value = self.ramdump.read_u32(event_name + ftrace_event_call_name_offset)
-                #print ("event_name_value +++ {0}".format((event_name_value)))
-
-                event_name1 = self.ramdump.read_cstring(event_name_value)
-                event_name2 = self.ramdump.read_cstring(event_name)
-                if "6" == str(event_type):  #TRACE_BPRINT
-                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
-                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
-                         hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
-                    self.ftrace_event_type[str(event_type)] = "bprint"
-                    self.ftrace_raw_struct_type[str(event_type)] = "bprint"
-                elif "5" == str(event_type):
-                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
-                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
-                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
-                    self.ftrace_event_type[str(event_type)] = "print"
-                    self.ftrace_raw_struct_type[str(event_type)] = "print"
-                elif '4' == str(event_type):  #TRACE_STACK
-                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
-                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
-                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
-                    self.ftrace_event_type[str(event_type)] = "kernel_stack"
-                    self.ftrace_raw_struct_type[str(event_type)] = "kernel_stack"
-                elif '12' == str(event_type):  #TRACE_USER_STACK
-                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
-                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
-                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
-                    self.ftrace_event_type[str(event_type)] = "user_stack"
-                    self.ftrace_raw_struct_type[str(event_type)] = "user_stack"
-                elif "14" == str(event_type):
-                    print_out_str("ftrace_event_data => {0} ftrace_event >> {1} tp_data >> {2} event_name >> {3} "
-                        "event_name_value >> {4} event_name2 {5} event_type {6}".format(hex(ftrace_event_data),
-                        hex(ftrace_event),hex(tp_data),hex(event_name),hex(event_name_value),event_name2,event_type))
-                    self.ftrace_event_type[str(event_type)] = "bputs"
-                    self.ftrace_raw_struct_type[str(event_type)] = "bputs"
-                else:
-                    self.ftrace_event_type[str(event_type)] = str(event_name1)
-                    self.ftrace_raw_struct_type[str(event_type)] = "trace_event_raw_" + str(event_name1)
-                ftrace_events_entry = self.ramdump.read_pointer(ftrace_events_entry + ftrace_events_entry_offset)
-            else:
+            if not ftrace_event_data:
                 break
+
+            event_type = self.ramdump.read_u16(ftrace_event_data + ftrace_event_offset)
+
+            # Architecture-specific pointer read
+            if self.ramdump.arm64:
+                event_name = self.ramdump.read_u64(tp_data)
+                event_name_value = self.ramdump.read_u64(event_name + ftrace_event_call_name_offset)
+            else:
+                event_name = self.ramdump.read_u32(tp_data)
+                event_name_value = self.ramdump.read_u32(event_name + ftrace_event_call_name_offset)
+
+            event_name1 = self.ramdump.read_cstring(event_name_value)
+            event_name2 = self.ramdump.read_cstring(event_name)
+
+            # Use mapping if known, otherwise default to event_name1
+            if event_type in self.EVENT_TYPE_MAP:
+                name, raw = self.EVENT_TYPE_MAP[event_type]
+            else:
+                name = event_name1
+                raw = f"trace_event_raw_{event_name1}"
+
+            self.ftrace_event_type[str(event_type)] = name
+            self.ftrace_raw_struct_type[str(event_type)] = raw
+            self.event_name_by_type[str(event_type)] = name
+            # Advance to next entry
+            ftrace_events_entry = self.ramdump.read_pointer(ftrace_events_entry + ftrace_events_entry_offset)

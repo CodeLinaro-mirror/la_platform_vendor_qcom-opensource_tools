@@ -123,15 +123,19 @@ def verify_active_cpus(ramdump):
             min_req_cpus = 1
 
         if ((cluster_nr_oncpus - cluster_nr_isocpus) < min_req_cpus):
-                print_out_str("\n" + "*" * 10 + " WARNING " + "*" * 10 + "\n")
-                print_out_str("\tMinimum active cpus are not available in the cluster {0}\n".format(i))
+            print_out_str("\n" + "*" * 10 + " WARNING " + "*" * 10 + "\n")
+            print_out_str("\tMinimum active cpus are not available in the cluster {0}\n".format(i))
+            print_out_str("*" * 10 + " WARNING " + "*" * 10 + "\n")
 
-                print_out_str("*" * 10 + " WARNING " + "*" * 10 + "\n")
-        print_out_str("\tCluster nr_cpu: {0} cpus: {1}  Online cpus: {2} Isolated cpus: {3} (core_ctl nr_isol: {4})\n".format(
+        print_out_str("\tCluster nr_cpu: {0} cpus: {1}  Online cpus: {2} Isolated cpus: {3} (core_ctl nr_isol: {4})".format(
                         bin(cluster_cpus[i]).count('1'),
                         mask_bitset_pos(cluster_cpus[i]),
                         mask_bitset_pos(cluster_online_cpus),
                         mask_bitset_pos(cluster_isolated_cpus), crctl_nr_isol))
+
+    cpu_logical_map = get_cpu_logical_map(ramdump)
+    if cpu_logical_map: print_out_str(f"\tcpu_logical_map = {get_cpu_logical_map(ramdump)}")
+    print_out_str("")
 
 def dump_rq_lock_information(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
@@ -226,7 +230,7 @@ def dump_cpufreq_data(ramdump):
                 freq_table_index = ramdump.array_index(freq_table, 'struct cpufreq_frequency_table', j)
                 frequency = ramdump.read_structure_field(freq_table_index, 'struct cpufreq_frequency_table', 'frequency')
                 print("%2d:%-10d" %(j, frequency), end= '', file = print_out.out_file)
-                if max_freq == frequency:
+                if cpuinfo_max_freq  == frequency:
                     break
         except Exception as err:
             print(err)
@@ -253,10 +257,92 @@ def dump_cpufreq_data(ramdump):
         except Exception as err:
             print(err)
 
+def parse_cpufreq_minidump(ramdump):
+    try:
+        minidump_stack_addr = next((s for s in ramdump.elffile.iter_sections() if s.name == "FREQ_LOG"), None)
+        cpuclk_log_virt_addr = minidump_stack_addr['sh_addr']
+        section_size = minidump_stack_addr['sh_size']
+    except Exception as e:
+        print_out_str("Extracting minidump FREQ_LOG section info failed: {}".format(str(e)))
+        return
+
+    freq_hist_size = ramdump.sizeof('struct freq_hist')
+    idx_offset = ramdump.field_offset('struct freq_hist ', 'idx')
+    freq_log_offset = ramdump.field_offset('struct freq_hist ', 'log')
+
+    ktime_offset = ramdump.field_offset('struct freq_log', 'ktime')
+    freq_offset = ramdump.field_offset('struct freq_log', 'freq')
+
+    freq_log_size = ramdump.sizeof('struct freq_log')
+    FREQ_LOG_IDX_MASK = 0xF
+
+    # 16 entries per cluster
+    max_entries = FREQ_LOG_IDX_MASK + 1
+
+    # Calculate number of cpu clusters
+    num_clusters = section_size // freq_hist_size
+
+    # Iterate through each cluster
+    for cluster in range(num_clusters):
+        cluster_addr = cpuclk_log_virt_addr + (cluster * freq_hist_size)
+        idx = ramdump.read_int(cluster_addr + idx_offset)
+
+        print_out_str(f"\nCluster {cluster} (total idx records: {idx})")
+
+        # Collect log entries
+        log_entries = []
+        for i in range(max_entries):
+            log_entry_addr = cluster_addr + freq_log_offset + (i * freq_log_size)
+            ktime = ramdump.read_u64(log_entry_addr + ktime_offset)
+            freq = ramdump.read_u64(log_entry_addr + freq_offset)
+
+            if ktime != 0 or freq != 0:
+                time_sec = ktime / 1_000_000_000.0
+                log_entries.append((time_sec, freq))
+
+        log_entries.sort(key=lambda x: x[0])
+
+        print_out_str("-" *40)
+        print_out_str("Index\tTime(sec)\t\tFrequency")
+
+        for idx, (time_sec, freq) in enumerate(log_entries):
+            print_out_str(f"{idx}\t\t{time_sec:.6f}\t\t{freq}")
+
+    print_out_str("\n(Note: Shows requested freq; system may pick nearest value)")
+
+def mpidr_to_index(ramdump, mpidr):
+    vcpu_index = 0
+    if mpidr:
+        if hasattr(ramdump.board, 'aff_shift'):
+            aff_shift = ramdump.board.aff_shift
+        else:
+            aff_shift = [0,0,0,0]
+        tmp_vcpu_index = mpidr
+        for i in range(0, len(aff_shift)):
+            vcpu_index |= ((tmp_vcpu_index >> (i * 8)) & 0xff) << aff_shift[i]
+        if hasattr(ramdump.board, 'core_map'):
+            vcpu_index = ramdump.board.core_map.get(vcpu_index, vcpu_index)
+    else:
+        vcpu_index = mpidr
+    return vcpu_index
+
+def get_cpu_logical_map(ramdump):
+    cpu_logical_map = {}
+    logical_map_addr = ramdump.address_of('__cpu_logical_map')
+    if not logical_map_addr:
+        return cpu_logical_map
+    for i in ramdump.iter_cpus():
+        hw_coreid = ramdump.read_u64(logical_map_addr + (i * 8))
+        cpu_logical_map[i] = mpidr_to_index(ramdump, hw_coreid)
+    return cpu_logical_map
 
 @register_parser('--sched-info', 'Verify scheduler\'s various parameter status')
 class Schedinfo(RamParser):
     def parse(self):
+        if self.ramdump.minidump:
+            parse_cpufreq_minidump(self.ramdump)
+            return
+
         global cpu_online_bits
         # Active cpu check verified by default!
         #verify_active_cpus(self.ramdump)

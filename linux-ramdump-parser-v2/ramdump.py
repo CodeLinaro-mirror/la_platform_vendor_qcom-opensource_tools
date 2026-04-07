@@ -14,6 +14,7 @@ from __future__ import print_function
 import sys
 import re
 import os
+from typing import List, Tuple
 import struct
 import gzip
 import functools
@@ -355,12 +356,40 @@ class RamDump():
                     stop = mid
             return stop
 
+        def ptregs_generic64(self, frame):
+            ptregs = {}
+            ret_lookup = self.ramdump.unwind_lookup(frame.pc)
+            if ret_lookup:
+                symname, offset = ret_lookup
+                # Extend tuple for additional handlers
+                if symname and symname.startswith(("ret_to_kernel",)):
+                    pt_regs_addr = frame.sp
+                    ptregs["sp"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'sp')
+                    ptregs["pc"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'pc')
+                    regs_addr = pt_regs_addr + self.ramdump.field_offset('struct pt_regs', 'regs')
+                    x29_ptr = self.ramdump.array_index(regs_addr, 'unsigned long', 29)
+                    ptregs["fp"] = self.ramdump.read_word(x29_ptr)
+                    x30_ptr = self.ramdump.array_index(regs_addr, 'unsigned long', 30)
+                    ptregs["lr"] = self.ramdump.read_word(x30_ptr)
+            return ptregs
+
         def unwind_frame_generic64(self, frame, cpu_work_state=''):
-            fp = frame.fp
+            ptregs = {}
             try:
-                frame.sp = fp + 0x10
-                frame.fp = self.ramdump.read_word(fp)
-                frame.pc = self.ramdump.read_word(fp + 8)
+                ptregs = self.ptregs_generic64(frame)
+            except:
+                pass
+            try:
+                if not ptregs:
+                    fp = frame.fp
+                    frame.sp = fp + 0x10
+                    frame.fp = self.ramdump.read_word(fp)
+                    frame.pc = self.ramdump.read_word(fp + 8)
+                else:
+                    frame.sp = ptregs["sp"]
+                    frame.fp = ptregs["fp"]
+                    frame.pc = ptregs["pc"]
+                    frame.lr = ptregs["lr"]
                 if ((frame.fp == 0 and frame.pc == 0)
                         or frame.pc is None or frame.lr is None):
                     return -1
@@ -955,18 +984,29 @@ class RamDump():
                     sys.exit(1)
             fd = open(file_path, 'rb')
             self.elffile = ELFFile(fd)
-            for idx, s in enumerate(self.elffile.iter_segments()):
-                pa = int(s['p_paddr'])
-                va = int(s['p_vaddr'])
-                size = int(s['p_filesz'])
+
+            def range_memblock(a, size):
+                return (a, a + size)
+
+            def ranges_intersect(r1, r2):
+                return max(r1[0], r2[0]) < min(r1[1], r2[1])
+
+            for idx, segment in enumerate(self.elffile.iter_segments()):
+                pa = int(segment['p_paddr'])
+                va = int(segment['p_vaddr'])
+                size = int(segment['p_filesz'])
                 end_addr = pa + size - 1
+                seg_mem  = range_memblock(va, size)
                 for section in self.elffile.iter_sections():
-                    if (not section.is_null() and
-                            s.section_in_segment(section)):
+                    if section.is_null():
+                        continue
+                    sec_mem  = range_memblock(section['sh_addr'], section['sh_size'])
+                    is_intersect  = ranges_intersect(seg_mem, sec_mem) if segment['p_filesz'] and section['sh_size'] else False
+                    if is_intersect:
                         self.ebi_pa_name_map[pa] = section.name
                         if section.name == "KVA_DUMP":
                             kva_dump_addr = pa
-                self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
+                self.ebi_files_minidump.append((idx, pa, end_addr, va, size))
 
             if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
@@ -1216,10 +1256,14 @@ class RamDump():
 
         self.unwind = self.Unwinder(self)
         if self.module_table.sym_paths_exist():
-            self.setup_module_symbols()
-            self.gdbmi.setup_module_table(self.module_table)
-            if self.dump_global_symbol_table:
-                self.dump_global_symbol_lookup_table()
+            try:
+                self.setup_module_symbols()
+                self.gdbmi.setup_module_table(self.module_table)
+                if self.dump_global_symbol_table:
+                    self.dump_global_symbol_lookup_table()
+            except Exception as e:
+                print_out_str("module table is not setup")
+                print_out_str(str(e))
 
         if not self.minidump:
             self.setup_module_layout()
@@ -2446,7 +2490,7 @@ class RamDump():
             module_core_offset = self.field_offset('struct module', 'module_core')
 
         is_attr_new = False
-        if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None:
+        if self.field_offset('struct module_sect_attrs', 'nsections') is None:
             is_attr_new = True
 
         if is_attr_new:
@@ -2458,7 +2502,7 @@ class RamDump():
 
         kallsyms_offset = self.field_offset('struct module', 'kallsyms')
         if is_attr_new:
-            bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs_new')
+            bin_attrs_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs')
             sect_addr_offset = self.field_offset('struct bin_attribute', 'private')
         else:
             sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
@@ -2506,7 +2550,7 @@ class RamDump():
 
             if is_attr_new:
                 nsections = 0
-                attr_array_ptr = self.read_word(mod_sect_attrs + bin_attrs_new_offset)
+                attr_array_ptr = self.read_word(mod_sect_attrs + bin_attrs_offset)
                 attr_ptr = self.read_word(attr_array_ptr)
                 while (attr_ptr != 0) and (nsections < 100):
                     nsections += 1
@@ -2777,6 +2821,39 @@ class RamDump():
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
 
+
+
+    def win_safe_name_for_path(self, name: str) -> str:
+        """
+        Sanitize a string to be safe for use as a Windows file or folder name.
+        - Replaces invalid characters with underscores.
+        - Removes trailing spaces and dots.
+        - Handles Windows reserved filenames.
+        """
+        # Replace reserved characters and control chars with '_'
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '_', name)
+
+        # Remove trailing spaces or dots
+        name = re.sub(r'[ .]+$', '', name)
+
+        # Ensure name is not empty
+        if not name:
+            name = "_unknown"
+
+        # Check for Windows reserved names (case-insensitive)
+        reserved_names = {
+            'CON', 'PRN', 'AUX', 'NUL',
+            'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+            'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+        }
+
+        # Split name and extension to check base name
+        base_name = name.split('.')[0].upper()
+        if base_name in reserved_names:
+            name = '_' + name
+
+        return name
+
     def setup_module_symbols(self):
         self.traverse_module()
         if self.minidump:
@@ -2786,33 +2863,105 @@ class RamDump():
         self.parse_module_symbols();
         self.add_symbols_to_global_lookup_table()
 
-    def dump_mod_sym_table(self, mod_name, sym_lookup_tbl):
-        sym_dump_file = self.open_file('sym_tbl_'+mod_name+'.txt')
-        for line in sym_lookup_tbl:
-            sym_dump_file.write('0x{0:x} {1}\n'.format(line[0], line[1]))
-        sym_dump_file.close()
 
-    def dump_mod_kallsyms_sym_table(self, mod_name, mod_kallsyms_table):
-        kallsyms_header_format = '{0: >18} {1} {2: >64} {3} {4} {5} {6}\n'
-        kallsyms_record_format = '0x{0:0>16x} {1: >8} {2: >64} {3: >11} {4: >7} {5: >8} {6: >7}\n'
-        kallsyms_file = self.open_file('sym_tbl_kallsyms_'+mod_name+'.txt')
-        kallsyms_file.write('KALLSYMS symbol lookup table['+mod_name+']\n')
-        kallsyms_file.write(
-            kallsyms_header_format.format(
-                'sym_addr', 'sym_type', 'syn_name[mod_name]', 'idx_elf_sym',
-                'st_name', 'st_shndx', 'st_size'))
-        for mod_sym_line in mod_kallsyms_table:
-            kallsyms_file.write(
-                kallsyms_record_format.format(
-                    mod_sym_line[0], mod_sym_line[2], mod_sym_line[1], mod_sym_line[3],
-                    hex(mod_sym_line[4]), mod_sym_line[5], mod_sym_line[6]))
-        kallsyms_file.close()
 
-    def dump_global_symbol_lookup_table(self):
-        sym_dump_file = self.open_file('sym_table.txt')
-        for line in self.lookup_table:
-            sym_dump_file.write('0x{0:x} {1}\n'.format(line[0], line[1]))
-        sym_dump_file.close()
+    def dump_mod_sym_table(self, mod_name: str, sym_lookup_tbl: List[Tuple[int, str]]) -> None:
+        """
+        Dump a module's symbol lookup table to a text file.
+        Each line contains the symbol address and name.
+        """
+
+        sym_tbl_folder = os.path.join(self.outdir, "sym_tbl")
+
+        # Ensure directory exists with error handling
+        try:
+            os.makedirs(sym_tbl_folder, exist_ok=True)
+        except OSError as e:
+            print_out_str(f"Error creating directory {sym_tbl_folder}: {e}")
+            return
+
+        safe_mod_name = self.win_safe_name_for_path(mod_name)
+        sym_tbl_out = os.path.join(sym_tbl_folder, f"{safe_mod_name}.txt")
+
+        try:
+            with open(sym_tbl_out, "w") as sym_dump_file:
+                for line in sym_lookup_tbl:
+                    sym_dump_file.write('0x{0:x} {1}\n'.format(line[0], line[1]))
+        except OSError as e:
+            print_out_str(f"Error writing to file {sym_tbl_out}: {e}")
+
+
+    def dump_mod_kallsyms_sym_table(self, mod_name: str, mod_kallsyms_table: List[Tuple]) -> None:
+        """
+        Dump the module's KALLSYMS symbol lookup table to a text file.
+        Each line contains symbol details such as address, type, name, ELF index, etc.
+        """
+
+        kallsyms_header_format = "{0: >18} {1} {2: >64} {3} {4} {5} {6}\n"
+        kallsyms_record_format = "0x{0:0>16x} {1: >8} {2: >64} {3: >11} {4: >7} {5: >8} {6: >7}\n"
+
+        sym_tbl_folder = os.path.join(self.outdir, "sym_tbl")
+
+        # Ensure directory exists with error handling
+        try:
+            os.makedirs(sym_tbl_folder, exist_ok=True)
+        except OSError as e:
+            print_out_str(f"Error creating directory {sym_tbl_folder}: {e}")
+            return
+
+        safe_mod_name = self.win_safe_name_for_path(mod_name)
+        sym_tbl_out = os.path.join(sym_tbl_folder, f"{safe_mod_name}.txt")
+
+        try:
+            with open(sym_tbl_out, "w") as kallsyms_file:
+                # Header
+                kallsyms_file.write(f"KALLSYMS symbol lookup table[{safe_mod_name}]\n")
+                kallsyms_file.write(
+                    kallsyms_header_format.format(
+                        "sym_addr", "sym_type", "syn_name[mod_name]", "idx_elf_sym",
+                        "st_name", "st_shndx", "st_size"
+                    )
+                )
+
+                # Records
+                for mod_sym_line in mod_kallsyms_table:
+                    try:
+                        kallsyms_file.write(
+                            kallsyms_record_format.format(
+                                mod_sym_line[0], mod_sym_line[2], mod_sym_line[1],
+                                mod_sym_line[3], hex(mod_sym_line[4]),
+                                mod_sym_line[5], mod_sym_line[6]
+                            )
+                        )
+                    except Exception as e:
+                        print_out_str(f"Error writing symbol line {mod_sym_line}: {e}")
+        except OSError as e:
+            print_out_str(f"Error writing to file {sym_tbl_out}: {e}")
+
+
+    def dump_global_symbol_lookup_table(self) -> None:
+        """
+        Dump the global symbol lookup table to a text file.
+        Each line contains the symbol address and name.
+        """
+        sym_tbl_folder = os.path.join(self.outdir, "sym_tbl")
+
+        try:
+            os.makedirs(sym_tbl_folder, exist_ok=True)
+        except OSError as e:
+            # Handle errors gracefully (e.g., log them, raise, or fallback)
+            print_out_str(f"Error creating directory {sym_tbl_folder}: {e}")
+            return  # Exit early if folder creation fails
+        sym_tbl_out = os.path.join(sym_tbl_folder, "sym_table.txt")
+        try:
+            with open(sym_tbl_out, "w") as sym_dump_file:
+                for entry in self.lookup_table:
+                    if len(entry) >= 2:
+                        addr, name = entry[0], entry[1]
+                        sym_dump_file.write(f"0x{addr:x} {name}\n")
+        except OSError as e:
+            print_out_str(f"Error writing to file {sym_tbl_out}: {e}")
+
 
     def address_of(self, symbol):
         cached_data = self.cached_data['addressof']
