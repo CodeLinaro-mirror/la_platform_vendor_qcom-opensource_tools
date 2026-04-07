@@ -2802,21 +2802,25 @@ class RamDump():
                     name = file[:-len('.ko')]
                 else:
                     return
-                name = os.path.basename(name)
-                name = name.replace("-","_")
-                # Prefer .ko.unstripped
-                if self.ko_file_dict.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
-                    return
 
-                # Prefer ko with debug info
-                if name in self.ko_file_dict and self.has_debug_info(self.ko_file_dict.get(name)):
-                    return
+                name = os.path.basename(name).replace("-", "_")
+                old_ko = self.ko_file_dict.get(name)
+                if old_ko:
+                    # avoid to handle same ko again
+                    if old_ko == file:
+                        return
+
+                    # Prefer .ko.unstripped over .ko
+                    if old_ko.endswith(".ko.unstripped") and file.endswith(".ko"):
+                        return
+
+                    # Prefer ko with debug info
+                    if self.has_debug_info(old_ko):
+                        return
 
                 self.ko_file_dict[name] = file
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
-
-
 
     def win_safe_name_for_path(self, name: str) -> str:
         """
