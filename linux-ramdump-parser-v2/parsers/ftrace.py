@@ -61,8 +61,8 @@ class FtraceParser(RamParser):
             str_error =  'v.v (struct ftrace_event_field)0x{0:x} type_str or field_name is None'.format(common_list)
             print_out_str(str_error)
             return
-        if re.match('(.*)\[(.*)', type_str) and not (re.match('__data_loc', type_str)):
-            s = re.split('\[', type_str)
+        if re.match(r'(.*)\[(.*)', type_str) and not (re.match(r'__data_loc', type_str)):
+            s = re.split(r'\[', type_str)
             s[1] = '[' + s[1]
             self.formats_out.write(
                 "\tfield:{0} {1}{2};\toffset:{3};\tsize:{4};\tsigned:{5};\n".format(s[0], field_name, s[1], offset,
@@ -222,7 +222,7 @@ class FtraceParser(RamParser):
                     continue
                 if self.per_cpu_buffer_pages and self.per_cpu_buffer_pages < nr_pages:
                     nr_pages = self.per_cpu_buffer_pages
-                nr_total_buffer_pages = nr_total_buffer_pages +  nr_pages
+                nr_total_buffer_pages = nr_total_buffer_pages + nr_pages
                 trace_buffer_info['nr_pages_per_buffer'][cpu_idx] = nr_pages
                 trace_buffer_info['rb_per_cpu'][cpu_idx] = b
             trace_buffer_info['nr_total_buffer_pages'] = nr_total_buffer_pages
