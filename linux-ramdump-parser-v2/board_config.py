@@ -131,6 +131,56 @@ class BoardHamoa(Board):
         self.imem_file_name = 'OCIMEM.BIN'
         self.arm_smmu_v12 = True
 
+class BoardKaanapali(Board):
+    def __init__(self, socid):
+        super(BoardKaanapali, self).__init__()
+        self.socid = socid
+        self.board_num = "kaanapali"
+        self.cpu = 'ARMV9-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x1D00000
+        self.smem_addr_buildinfo = 0x1D0A5B8
+        self.phys_offset = 0xC7800000
+        self.imem_start = 0x14680000
+        self.kaslr_addr = 0x146806d0
+        self.imem_file_name = 'OCIMEM.BIN'
+        self.arm_smmu_v12 = True
+
+class BoardSM8750(Board):
+    def __init__(self, socid):
+        super(BoardSM8750, self).__init__()
+        self.socid = socid
+        self.board_num = "sm8750"
+        self.cpu = 'ARMV9-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x1D00000
+        self.smem_addr_buildinfo = 0x1D08408
+        self.phys_offset = 0xA8000000
+        self.imem_start = 0x14680000
+        self.kaslr_addr = 0x146806d0
+        self.imem_offset_memdump_table = 0x10
+        self.imem_file_name = 'OCIMEM.BIN'
+        self.tbi_mask = 0x4000000000
+        self.aff_shift = [0,0,3,0]
+        self.core_map = {8:6,9:7}
+
+class BoardSM8750SVM(Board):
+    def __init__(self, socid):
+        super(BoardSM8750SVM, self).__init__()
+        self.socid = socid
+        self.board_num = "sm8750svm"
+        self.cpu = 'ARMV9-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x1D00000
+        self.smem_addr_buildinfo = 0x1D08408
+        self.phys_offset = 0xf3800000
+        self.imem_start = 0x14680000
+        self.kaslr_addr = 0x146806d0
+        self.imem_offset_memdump_table = 0x10
+        self.imem_file_name = 'OCIMEM.BIN'
+        self.tbi_mask = 0x4000000000
+        self.aff_shift = [0,0,3,0]
+
 BoardQCM6490(socid=475)
 BoardQCM6490SVM(socid=475)
 BoardQCM6490(socid=499)
@@ -163,3 +213,15 @@ BoardHamoa(socid=615)
 BoardHamoa(socid=616)
 BoardHamoa(socid=709)
 BoardHamoa(socid=710)
+BoardKaanapali(socid=660)
+BoardKaanapali(socid=661)
+BoardKaanapali(socid=730)
+BoardKaanapali(socid=743)
+BoardSM8750(socid=618)
+BoardSM8750SVM(socid=618)
+BoardSM8750(socid=639)
+BoardSM8750SVM(socid=639)
+BoardSM8750(socid=705)
+BoardSM8750SVM(socid=705)
+BoardSM8750(socid=706)
+BoardSM8750SVM(socid=706)
