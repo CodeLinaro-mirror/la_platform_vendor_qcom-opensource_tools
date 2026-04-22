@@ -1,5 +1,5 @@
 # Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -46,12 +46,10 @@ class IommuLib(object):
         try:
             if self.find_iommu_domains_msm_iommu():
                 pass
-            elif self.find_iommu_domains_debug_attachments():
+            if self.find_iommu_domains_debug_attachments():
                 pass
-            elif self.find_iommu_domains_device_core():
+            if self.find_iommu_domains_device_core():
                 pass
-            else:
-                print_out_str("Unable to find any iommu domains")
         except:
             if self.ramdump.arm_smmu_v12:
                 self.arm_smmu_v12 = True
@@ -117,8 +115,9 @@ class IommuLib(object):
             self._find_iommu_domains_debug_attachments(debug_attachment,\
                                             client_name, self.domain_list)
         else:
+            # Pass iommu_ops=None, group_ptr=None for legacy path (no device walk)
             self._find_iommu_domains_arm_smmu(domain_ptr, client_name,\
-                                              self.domain_list)
+                                              self.domain_list, None, None)
 
     def find_iommu_domains(self, debug_attachment):
         client_name = self.ramdump.read_structure_cstring(debug_attachment,
@@ -177,6 +176,14 @@ class IommuLib(object):
         offset = self.ramdump.field_offset('struct device', 'kobj.entry')
         list_walker = llist.ListWalker(self.ramdump, list_head, offset)
 
+        # Resolve arm_smmu_ops for SMMUv3 (arm-smmu-v3.c) once, used below
+        arm_smmu_v3_ops = None
+        try:
+            arm_smmu_v3_ops = self.ramdump.address_of_symbol_from_file(
+                'arm_smmu_ops', 'arm-smmu-v3.c')
+        except Exception:
+            pass
+
         for dev in list_walker:
             iommu_group = self.ramdump.read_structure_field(dev, 'struct device', 'iommu_group')
             if not iommu_group:
@@ -204,12 +211,90 @@ class IommuLib(object):
             iommu_ptr = self.ramdump.read_structure_field(dev, 'struct device', 'iommu')
             iommu_dev = self.ramdump.read_structure_field(iommu_ptr, 'struct dev_iommu', 'iommu_dev')
             iommu_ops = self.ramdump.read_structure_field(iommu_dev, 'struct iommu_device', 'ops')
+
             if self.arm_smmu_v12:
                 self._find_iommu_domains_arm_smmu_v12(domain_ptr, client_name, self.domain_list)
+            elif arm_smmu_v3_ops is not None and iommu_ops == arm_smmu_v3_ops:
+                # SMMUv3 device — use the v3-specific extractor
+                self._find_iommu_domains_arm_smmu_v3(domain_ptr, client_name, self.domain_list)
             else:
                 self._find_iommu_domains_arm_smmu(domain_ptr, client_name, self.domain_list, iommu_ops, iommu_group)
 
         return True
+
+    def _find_iommu_domains_arm_smmu_v3(self, domain_ptr, client_name, domain_list):
+        """
+        Extract the S1 page table base and translation level count for an
+        ARM SMMUv3 domain (upstream arm-smmu-v3.c driver).
+
+        Data structure path:
+          iommu_domain (domain_ptr)
+            → container_of → struct arm_smmu_domain   [arm-smmu-v3.h]
+              → pgtbl_ops  (struct io_pgtable_ops *)
+                → container_of → struct arm_lpae_io_pgtable
+                  → iop.cfg.arm_lpae_s1_cfg.ttbr   (physical address of L0/L1 PT)
+                  → start_level                     (0=4-level, 1=3-level, ...)
+        """
+        ramdump = self.ramdump
+
+        # Switch GDB namespace to arm-smmu-v3.h so that 'struct arm_smmu_domain'
+        # resolves to the v3 definition (not the v2 one from arm-smmu.h).
+        ramdump.set_priority_namespace('arm-smmu-v3.h')
+
+        try:
+            arm_smmu_domain_ptr = ramdump.container_of(
+                domain_ptr, 'struct arm_smmu_domain', 'domain')
+            if arm_smmu_domain_ptr is None:
+                return
+
+            pgtbl_ops_ptr = ramdump.read_structure_field(
+                arm_smmu_domain_ptr, 'struct arm_smmu_domain', 'pgtbl_ops')
+            if not pgtbl_ops_ptr:
+                return
+
+            arm_lpae_io_pgtable_ptr = ramdump.container_of(
+                pgtbl_ops_ptr, 'struct arm_lpae_io_pgtable', 'iop.ops')
+            if arm_lpae_io_pgtable_ptr is None:
+                return
+
+            # Prefer start_level (upstream kernel >= 5.15) over levels
+            start_level = ramdump.read_structure_field(
+                arm_lpae_io_pgtable_ptr, 'struct arm_lpae_io_pgtable', 'start_level')
+            if start_level is not None:
+                level = ARM_LPAE_MAX_LEVELS - start_level
+            else:
+                level = ramdump.read_structure_field(
+                    arm_lpae_io_pgtable_ptr, 'struct arm_lpae_io_pgtable', 'levels')
+                if level is None:
+                    level = 3  # safe default for 39-bit VA (3-level LPAE)
+
+            # Read TTBR0 from io_pgtable cfg
+            pg_table = ramdump.read_structure_field(
+                arm_lpae_io_pgtable_ptr, 'struct arm_lpae_io_pgtable',
+                'iop.cfg.arm_lpae_s1_cfg.ttbr')
+
+            if pg_table is None or pg_table == 0:
+                # Fallback: read from arm_smmu_domain.s1_cfg.cd.ttbr
+                # (field layout: arm_smmu_domain → s1_cfg → cd → ttbr)
+                pg_table = ramdump.read_structure_field(
+                    arm_smmu_domain_ptr, 'struct arm_smmu_domain',
+                    's1_cfg.cd.ttbr')
+
+            if pg_table is None or pg_table == 0:
+                return
+
+            # Mask to 48-bit physical address (bits 47:0)
+            pg_table = pg_table & 0xffffffffffff
+
+            pg_table_virt = phys_to_virt(ramdump, pg_table)
+
+            domain_create = Domain(pg_table_virt, 0, [], client_name,
+                                   ARM_SMMU_DOMAIN, level)
+            domain_list.append(domain_create)
+
+        except Exception as e:
+            print_out_str("[iommulib] _find_iommu_domains_arm_smmu_v3 failed "
+                          "for '%s': %s" % (client_name, str(e)))
 
     def _find_iommu_domains_arm_smmu_v12(self, domain_ptr, client_name, domain_list):
         if self.ramdump.field_offset('struct iommu_domain', 'priv') \
@@ -267,6 +352,22 @@ class IommuLib(object):
         domain_list.append(domain_create)
 
     def _find_iommu_domains_arm_smmu(self, domain_ptr, client_name, domain_list, iommu_ops, group_ptr):
+        """
+        Extract S1 page table info for an ARM SMMUv2 domain.
+
+        Must be called with the GDB namespace set to arm-smmu.h (SMMUv2) so
+        that 'struct arm_smmu_domain' resolves to the v2 definition.
+        This is critical in mixed SMMUv2+v3 systems where both drivers are
+        loaded simultaneously and both define 'struct arm_smmu_domain' with
+        different layouts.
+        """
+        ramdump = self.ramdump
+
+        # Explicitly set arm-smmu.h (SMMUv2) as the priority namespace.
+        # This MUST be done before any struct field access to ensure correct
+        # offsets when both SMMUv2 and SMMUv3 drivers are loaded together.
+        ramdump.set_priority_namespace('arm-smmu.h')
+
         if self.ramdump.field_offset('struct iommu_domain', 'priv') \
                 is not None:
             priv_ptr = self.ramdump.read_structure_field(
