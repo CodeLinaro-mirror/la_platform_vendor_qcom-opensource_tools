@@ -10,16 +10,21 @@
 #include <linux/blk-mq.h>
 #include <linux/highmem.h>
 #include <linux/numa.h>
+#include <linux/of.h>
+#include <linux/of_address.h>
 
 #define DRV_NAME "ramcarveout"
 
-static u64 phys_addr = 0xB20000000ULL;
+/* Leave zero to auto-detect from the qcom,minidump-journal DTS node;
+ * set non-zero on the modprobe command line to override.
+ */
+static u64 phys_addr;
 module_param(phys_addr, ullong, 0444);
-MODULE_PARM_DESC(phys_addr, "Carveout physical base address");
+MODULE_PARM_DESC(phys_addr, "Carveout physical base address (0 = read from DTS)");
 
-static unsigned int size_mb = 64;
+static unsigned int size_mb;
 module_param(size_mb, uint, 0444);
-MODULE_PARM_DESC(size_mb, "Carveout size in MB");
+MODULE_PARM_DESC(size_mb, "Carveout size in MB (0 = read from DTS)");
 
 struct ramcarveout_dev {
 	void __iomem *io;
@@ -96,12 +101,36 @@ static int __init ramcarveout_init(void)
 	int ret;
 	struct ramcarveout_dev *dev = &g_dev;
 
+	/*
+	 * Read phys_addr/size_mb from the same DTS node that minidump_log.c
+	 * uses (qcom,minidump-journal), so the two are always in sync.
+	 */
+	if (!phys_addr || !size_mb) {
+		struct device_node *np;
+		struct resource res;
+
+		np = of_find_compatible_node(NULL, NULL, "qcom,minidump-journal");
+		if (np) {
+			if (of_address_to_resource(np, 0, &res) == 0) {
+				if (!phys_addr)
+					phys_addr = res.start;
+				if (!size_mb)
+					size_mb = (unsigned int)(resource_size(&res) >> 20);
+			} else {
+				pr_err(DRV_NAME ": of_address_to_resource failed\n");
+			}
+			of_node_put(np);
+		} else {
+			pr_err(DRV_NAME ": qcom,minidump-journal DTS node not found\n");
+		}
+	}
+
 	if (!phys_addr) {
-		pr_err(DRV_NAME ": phys_addr must not be zero\n");
+		pr_err(DRV_NAME ": phys_addr not set\n");
 		return -EINVAL;
 	}
 	if (!size_mb) {
-		pr_err(DRV_NAME ": size_mb must be greater than zero\n");
+		pr_err(DRV_NAME ": size_mb not set\n");
 		return -EINVAL;
 	}
 
