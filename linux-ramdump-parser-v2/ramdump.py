@@ -18,13 +18,11 @@ from typing import List, Tuple
 import struct
 import gzip
 import functools
-import string
 import random
 import platform
 import stat
 import subprocess
 import enum
-import copy
 import threading
 from boards import get_supported_boards, get_supported_ids
 from tempfile import NamedTemporaryFile
@@ -33,12 +31,12 @@ from print_out import print_out_str, print_out_exception
 from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
 import parser_util
 import minidump_util
+import vmcore_util
 import ramreduction_util as elfutil
 import module_table
 from mm import mm_init
 from register import Register
 from collections import namedtuple
-import shlex
 import glob
 from linux_list import ListWalker
 import mmap
@@ -814,6 +812,7 @@ class RamDump():
         self.thread_name_prefix = "ThreadPoolExecutor-0"
         ##
         self.ebi_files_minidump = []
+        self.ebi_files_vmcoredump = []
         self.ebi_pa_name_map = {}
         self.md_dict = {}
         self.phys_offset = None
@@ -899,6 +898,7 @@ class RamDump():
         self.linux_banner = None
         self.minidump = options.minidump
         self.reduceddump = options.reduceddump
+        self.vmcoredump = options.vmcoredump
         self.svm = options.svm
         self.elffile = None
         self.ram_elf_file = None
@@ -938,12 +938,12 @@ class RamDump():
                 self.ebi_files.append((fd, start, end, file_path))
             if self.ebi_files:
                 self.ebi_files.sort(key=lambda x: x[1])
-
+        elif options.vmcoredump:
+            pass
         elif not options.reduceddump:
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & DDR files manually.")
                 sys.exit(1)
-
         elif options.reduceddump:
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & HLOS elf files manually.")
@@ -1019,6 +1019,28 @@ class RamDump():
                         self.md_dict[s.name].append([start,size])
                     fout.write('{:16}0x{:x}\n'.format(s.name, start))
                 fout.close()
+        elif options.vmcoredump:
+            vmcore_path = options.vmcoredump
+            try:
+                fd = open(vmcore_path, 'rb')
+                self.vmcore_elffile = ELFFile(fd)
+                self.vmcore_file = fd
+                self.vmcore_segments = vmcore_util.load_segments(self.vmcore_elffile)
+                self.vmcoreinfo = vmcore_util.parse_vmcoreinfo(self.vmcore_elffile)
+            except Exception as e:
+                print_out_str(f'!!! Failed to parse vmcore file: {e}')
+                sys.exit(1)
+
+            for seg in self.vmcore_segments:
+                pa = seg['paddr']
+                va = seg['vaddr']
+                size = seg['filesz']
+                end_addr = pa + size - 1
+                offset = seg['offset']
+                self.ebi_files_vmcoredump.append((pa, end_addr, va, size, offset))
+
+            if self.ebi_files_vmcoredump:
+                self.ebi_files_vmcoredump.sort(key=lambda x: x[0])
 
         if options.minidump:
             if self.ebi_start == 0:
@@ -1027,6 +1049,9 @@ class RamDump():
             if self.ebi_start == 0:
                 # options.elf_addr needs to be sorted for filename
                 self.ebi_start = self.elf_filemap[options.elf_addr[0]][0]
+        elif options.vmcoredump:
+            if self.ebi_start == 0 and self.ebi_files_vmcoredump:
+                self.ebi_start = self.ebi_files_vmcoredump[0][0]
         else:
             if self.ebi_start == 0:
                 self.ebi_start = self.ebi_files[0][1]
@@ -1041,7 +1066,7 @@ class RamDump():
                     options.phys_offset))
             self.phys_offset = options.phys_offset
         self.s2_walk = False
-        if self.svm and not self.minidump:
+        if self.svm and not self.minidump and not self.vmcoredump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
             try:
@@ -1335,6 +1360,21 @@ class RamDump():
 
     def __del__(self):
         self.clear_mmap_regions()
+
+        for fd, _, _, _ in getattr(self, 'ebi_files', []):
+            if fd:
+                try:
+                    fd.close()
+                except:
+                    pass
+
+        vmcore_file = getattr(self, 'vmcore_file', None)
+        if vmcore_file:
+            try:
+                vmcore_file.close()
+            except:
+                pass
+
         if self.gdbmi:
             self.gdbmi.close()
         if self.gdbmi_hyp:
@@ -1696,6 +1736,10 @@ class RamDump():
                 for file in self.elf_addr:
                     startup_script.write('data.load.elf {0} /noclear\n'.format(file))
 
+            if self.vmcoredump:
+                vmcore_path = os.path.abspath(self.vmcoredump)
+                startup_script.write('data.load.elf {0}\n'.format(vmcore_path))
+
             if not self.minidump:
                 if self.arm64:
                     if self.svm:
@@ -2026,6 +2070,11 @@ class RamDump():
             self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
             if self.elf_entry_offset:
                 self.kimage_voffset -= self.elf_entry_offset
+            return
+        elif self.vmcoredump:
+            self.kaslr_offset = int(self.vmcoreinfo.get('KERNELOFFSET', '0'), 16)
+            self.kimage_voffset = int(self.vmcoreinfo.get('NUMBER(kimage_voffset)', '0'), 16)
+            print_out_str(f"VMCOREINFO: KASLR offset: 0x{self.kaslr_offset:x}, kimage_voffset: 0x{self.kimage_voffset:x}")
             return
         else:
             __kaslr_offset = None
@@ -3230,6 +3279,8 @@ class RamDump():
 
     def setup_module_layout(self):
         mod_list = self.address_of('modules')
+        if not mod_list:
+            return
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
 
@@ -3412,7 +3463,7 @@ class RamDump():
         return
 
     def setup_cached_mmap(self):
-        if self.minidump or self.reduceddump:
+        if self.minidump or self.reduceddump or self.vmcoredump:
             return
         self.mmap_regions = []
         self.phys_cache = LRUCacheDict(max_bytes=500<<20)
@@ -3459,13 +3510,15 @@ class RamDump():
                         self.ebi_files_minidump, self.ebi_files,self.elffile,
                         addr, length)
             return addr_data
-
+        elif self.vmcoredump:
+            data = vmcore_util.read_physical_vmcore(
+                        self.ebi_files_vmcoredump, self.vmcore_file, addr, length)
+            return data
         elif self.reduceddump:
             data = elfutil.read_physical(self.elf_vector, self.elf_htable,
                                             self.elf_filemap, self.ebi_files,
                                             addr, length)
             return data
-
         else:
             if self.use_multithread and threading.current_thread().name.startswith(self.thread_name_prefix):
                 '''multi-thread enabled'''
