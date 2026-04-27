@@ -823,7 +823,7 @@ class FtraceParser_Event(object):
                             v = self.ramdump.read_cstring(ftrace_raw_entry + (offset*4))
                         fmt_name_value_map[item] = v
                     elif 'char[' in type_str:
-                        length = re.match(r'(?:unsigned )?char\[(\d+)\]', type_str)
+                        length = re.match(r'(?:unsigned )?char\[(\d+)(?:[uUlL]+)?\]', type_str)
                         if length:
                             length = int(length.group(1))
                         else:
