@@ -49,13 +49,13 @@ class KBootLog(RamParser):
             return idx + msg_len
 
     def extract_kernel_boot_log(self, outfile):
-        logbuf_addr = self.ramdump.read_word(self.ramdump.address_of(
-                                     'boot_log_buf'))
-        logbuf_size = self.ramdump.read_u32("boot_log_buf_size")
+        logbuf_addr = self.ramdump.read_word(self.ramdump.address_of_symbol_from_file(
+                                     'boot_log_buf', 'qcom_logbuf_boot_log.c'))
+        logbuf_size = self.ramdump.read_u32(self.ramdump.address_of_symbol_from_file('boot_log_buf_size', 'qcom_logbuf_boot_log.c'))
         if logbuf_size is None:
-            logbuf_pos = self.ramdump.read_word(self.ramdump.address_of(
-                                     'boot_log_pos'))
-            logbuf_left = self.ramdump.read_u32("boot_log_buf_left")
+            logbuf_pos = self.ramdump.read_word(self.ramdump.address_of_symbol_from_file(
+                                     'boot_log_pos', 'qcom_logbuf_boot_log.c'))
+            logbuf_left = self.ramdump.read_u32(self.ramdump.address_of_symbol_from_file('boot_log_buf_left', 'qcom_logbuf_boot_log.c'))
             if logbuf_pos is not None and logbuf_left is not None:
                 logbuf_size = logbuf_pos - logbuf_addr +  logbuf_left
             else:
@@ -71,8 +71,8 @@ class KBootLog(RamParser):
         last_idx_addr = self.ramdump.address_of('log_next_idx')
         logbuf_addr = None
         if self.ramdump.kernel_version >= (5, 4):
-            logbuf_addr = self.ramdump.read_word(self.ramdump.address_of(
-                                                'boot_log_buf'))
+            logbuf_addr = self.ramdump.read_word(self.ramdump.address_of_symbol_from_file(
+                                                'boot_log_buf', 'qcom_logbuf_boot_log.c'))
         elif self.ramdump.kernel_version >= (4, 19):
             logbuf_addr = self.ramdump.read_word(self.ramdump.address_of(
                                                 'init_log_buf'))
