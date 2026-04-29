@@ -319,7 +319,7 @@ class FtraceParser(RamParser):
                         name_ptr = rd.read_u32(tp_ptr + tp_name_off)
 
                     # Event name is already known via fevent_list.event_name_by_type
-                    event_name = fevent_list.event_name_by_type.get(etype)
+                    event_name = fevent_list.event_name_by_type.get(etype_str)
                     if not event_name:
                         event_name = rd.read_cstring(name_ptr) or "<unknown>"
 
