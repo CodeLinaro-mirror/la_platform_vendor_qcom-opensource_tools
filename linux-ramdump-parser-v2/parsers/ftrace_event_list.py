@@ -26,6 +26,7 @@ class FtraceParser_Event_List(object):
         self.ramdump = ramdump
         self.ftrace_event_type = {}
         self.ftrace_raw_struct_type = {}
+        self.event_name_by_type = {}
 
         # Offsets
         ftrace_event_call_list_offset = self.ramdump.field_offset("struct trace_event_call", "list")
@@ -68,5 +69,6 @@ class FtraceParser_Event_List(object):
 
             self.ftrace_event_type[str(event_type)] = name
             self.ftrace_raw_struct_type[str(event_type)] = raw
+            self.event_name_by_type[str(event_type)] = name
             # Advance to next entry
             ftrace_events_entry = self.ramdump.read_pointer(ftrace_events_entry + ftrace_events_entry_offset)
