@@ -356,12 +356,40 @@ class RamDump():
                     stop = mid
             return stop
 
+        def ptregs_generic64(self, frame):
+            ptregs = {}
+            ret_lookup = self.ramdump.unwind_lookup(frame.pc)
+            if ret_lookup:
+                symname, offset = ret_lookup
+                # Extend tuple for additional handlers
+                if symname and symname.startswith(("ret_to_kernel",)):
+                    pt_regs_addr = frame.sp
+                    ptregs["sp"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'sp')
+                    ptregs["pc"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'pc')
+                    regs_addr = pt_regs_addr + self.ramdump.field_offset('struct pt_regs', 'regs')
+                    x29_ptr = self.ramdump.array_index(regs_addr, 'unsigned long', 29)
+                    ptregs["fp"] = self.ramdump.read_word(x29_ptr)
+                    x30_ptr = self.ramdump.array_index(regs_addr, 'unsigned long', 30)
+                    ptregs["lr"] = self.ramdump.read_word(x30_ptr)
+            return ptregs
+
         def unwind_frame_generic64(self, frame, cpu_work_state=''):
-            fp = frame.fp
+            ptregs = {}
             try:
-                frame.sp = fp + 0x10
-                frame.fp = self.ramdump.read_word(fp)
-                frame.pc = self.ramdump.read_word(fp + 8)
+                ptregs = self.ptregs_generic64(frame)
+            except:
+                pass
+            try:
+                if not ptregs:
+                    fp = frame.fp
+                    frame.sp = fp + 0x10
+                    frame.fp = self.ramdump.read_word(fp)
+                    frame.pc = self.ramdump.read_word(fp + 8)
+                else:
+                    frame.sp = ptregs["sp"]
+                    frame.fp = ptregs["fp"]
+                    frame.pc = ptregs["pc"]
+                    frame.lr = ptregs["lr"]
                 if ((frame.fp == 0 and frame.pc == 0)
                         or frame.pc is None or frame.lr is None):
                     return -1
@@ -2447,7 +2475,7 @@ class RamDump():
             module_core_offset = self.field_offset('struct module', 'module_core')
 
         is_attr_new = False
-        if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None or self.field_offset('struct attribute_group', 'bin_attrs') is not None:
+        if self.field_offset('struct module_sect_attrs', 'nsections') is None:
             is_attr_new = True
 
         if is_attr_new:
@@ -2459,10 +2487,7 @@ class RamDump():
 
         kallsyms_offset = self.field_offset('struct module', 'kallsyms')
         if is_attr_new:
-            if self.field_offset('struct attribute_group', 'bin_attrs_new') is not None:
-                bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs_new')
-            else:
-                bin_attrs_new_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs')
+            bin_attrs_offset = self.field_offset('struct module_sect_attrs', 'grp') + self.field_offset('struct attribute_group', 'bin_attrs')
             sect_addr_offset = self.field_offset('struct bin_attribute', 'private')
         else:
             sect_addr_offset = self.field_offset('struct module_sect_attr', 'address')
@@ -2510,7 +2535,7 @@ class RamDump():
 
             if is_attr_new:
                 nsections = 0
-                attr_array_ptr = self.read_word(mod_sect_attrs + bin_attrs_new_offset)
+                attr_array_ptr = self.read_word(mod_sect_attrs + bin_attrs_offset)
                 attr_ptr = self.read_word(attr_array_ptr)
                 while (attr_ptr != 0) and (nsections < 100):
                     nsections += 1
