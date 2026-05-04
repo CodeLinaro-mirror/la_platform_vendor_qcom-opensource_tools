@@ -931,9 +931,6 @@ class RamDump():
             try:
                 mod = import_module('elftools.elf.elffile')
                 ELFFile = mod.ELFFile
-                StringTableSection = mod.StringTableSection
-                mod = import_module('elftools.common.py3compat')
-                bytes2str = mod.bytes2str
             except ImportError:
                 print("Oops, missing required library for minidump. Check README")
                 sys.exit(1)
