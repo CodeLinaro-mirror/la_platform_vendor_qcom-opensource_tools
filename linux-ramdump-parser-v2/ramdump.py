@@ -785,6 +785,8 @@ class RamDump():
         return kimage_vaddr
 
     def get_elf_entry_address(self, header_ptr):
+        if self.fragmented_s2:
+            return None
         e_entry = None
         e_ident = self.read_u64(header_ptr, virtual=False)
         e_magic = e_ident & 0xffffffff
@@ -817,6 +819,8 @@ class RamDump():
         self.md_dict = {}
         self.phys_offset = None
         self.ipa_addr = None
+        self.fragmented_s2 = False
+        self.mmu = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
         self.ebi_start = 0
@@ -1137,8 +1141,11 @@ class RamDump():
         self.elf_entry_offset = None
         if self.s2_walk:
             if self.ipa_addr is not None:
-                early_s2mmu = Armv8MMU(self)
-                self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                self.mmu = Armv8MMU(self)
+                if not self.fragmented_s2:
+                    self.phys_offset = self.mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                else:
+                    self.phys_offset = self.ipa_addr
                 if self.phys_offset is not None:
                     print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
                 else:
@@ -1151,15 +1158,11 @@ class RamDump():
 
         self.pfn_range = None
         self.vmemmap = None
+
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
-        # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
-        # Virtual address of the variable 'kimage_voffset'
-        # value is None in ARM32 before kernel version 5.4
         self.__kimage_voffset_var_va = self.address_of('kimage_voffset')
-        # virtual address of start of kernel image
         self.__kimage_vaddr_va = self.get_kimage_vaddr(need_aslr=False)
-        # address of linux_banner variable
         self.__linux_banner_va = self.address_of('linux_banner')
         self.kimage_voffset = None
         print_out_str(f"kimage_vaddr is: 0x{self.__kimage_vaddr_va:x}")
@@ -1215,9 +1218,11 @@ class RamDump():
 
         pg_dir_size = self.kernel_text_offset + self.page_offset \
             - self.swapper_pg_dir_addr
+
         if self.arm64:
-            print_out_str('Using 64bit MMU')
-            self.mmu = Armv8MMU(self)
+            if self.mmu is None:
+                print_out_str('Using 64bit MMU')
+                self.mmu = Armv8MMU(self)
         elif pg_dir_size == 0x4000:
             print_out_str('Using non-LPAE MMU')
             if self.minidump:
@@ -1505,19 +1510,23 @@ class RamDump():
         if self.minidump:
             return minidump_util.minidump_virt_to_phys(self.ebi_files_minidump,addr)
         else:
+            phys_addr = None
             if self.kimage_voffset is None:
-                return addr - self.page_offset + self.phys_offset
+                phys_addr = addr - self.page_offset + self.phys_offset
             else:
                 if self.kernel_version > (4, 20, 0):
                     if not (addr & (1 << (self.va_bits - 1))):
-                        return addr - self.page_offset + self.phys_offset
+                        phys_addr = addr - self.page_offset + self.phys_offset
                     else:
-                        return addr - (self.kimage_voffset)
+                        phys_addr = addr - self.kimage_voffset
                 else:
                     if addr & (1 << (self.va_bits - 1)):
-                        return addr - self.page_offset + self.phys_offset
+                        phys_addr = addr - self.page_offset + self.phys_offset
                     else:
-                        return addr - (self.kimage_voffset)
+                        phys_addr = addr - self.kimage_voffset
+            if self.fragmented_s2:
+                phys_addr = self.mmu.virt_to_physel2(phys_addr, skip_tlb=False, save_in_tlb=False)
+            return phys_addr
 
     def match_version(self):
         banner_addr = self.address_of('linux_banner')
@@ -2065,7 +2074,7 @@ class RamDump():
             self.kaslr_addr = None
             if self.svm_kaslr_offset:
                 self.kaslr_offset = self.svm_kaslr_offset
-            else:
+            elif self.kaslr_offset is None:
                 self.kaslr_offset = 0
             self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
             if self.elf_entry_offset:
@@ -2431,6 +2440,8 @@ class RamDump():
             self.phys_offset = board.phys_offset
         if hasattr(board, 'ipa_addr'):
             self.ipa_addr = board.ipa_addr
+        if hasattr(board, 'fragmented_s2'):
+            self.fragmented_s2 = board.fragmented_s2
         self.tz_addr = board.wdog_addr
         self.ebi_start = board.ram_start
         self.tz_start = board.imem_start
@@ -2999,7 +3010,7 @@ class RamDump():
 
     def address_of(self, symbol):
         cached_data = self.cached_data['addressof']
-        kaslr_tmp = self.get_kaslr_offset()
+        kaslr_tmp = self.gdbmi.kaslr_offset
         if kaslr_tmp in cached_data:
             if symbol in cached_data[kaslr_tmp]:
                 return cached_data[kaslr_tmp][symbol]
