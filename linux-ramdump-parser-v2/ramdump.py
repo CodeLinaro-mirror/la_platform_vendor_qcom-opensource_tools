@@ -1490,12 +1490,12 @@ class RamDump():
             if vm_v is None:
                 print_out_str('!!! Could not read linux_banner from vmlinux!')
                 sys.exit(1)
-            v = re.search('Linux version (\d{0,2}\.\d{0,2}\.\d{0,3})', vm_v)
+            v = re.search(r'Linux version (\d{0,2}\.\d{0,2}\.\d{0,3})', vm_v)
             if v is None:
                 print_out_str('!!! Could not extract version info!')
                 sys.exit(1)
             self.version = v.group(1)
-            match = re.search('(\d+)\.(\d+)\.(\d+)', self.version)
+            match = re.search(r'(\d+)\.(\d+)\.(\d+)', self.version)
             if match is not None:
                 self.version = tuple(map(int, match.groups()))
                 self.kernel_version = self.version
@@ -2076,9 +2076,15 @@ class RamDump():
                 self.kaslr_offset = self.svm_kaslr_offset
             elif self.kaslr_offset is None:
                 self.kaslr_offset = 0
-            self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
-            if self.elf_entry_offset:
-                self.kimage_voffset -= self.elf_entry_offset
+                if self.fragmented_s2:
+                    try:
+                        self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset)
+                    except Exception as err:
+                        print(f"!!! determine_kaslr_offset: error: {err}")
+            if self.kimage_voffset is None:
+                self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
+                if self.elf_entry_offset:
+                    self.kimage_voffset -= self.elf_entry_offset
             return
         elif self.vmcoredump:
             self.kaslr_offset = int(self.vmcoreinfo.get('KERNELOFFSET', '0'), 16)
@@ -2250,16 +2256,23 @@ class RamDump():
             ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
             ## kaslr_offset=None need to be calculated
             if self.arm64:
-                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
+                kimage_voffset = self.__kimage_vaddr_va + kaslr_offset - phys_offset
             else:
                 kimage_voffset = self.page_offset - phys_offset
         ## calculate kaslr_offset via kimage_voffset
         if self.__kimage_voffset_var_va != None and kaslr_offset == None:
             ## calculte depends on kimage_voffset variable which should exist
             kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+            if self.fragmented_s2:
+                kimage_voffset_ipa = kimage_voffset_pa
+                kimage_voffset_pa = self.mmu.virt_to_physel2(kimage_voffset_ipa, skip_tlb=False, save_in_tlb=False)
+                if not kimage_voffset_pa:
+                    raise Exception("!!! validate_phys_offset: translation failed for kimage_voffset")
             kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
             if kimage_voffset_tmp is not None:
                 kimage_voffset = kimage_voffset_tmp
+                if self.fragmented_s2:
+                    kimage_voffset_pa = kimage_voffset_ipa
                 kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
                 if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
                     kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
@@ -2281,10 +2294,20 @@ class RamDump():
 
         ## Second step,  check if kimage_voffset value == "&kimage_voffset"
         kimage_voffset_var_phys = self.__kimage_voffset_var_va + kaslr_offset - kimage_voffset
+        if self.fragmented_s2:
+            kimage_voffset_var_ipa = kimage_voffset_var_phys
+            kimage_voffset_var_phys = self.mmu.virt_to_physel2(kimage_voffset_var_ipa, skip_tlb=False, save_in_tlb=False)
+            if not kimage_voffset_var_phys:
+                raise Exception("!!! validate_phys_offset: translation failed for kimage_voffset value")
         kimage_voffset_var_val = self.read_word(kimage_voffset_var_phys, False)
         if kimage_voffset_var_val == kimage_voffset:
             ## check if string from &linux_banner on DDR == string from  &linux_banner on vmlinux
             linux_banner_phys = self.__linux_banner_va + kaslr_offset - kimage_voffset
+            if self.fragmented_s2:
+                linux_banner_ipa = linux_banner_phys
+                linux_banner_phys = self.mmu.virt_to_physel2(linux_banner_ipa, skip_tlb=False, save_in_tlb=False)
+                if not linux_banner_phys:
+                    raise Exception("!!! validate_phys_offset: translation failed for linux_banner")
             banner_string = self.read_cstring(linux_banner_phys, len(self.linux_banner), False)
             if banner_string and (banner_string == self.linux_banner):
                 print_out_str(f"<-= Determined kaslr_offset: 0x{kaslr_offset:x} phys_offset: 0x{phys_offset:x} kimage_voffset: 0x{kimage_voffset:x} =->")
@@ -4159,7 +4182,7 @@ class RamDump():
     def __is_primary_type(self, d_type):
         d_type = d_type.rstrip()
         if d_type[-1] == "]":
-            re_obj = re.search("(.*)\[\d+\]",d_type)
+            re_obj = re.search(r"(.*)\[\d+\]",d_type)
             d_type = re_obj.group(1)
         if "*" in d_type or "enum " in d_type or d_type == "enum":
             return True
@@ -4207,13 +4230,13 @@ class RamDump():
             re1 = re2 = 0
             for i in range(1):           # using a one iteration loop to implement break
                 # sample match : "/*    0      |    40 */    struct thread_info {"
-                re1 = re.search('\s+(\d+)\s+[|]\s+(\d+) \*\/\s+(struct|union) .*{', line)   #sample match:"/*    0      |    40 */    struct thread_info {"
+                re1 = re.search(r'\s+(\d+)\s+[|]\s+(\d+) \*\/\s+(struct|union) .*{', line)   #sample match:"/*    0      |    40 */    struct thread_info {"
                 if re1:
                     curr_offset = int(re1.group(1))
                     size = int(re1.group(2))
                     break
                 # sample match : "/*                 8 */            struct {"
-                re2 = re.search('\/\*\s+(\d+) \*\/\s+(struct|union) .*{', line)
+                re2 = re.search(r'\/\*\s+(\d+) \*\/\s+(struct|union) .*{', line)
                 if re2:
                     size = int(re2.group(1))
             if re1 or re2:
@@ -4234,7 +4257,7 @@ class RamDump():
                 re1 = re2 = re3 = re4 = 0
                 for i in range(1):              # using a one iteration loop to implement break
                     # sample match : "/*   20      |     4 */                u32 need_resched;"
-                    re1 = re.search('/\*\s+(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
+                    re1 = re.search(r'/\*\s+(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
                     if re1 is not None:
                         curr_offset = int(re1.group(1))
                         size = int(re1.group(2))
@@ -4242,14 +4265,14 @@ class RamDump():
                         attr_name = (re1.group(4))
                         break
                     # sample match : "/*                 4 */    uint32_t v;"
-                    re2 = re.search('/\*\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
+                    re2 = re.search(r'/\*\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
                     if re2 is not None:
                         size = int(re2.group(1))
                         datatype = re2.group(2)
                         attr_name = (re2.group(3))
                         break
                     # sample match : "/*  868: 3   |     4 */        unsigned int dl_overrun : 1;"
-                    re3 = re.search('/\*\s+(\d+)[:]\s*(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
+                    re3 = re.search(r'/\*\s+(\d+)[:]\s*(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
                     if re3 is not None:
                         curr_offset = int(re3.group(1)) + (int(re3.group(2))/100)
                         size = int(re3.group(3)) + (int(re3.group(6))/100)
@@ -4257,7 +4280,7 @@ class RamDump():
                         attr_name = (re3.group(5))
                         break
                     # sample match : "/*                  4 */        unsigned int x : 1;"
-                    re4 = re.search('/\*\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
+                    re4 = re.search(r'/\*\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
                     if re4 is not None:
                         size = int(re4.group(1)) + (int(re4.group(4))/100)
                         datatype = re4.group(2)
@@ -4277,13 +4300,13 @@ class RamDump():
                     else:
                         setattr(curr_obj, attr_name, [curr_offset - base_offset, size, datatype])
                     continue
-                re_obj = re.search('\s*} (\S+);', line)
+                re_obj = re.search(r'\s*} (\S+);', line)
                 if re_obj is not None:
                     return curr_obj, re_obj.group(1), curr_index
-                re_obj = re.search('\s*};', line)
+                re_obj = re.search(r'\s*};', line)
                 if re_obj:
                     return curr_obj, None, curr_index
-                re_obj = re.search('\s*}\s*(\[\d+\])', line)
+                re_obj = re.search(r'\s*}\s*(\[\d+\])', line)
                 if re_obj:
                     return curr_obj, re_obj.group(1), curr_index
         # None means unnamed union or struct
