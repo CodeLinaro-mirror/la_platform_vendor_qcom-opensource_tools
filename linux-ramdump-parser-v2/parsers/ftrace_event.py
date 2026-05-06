@@ -797,7 +797,11 @@ class FtraceParser_Event(object):
                                 pr_f.append(str(ki).replace(" ",""))
                 for item,item_list in offset_data.items():
                     type_str,offset,size = item_list
-                    if 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
+                    if 'char *' in type_str:
+                        v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
+                        v = self.ramdump.read_cstring(v)
+                        fmt_name_value_map[item] = v
+                    elif 'unsigned long' in type_str or 'u64' in type_str or '*' in type_str:
                         v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
                         if "rwmmio" in event_name and "addr" in item:
                             phys = self.ramdump.virt_to_phys(v)
@@ -812,10 +816,6 @@ class FtraceParser_Event(object):
                     elif 'u8' in type_str:
                         v = self.ramdump.read_byte(ftrace_raw_entry + offset)
                         fmt_name_value_map[item] = v
-                    elif 'const' in type_str and 'char *' in type_str:
-                        v = self.ramdump.read_pointer(ftrace_raw_entry + offset)
-                        v = self.ramdump.read_cstring(v)
-                        fmt_name_value_map[item] = v
                     elif type_str.startswith('__data_loc') and type_str.endswith('char[]'):
                         v = self.ramdump.read_u32(ftrace_raw_entry + offset)
                         v = self.ramdump.read_cstring(ftrace_raw_entry + (v & 0xffff), (v >> 16))
@@ -823,7 +823,7 @@ class FtraceParser_Event(object):
                             v = self.ramdump.read_cstring(ftrace_raw_entry + (offset*4))
                         fmt_name_value_map[item] = v
                     elif 'char[' in type_str:
-                        length = re.match(r'(?:unsigned )?char\[(\d+)\]', type_str)
+                        length = re.match(r'(?:unsigned )?char\[(\d+)(?:[uUlL]+)?\]', type_str)
                         if length:
                             length = int(length.group(1))
                         else:
