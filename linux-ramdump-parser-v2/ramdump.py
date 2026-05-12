@@ -45,6 +45,7 @@ from linux_list import ListWalker
 import mmap
 import bisect
 from lrucachedict import LRUCacheDict
+from elftools.elf.elffile import ELFFile
 
 SP = 13
 LR = 14
@@ -930,9 +931,6 @@ class RamDump():
             try:
                 mod = import_module('elftools.elf.elffile')
                 ELFFile = mod.ELFFile
-                StringTableSection = mod.StringTableSection
-                mod = import_module('elftools.common.py3compat')
-                bytes2str = mod.bytes2str
             except ImportError:
                 print("Oops, missing required library for minidump. Check README")
                 sys.exit(1)
@@ -984,18 +982,29 @@ class RamDump():
                     sys.exit(1)
             fd = open(file_path, 'rb')
             self.elffile = ELFFile(fd)
-            for idx, s in enumerate(self.elffile.iter_segments()):
-                pa = int(s['p_paddr'])
-                va = int(s['p_vaddr'])
-                size = int(s['p_filesz'])
+
+            def range_memblock(a, size):
+                return (a, a + size)
+
+            def ranges_intersect(r1, r2):
+                return max(r1[0], r2[0]) < min(r1[1], r2[1])
+
+            for idx, segment in enumerate(self.elffile.iter_segments()):
+                pa = int(segment['p_paddr'])
+                va = int(segment['p_vaddr'])
+                size = int(segment['p_filesz'])
                 end_addr = pa + size - 1
+                seg_mem  = range_memblock(va, size)
                 for section in self.elffile.iter_sections():
-                    if (not section.is_null() and
-                            s.section_in_segment(section)):
+                    if section.is_null():
+                        continue
+                    sec_mem  = range_memblock(section['sh_addr'], section['sh_size'])
+                    is_intersect  = ranges_intersect(seg_mem, sec_mem) if segment['p_filesz'] and section['sh_size'] else False
+                    if is_intersect:
                         self.ebi_pa_name_map[pa] = section.name
                         if section.name == "KVA_DUMP":
                             kva_dump_addr = pa
-                self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
+                self.ebi_files_minidump.append((idx, pa, end_addr, va, size))
 
             if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
@@ -2752,18 +2761,12 @@ class RamDump():
         except Exception as e:
             print_out_str(str(e))
 
-    def has_debug_info(self, file):
-        cmd = self.objdump_path + ' -h ' + file
-        if platform.system() != "Linux":
-            objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       universal_newlines=True, )
-        else:
-            objdump = subprocess.Popen(shlex.split(cmd), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       universal_newlines=True, )
-        out, err = objdump.communicate()
-        if '.debug_info' in out:
-            return True
-        else:
+    def has_debug_info(self, filepath):
+        try:
+            with open(filepath, 'rb') as f:
+                elf = ELFFile(f)
+                return elf.get_section_by_name('.debug_info') is not None
+        except Exception:
             return False
 
     def parse_module_symbols(self):
@@ -2796,21 +2799,25 @@ class RamDump():
                     name = file[:-len('.ko')]
                 else:
                     return
-                name = os.path.basename(name)
-                name = name.replace("-","_")
-                # Prefer .ko.unstripped
-                if self.ko_file_dict.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
-                    return
 
-                # Prefer ko with debug info
-                if name in self.ko_file_dict and self.has_debug_info(self.ko_file_dict.get(name)):
-                    return
+                name = os.path.basename(name).replace("-", "_")
+                old_ko = self.ko_file_dict.get(name)
+                if old_ko:
+                    # avoid to handle same ko again
+                    if old_ko == file:
+                        return
+
+                    # Prefer .ko.unstripped over .ko
+                    if old_ko.endswith(".ko.unstripped") and file.endswith(".ko"):
+                        return
+
+                    # Prefer ko with debug info
+                    if self.has_debug_info(old_ko):
+                        return
 
                 self.ko_file_dict[name] = file
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
-
-
 
     def win_safe_name_for_path(self, name: str) -> str:
         """
@@ -3026,6 +3033,33 @@ class RamDump():
                     return self.gdbmi_hyp.symbol_at(addr)
                 except gdbmi.GdbMIException:
                     pass
+
+    def read_pid_max(self):
+        # Method 1: Try old kernel's global pid_max symbol
+        pid_max_addr = self.address_of('pid_max')
+        if pid_max_addr is not None:
+            val = self.read_u32(pid_max_addr)
+            if val is not None and val > 0:
+                return val
+
+        # Method 2: Try new kernel's init_pid_ns.pid_max
+        init_pid_ns_addr = self.address_of('init_pid_ns')
+        if init_pid_ns_addr is not None:
+            pid_max_offset = self.field_offset('struct pid_namespace', 'pid_max')
+            if pid_max_offset is not None and pid_max_offset != -1:
+                val = self.read_u32(init_pid_ns_addr + pid_max_offset)
+                if val is not None and val > 0:
+                    return val
+
+        # Method 3: Use default based on CONFIG_BASE_SMALL
+        try:
+            if int(self.get_config_val("CONFIG_BASE_SMALL")) == 1:
+                return 0x1000  # 4096
+        except (TypeError, ValueError):
+            pass
+
+        # Final fallback: use default for most embedded systems
+        return 0x8000  # 32768
 
     def sizeof(self, the_type):
         cached_data = self.cached_data['sizeof']
