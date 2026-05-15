@@ -290,6 +290,69 @@ class AutoDumpInfodram_cs(AutoDumpInfo):
                     continue
                 yield filename, start
 
+class AutoDumpInfoVMSSRdump(AutoDumpInfo):
+    '''
+    AutoDumpInfo subclass for VMSSR (VM Secure State Ramdump) dumps.
+
+    Supports two dump modes detected automatically:
+
+    **Minidump** (KELF_HD.bin present � checked first):
+      - md_KELF_HDR.BIN  : kernel binary (text/header region)
+      - dump_info.txt: metadata including IPA address (optional)
+
+    **Full dump** (VM_SSR_MEM.BIN present):
+      - VM_SSR_MEM.BIN : full memory binary dump of the VM
+      - dump_info.txt: metadata including VM name, IPA address, and memory size
+                       (required for full dump)
+
+    Example dump_info.txt::
+
+        VM Name: trustedvm
+        IPA Address: 0x80000000
+        Memory Size: 0x4000000
+        Dump Path: /data/vendor/vm_ssrdump/fulldump/trustedvm_20260223120016
+    '''
+
+    def __init__(self, autodumpdir, minidump, reduceddump, svm=None):
+        super().__init__(autodumpdir, minidump, reduceddump, svm)
+
+    def _read_ipa_address(self):
+        """Read IPA Address from dump_info.txt. Returns None if not found."""
+        dump_info_path = os.path.join(self.autodumpdir, 'dump_info.txt')
+        if not os.path.exists(dump_info_path):
+            return None
+        with open(dump_info_path) as f:
+            for line in f.readlines():
+                m = re.match(r'IPA Address:\s*(0x[0-9a-fA-F]+)', line.strip())
+                if m:
+                    return int(m.group(1), 16)
+        return None
+
+    def _parse(self):
+        # --- Minidump path: presence of KELF_HD.bin indicates VMSSR minidump ---
+        minidump_flag_file = os.path.join(self.autodumpdir, 'vm_ssr_minidump.txt')
+        kelf_hd_path = os.path.join(self.autodumpdir, 'md_KELF_HDR.BIN')
+        if self.minidump:
+            if os.path.exists(minidump_flag_file) and os.path.exists(kelf_hd_path):
+                print_out_str('VMSSR minidump detected (md_KELF_HDR.BIN found)')
+                yield 'md_KELF_HDR.BIN', 0
+            else:
+                print_out_str('!!! AutoParse could not find vm_ssr_minidump.txt or md_KELF_HDR.BIN for VMSSR dump!')
+                return
+        else:
+            # --- Full dump path: requires VM_SSR_MEM.BIN + IPA Address in dump_info.txt ---
+            ipa_address = self._read_ipa_address()
+            if ipa_address is None:
+                print_out_str('!!! Could not parse IPA Address from dump_info.txt for VMSSR dump!')
+                return
+
+            fulldump = 'VM_SSR_MEM.BIN'
+            if not os.path.exists(os.path.join(self.autodumpdir, fulldump)):
+                print_out_str('!!! AutoParse could not find VM_SSR_MEM.BIN for VMSSR dump!')
+                return
+
+            yield fulldump, ipa_address
+
 class RamDump():
     """The main interface to the RAM dump"""
 
