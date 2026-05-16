@@ -34,6 +34,8 @@ class FtraceParser(RamParser):
         self.whitelisted_trace_names = []
         self.ftrace_buffer_size_kb = None
         self.per_cpu_buffer_pages = None
+        self.pid_max = self.ramdump.read_pid_max()
+        print_out_str("pid_max={0}".format(self.pid_max))
         if not self.ramdump.minidump:
             self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
         if len(self.ramdump.ftrace_args):
@@ -249,7 +251,7 @@ class FtraceParser(RamParser):
             per_cpu_buffer = trace_buffer_info['rb_per_cpu'][cpu_idx]
             if per_cpu_buffer is not None:
                 evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,fevent_list.ftrace_event_type,
-                        fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
+                        fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd,self.pid_max)
                 evt.ring_buffer_per_cpu_parsing(per_cpu_buffer, nrpages_limit)
         return ftrace_time_data
 

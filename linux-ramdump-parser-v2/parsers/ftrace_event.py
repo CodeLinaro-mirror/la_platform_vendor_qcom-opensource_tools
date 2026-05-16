@@ -77,7 +77,7 @@ class BufferedWrite(object):
             self.close()
 
 class FtraceParser_Event(object):
-    def __init__(self,ramdump,ftrace_out,cpu,trace_event_type,ftrace_raw_struct_type,ftrace_time_data,format_event_map,savedcmd):
+    def __init__(self,ramdump,ftrace_out,cpu,trace_event_type,ftrace_raw_struct_type,ftrace_time_data,format_event_map,savedcmd,pid_max):
         self.cpu = "[{:03d}]".format(cpu)
         self.ramdump = ramdump
         self.ftrace_out = ftrace_out
@@ -103,16 +103,17 @@ class FtraceParser_Event(object):
         self.rb_event_typelen_offset = self.ramdump.field_offset(
             'struct ring_buffer_event', 'type_len')
         self.trace_entry_type_offset = self.ramdump.field_offset('struct trace_entry ', 'type')
-        self.pid_max = 0x8000 if self.ramdump.get_config_val("CONFIG_BASE_SMALL") is None else 0x1000
-        self.map_cmdline_to_pid_offset = self.ramdump.field_offset(
-            'struct saved_cmdlines_buffer', 'map_cmdline_to_pid')
-        self.saved_cmdlines_offset = self.ramdump.field_offset(
-            'struct saved_cmdlines_buffer', 'saved_cmdlines')
         self.pid_offset = self.ramdump.field_offset("struct trace_entry" , "pid")
         self.preempt_count_offset = self.ramdump.field_offset("struct trace_entry", "preempt_count")
         self.flags_offset = self.ramdump.field_offset("struct trace_entry", "flags")
+        self.task_comm_len = 16
+        self.saved_cmdline_pid_size = 4
         self.comm_pid_dict = comm_pid_dict
+        self.PID_MAX_DEFAULT = 0
+        self.pid_max = pid_max
         self.savedcmd = savedcmd
+        if self.savedcmd is not None:
+            self.PID_MAX_DEFAULT = len(self.savedcmd.map_pid_to_cmdline)-1
 
     def get_event_length(self, rb_event, rb_event_type, time_delta,  buffer_data_page_end):
         type_len = rb_event_type
@@ -247,14 +248,24 @@ class FtraceParser_Event(object):
             if pid == 0:
                 comm = "<idle>"
             else:
-                tpid = pid & (self.pid_max - 1)
-                cmdline_map = self.savedcmd.map_pid_to_cmdline[tpid]
-                if cmdline_map != -1 and cmdline_map != None:
-                    map_cmdline_to_pid = self.savedcmd.map_cmdline_to_pid
-                    cmdline_tpid = self.ramdump.read_int(map_cmdline_to_pid + cmdline_map * 4)
-                    if cmdline_tpid == pid:
-                        saved_cmdlines = self.savedcmd.saved_cmdlines
-                        comm = self.ramdump.read_cstring(saved_cmdlines + cmdline_map * 16, 16) #TASK_COMM_LEN
+                try:
+                    tpid = pid & (self.PID_MAX_DEFAULT - 1)
+                    cmdline_map = self.savedcmd.map_pid_to_cmdline[tpid]
+                    if cmdline_map is not None and cmdline_map != -1:
+                        map_cmdline_to_pid = self.savedcmd.map_cmdline_to_pid
+                        if map_cmdline_to_pid:
+                            cmdline_tpid = self.ramdump.read_int(map_cmdline_to_pid + cmdline_map * self.saved_cmdline_pid_size)
+                            if cmdline_tpid == pid:
+                                comm_data = self.ramdump.read_cstring(
+                                    self.savedcmd.saved_cmdlines + cmdline_map * self.task_comm_len,
+                                    self.task_comm_len,
+                                )
+                                if comm_data:
+                                    comm = comm_data
+                except (AttributeError, KeyError, TypeError, IndexError) as e:
+                    print_out_str("find_cmdline error for pid {}: {}".format(pid, str(e)))
+                    pass
+
         comm = "{}-{}".format(comm, pid)
         self.comm_pid_dict[pid] = comm
         return comm
@@ -341,7 +352,7 @@ class FtraceParser_Event(object):
         struct_type = self.ftrace_raw_struct_type[str(type)]
 
         pid = self.ramdump.read_u32(ftrace_raw_entry + self.pid_offset)
-        if pid > self.pid_max:
+        if pid is None or pid > self.pid_max:
             return
         preempt_count = self.ramdump.read_u16(ftrace_raw_entry + self.preempt_count_offset) & 0xFF
         flags = self.ramdump.read_u16(ftrace_raw_entry + self.flags_offset) & 0xFF
