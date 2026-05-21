@@ -2622,9 +2622,81 @@ class MDPinfo(RamParser):
                 except:
                     pass
 
+    def dump_hfi_dbg(self):
+        hfi_dbg_addr = self.ramdump.address_of('hfi_dbg')
+        if not hfi_dbg_addr:
+            print_out_str("hfi_dbg not found")
+            return
+
+        hfi_dbg_ptr = self.ramdump.read_pointer(hfi_dbg_addr)
+        if not hfi_dbg_ptr:
+            print_out_str("Pointer to 'hfi_dbg' is NULL")
+            return
+
+        hfi_dbg = self.ramdump.read_datatype(hfi_dbg_ptr, 'struct hfi_dbg')
+
+        # base_buf_addr is already a hfi_shared_addr_map object (auto-dereferenced by Struct class)
+        # We can use it directly
+        base_buf_addr = hfi_dbg.base_buf_addr
+
+        if not base_buf_addr:
+            print_out_str("base_buf_addr object is None")
+            return
+
+        local_addr = base_buf_addr.local_addr
+        size = base_buf_addr.size
+
+        print_out_str(f"HFI debug info: local_addr=0x{local_addr:x}, size={size}")
+
+        if not local_addr or size == 0:
+            print_out_str("Invalid hfi_dbg dump_addr or size")
+            return
+
+        # Check if the address is valid before attempting to read
+        if local_addr < 0x1000:  # Basic sanity check for very low addresses
+            print_out_str(f"Invalid local_addr: 0x{local_addr:x} (too low)")
+            return
+
+        # Apply PAC ignore for MTE + KASAN HW TAG builds
+        local_addr = self.ramdump.pac_ignore(local_addr)
+
+        # Try to convert virtual address to physical if needed
+        try:
+            # Check if this is a virtual address that needs conversion
+            # Create mask based on vabits_actual (refer to pac_ignore() in ramdump.py)
+            kernel_va_mask = self.ramdump.createMask(self.ramdump.vabits_actual, 63)
+            if (local_addr & kernel_va_mask) == kernel_va_mask:  # Likely a virtual address on ARM64
+                phys_addr = self.ramdump.virt_to_phys(local_addr)
+                if phys_addr is None:
+                    print_out_str(f"Failed to convert virtual address 0x{local_addr:x} to physical")
+                    return
+                print_out_str(f"Converted virtual address 0x{local_addr:x} to physical 0x{phys_addr:x}")
+                local_addr = phys_addr
+        except Exception as e:
+            print_out_str(f"Error during address conversion: {e}")
+
+
+        try:
+            memory_data = self.ramdump.read_physical(local_addr, size)
+            if not memory_data:
+                print_out_str(f"Failed to read memory from local_addr 0x{local_addr:x}, size {size}")
+                return
+
+            self.outfile = self.ramdump.open_file('hfi_dump.txt', 'wb')
+            self.outfile.write(memory_data)
+            self.outfile.close()
+
+            print_out_str(f"Successfully dumped {len(memory_data)} bytes to 'hfi_dump.txt'")
+
+        except Exception as e:
+            print_out_str(f"Exception while reading/writing HFI debug data: {e}")
+            return
+
+
     def parse(self):
         # Extract HFI PAL trace data
         self.extract_hfi_pal_trace_data()
+        self.dump_hfi_dbg()
 
         mdss_dbg = MdssDbgXlog(self.ramdump, 'mdss_dbg_xlog')
 
