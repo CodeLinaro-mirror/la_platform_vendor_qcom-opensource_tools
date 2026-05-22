@@ -34,7 +34,6 @@ from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
 import parser_util
 import minidump_util
 import ramreduction_util as elfutil
-from importlib import import_module
 import module_table
 from mm import mm_init
 from register import Register
@@ -45,6 +44,8 @@ from linux_list import ListWalker
 import mmap
 import bisect
 from lrucachedict import LRUCacheDict
+from elftools.elf.elffile import ELFFile
+from elftools.elf.constants import SH_FLAGS
 
 SP = 13
 LR = 14
@@ -926,17 +927,6 @@ class RamDump():
                                      0)
             self.gdbmi_hyp.open()
 
-        if self.minidump or self.reduceddump:
-            try:
-                mod = import_module('elftools.elf.elffile')
-                ELFFile = mod.ELFFile
-                StringTableSection = mod.StringTableSection
-                mod = import_module('elftools.common.py3compat')
-                bytes2str = mod.bytes2str
-            except ImportError:
-                print("Oops, missing required library for minidump. Check README")
-                sys.exit(1)
-
         if options.ram_addr is not None:
             # TODO sanity check to make sure the memory regions don't overlap
             for file_path, start, end in options.ram_addr:
@@ -984,18 +974,29 @@ class RamDump():
                     sys.exit(1)
             fd = open(file_path, 'rb')
             self.elffile = ELFFile(fd)
-            for idx, s in enumerate(self.elffile.iter_segments()):
-                pa = int(s['p_paddr'])
-                va = int(s['p_vaddr'])
-                size = int(s['p_filesz'])
+
+            def range_memblock(a, size):
+                return (a, a + size)
+
+            def ranges_intersect(r1, r2):
+                return max(r1[0], r2[0]) < min(r1[1], r2[1])
+
+            for idx, segment in enumerate(self.elffile.iter_segments()):
+                pa = int(segment['p_paddr'])
+                va = int(segment['p_vaddr'])
+                size = int(segment['p_filesz'])
                 end_addr = pa + size - 1
+                seg_mem  = range_memblock(va, size)
                 for section in self.elffile.iter_sections():
-                    if (not section.is_null() and
-                            s.section_in_segment(section)):
+                    if section.is_null():
+                        continue
+                    sec_mem  = range_memblock(section['sh_addr'], section['sh_size'])
+                    is_intersect  = ranges_intersect(seg_mem, sec_mem) if segment['p_filesz'] and section['sh_size'] else False
+                    if is_intersect:
                         self.ebi_pa_name_map[pa] = section.name
                         if section.name == "KVA_DUMP":
                             kva_dump_addr = pa
-                self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
+                self.ebi_files_minidump.append((idx, pa, end_addr, va, size))
 
             if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
@@ -1245,10 +1246,14 @@ class RamDump():
 
         self.unwind = self.Unwinder(self)
         if self.module_table.sym_paths_exist():
-            self.setup_module_symbols()
-            self.gdbmi.setup_module_table(self.module_table)
-            if self.dump_global_symbol_table:
-                self.dump_global_symbol_lookup_table()
+            try:
+                self.setup_module_symbols()
+                self.gdbmi.setup_module_table(self.module_table)
+                if self.dump_global_symbol_table:
+                    self.dump_global_symbol_lookup_table()
+            except Exception as e:
+                print_out_str("module table is not setup")
+                print_out_str(str(e))
 
         if not self.minidump:
             self.setup_module_layout()
@@ -2562,45 +2567,42 @@ class RamDump():
             next_list_ent = self.read_pointer(next_list_ent + next_offset)
 
     def parse_module_text(self, ko_path, plt_num, ftrace_plt_num):  # parse ko text address from MOD_TEXT
-        fd = open(ko_path, 'rb')
-        mod = import_module('elftools.elf.elffile')
-        constants = import_module('elftools.elf.constants')
-        sections = import_module('elftools.elf.sections')
-        ELFFile = mod.ELFFile
-        elffile = ELFFile(fd)
         text_offset = 0
-        for section in elffile.iter_sections():
-            header = section.header
-            is_init = re.match(r".init", section.name)
-            if is_init is not None:
-                continue
+        with open(ko_path, 'rb') as fd:
+            elffile = ELFFile(fd)
+            for section in elffile.iter_sections():
+                header = section.header
+                is_init = re.match(r".init", section.name)
+                if is_init is not None:
+                    continue
 
-            if section.name == ".text":
-                break
+                if section.name == ".text":
+                    break
 
-            plt_entry_size = self.sizeof('struct plt_entry')
-            if section.name == ".plt":
-                text_offset = align_up(text_offset, 64)   #plt align is 64
-                sh_size = plt_entry_size * plt_num
-                text_offset += sh_size
-                continue
+                plt_entry_size = self.sizeof('struct plt_entry')
+                if section.name == ".plt":
+                    text_offset = align_up(text_offset, 64)   #plt align is 64
+                    sh_size = plt_entry_size * plt_num
+                    text_offset += sh_size
+                    continue
 
-            if section.name == ".text.ftrace_trampoline":
-                text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
-                sh_size = plt_entry_size * ftrace_plt_num
-                text_offset += sh_size
-                continue
+                if section.name == ".text.ftrace_trampoline":
+                    text_offset = align_up(text_offset, 4)    #.text.ftrace_trampoline align is 4
+                    sh_size = plt_entry_size * ftrace_plt_num
+                    text_offset += sh_size
+                    continue
 
-            if (header['sh_flags'] & (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR)) == \
-                (constants.SH_FLAGS.SHF_ALLOC | constants.SH_FLAGS.SHF_EXECINSTR):
-                text_offset = align_up(text_offset, header['sh_addralign'])
-                sh_size = header['sh_size']
-                text_offset += sh_size
+                FLAGS_TEXT = SH_FLAGS.SHF_ALLOC | SH_FLAGS.SHF_EXECINSTR
+                sh_flags = header['sh_flags']
+                if (sh_flags & FLAGS_TEXT) == FLAGS_TEXT:
+                    align = header['sh_addralign']
+                    text_offset = align_up(text_offset, align)
+                    text_offset += header['sh_size']
 
-        if self.kernel_version >= (6, 1) and self.kernel_version < (6, 6): # kp 3.0
-            text_offset = align_up(text_offset, 4096)
+            if self.kernel_version >= (6, 1) and self.kernel_version < (6, 6): # kp 3.0
+                text_offset = align_up(text_offset, 4096)
 
-        return text_offset
+            return text_offset  # end of .text section
 
     def retrieve_minidump_modules(self):
         kmodules_seg = next((s for s in self.elffile.iter_sections() if s.name == 'KMODULES'), None)
@@ -2748,18 +2750,12 @@ class RamDump():
         except Exception as e:
             print_out_str(str(e))
 
-    def has_debug_info(self, file):
-        cmd = self.objdump_path + ' -h ' + file
-        if platform.system() != "Linux":
-            objdump = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       universal_newlines=True, )
-        else:
-            objdump = subprocess.Popen(shlex.split(cmd), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       universal_newlines=True, )
-        out, err = objdump.communicate()
-        if '.debug_info' in out:
-            return True
-        else:
+    def has_debug_info(self, filepath):
+        try:
+            with open(filepath, 'rb') as f:
+                elf = ELFFile(f)
+                return elf.get_section_by_name('.debug_info') is not None
+        except Exception:
             return False
 
     def parse_module_symbols(self):
@@ -2792,21 +2788,25 @@ class RamDump():
                     name = file[:-len('.ko')]
                 else:
                     return
-                name = os.path.basename(name)
-                name = name.replace("-","_")
-                # Prefer .ko.unstripped
-                if self.ko_file_dict.get(name, '').endswith('.ko.unstripped') and file.endswith('.ko'):
-                    return
 
-                # Prefer ko with debug info
-                if name in self.ko_file_dict and self.has_debug_info(self.ko_file_dict.get(name)):
-                    return
+                name = os.path.basename(name).replace("-", "_")
+                old_ko = self.ko_file_dict.get(name)
+                if old_ko:
+                    # avoid to handle same ko again
+                    if old_ko == file:
+                        return
+
+                    # Prefer .ko.unstripped over .ko
+                    if old_ko.endswith(".ko.unstripped") and file.endswith(".ko"):
+                        return
+
+                    # Prefer ko with debug info
+                    if self.has_debug_info(old_ko):
+                        return
 
                 self.ko_file_dict[name] = file
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
-
-
 
     def win_safe_name_for_path(self, name: str) -> str:
         """
@@ -3022,6 +3022,33 @@ class RamDump():
                     return self.gdbmi_hyp.symbol_at(addr)
                 except gdbmi.GdbMIException:
                     pass
+
+    def read_pid_max(self):
+        # Method 1: Try old kernel's global pid_max symbol
+        pid_max_addr = self.address_of('pid_max')
+        if pid_max_addr is not None:
+            val = self.read_u32(pid_max_addr)
+            if val is not None and val > 0:
+                return val
+
+        # Method 2: Try new kernel's init_pid_ns.pid_max
+        init_pid_ns_addr = self.address_of('init_pid_ns')
+        if init_pid_ns_addr is not None:
+            pid_max_offset = self.field_offset('struct pid_namespace', 'pid_max')
+            if pid_max_offset is not None and pid_max_offset != -1:
+                val = self.read_u32(init_pid_ns_addr + pid_max_offset)
+                if val is not None and val > 0:
+                    return val
+
+        # Method 3: Use default based on CONFIG_BASE_SMALL
+        try:
+            if int(self.get_config_val("CONFIG_BASE_SMALL")) == 1:
+                return 0x1000  # 4096
+        except (TypeError, ValueError):
+            pass
+
+        # Final fallback: use default for most embedded systems
+        return 0x8000  # 32768
 
     def sizeof(self, the_type):
         cached_data = self.cached_data['sizeof']
