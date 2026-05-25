@@ -367,6 +367,14 @@ class Logcat(RamParser):
                 #parser to supprot Android M
                 logcat = Logcat_m(self.ramdump, taskinfo)
                 logcat.parse()
+                #Add the logic to parse the logread & /var/log/messages
+                try:
+                    task = UTaskLib(self.ramdump).get_utask_info("syslogd")
+                    from parsers.syslog_busybox import Syslog_busybox
+                    syslog= Syslog_busybox(self.ramdump, task )
+                    syslog.parse()
+                except ProcessNotFoundExcetion:
+                    print_out_str("syslogd process is not started")
             elif self.is_openwrt_process(taskinfo):
                 print_out_str("Openwrt ramdump")
                 from parsers.logcat_openwrt import Logcat_openwrt
