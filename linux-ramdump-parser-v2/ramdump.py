@@ -984,18 +984,29 @@ class RamDump():
                     sys.exit(1)
             fd = open(file_path, 'rb')
             self.elffile = ELFFile(fd)
-            for idx, s in enumerate(self.elffile.iter_segments()):
-                pa = int(s['p_paddr'])
-                va = int(s['p_vaddr'])
-                size = int(s['p_filesz'])
+
+            def range_memblock(a, size):
+                return (a, a + size)
+
+            def ranges_intersect(r1, r2):
+                return max(r1[0], r2[0]) < min(r1[1], r2[1])
+
+            for idx, segment in enumerate(self.elffile.iter_segments()):
+                pa = int(segment['p_paddr'])
+                va = int(segment['p_vaddr'])
+                size = int(segment['p_filesz'])
                 end_addr = pa + size - 1
+                seg_mem  = range_memblock(va, size)
                 for section in self.elffile.iter_sections():
-                    if (not section.is_null() and
-                            s.section_in_segment(section)):
+                    if section.is_null():
+                        continue
+                    sec_mem  = range_memblock(section['sh_addr'], section['sh_size'])
+                    is_intersect  = ranges_intersect(seg_mem, sec_mem) if segment['p_filesz'] and section['sh_size'] else False
+                    if is_intersect:
                         self.ebi_pa_name_map[pa] = section.name
                         if section.name == "KVA_DUMP":
                             kva_dump_addr = pa
-                self.ebi_files_minidump.append((idx, pa, end_addr, va,size))
+                self.ebi_files_minidump.append((idx, pa, end_addr, va, size))
 
             if options.autodump and os.path.exists(os.path.join(options.autodump, "md_KVA_DUMP.BIN")):
                 file_path = os.path.join(options.autodump, "md_KVA_DUMP.BIN")
@@ -1245,10 +1256,14 @@ class RamDump():
 
         self.unwind = self.Unwinder(self)
         if self.module_table.sym_paths_exist():
-            self.setup_module_symbols()
-            self.gdbmi.setup_module_table(self.module_table)
-            if self.dump_global_symbol_table:
-                self.dump_global_symbol_lookup_table()
+            try:
+                self.setup_module_symbols()
+                self.gdbmi.setup_module_table(self.module_table)
+                if self.dump_global_symbol_table:
+                    self.dump_global_symbol_lookup_table()
+            except Exception as e:
+                print_out_str("module table is not setup")
+                print_out_str(str(e))
 
         if not self.minidump:
             self.setup_module_layout()

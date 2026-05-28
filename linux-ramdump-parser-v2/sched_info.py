@@ -123,15 +123,19 @@ def verify_active_cpus(ramdump):
             min_req_cpus = 1
 
         if ((cluster_nr_oncpus - cluster_nr_isocpus) < min_req_cpus):
-                print_out_str("\n" + "*" * 10 + " WARNING " + "*" * 10 + "\n")
-                print_out_str("\tMinimum active cpus are not available in the cluster {0}\n".format(i))
+            print_out_str("\n" + "*" * 10 + " WARNING " + "*" * 10 + "\n")
+            print_out_str("\tMinimum active cpus are not available in the cluster {0}\n".format(i))
+            print_out_str("*" * 10 + " WARNING " + "*" * 10 + "\n")
 
-                print_out_str("*" * 10 + " WARNING " + "*" * 10 + "\n")
-        print_out_str("\tCluster nr_cpu: {0} cpus: {1}  Online cpus: {2} Isolated cpus: {3} (core_ctl nr_isol: {4})\n".format(
+        print_out_str("\tCluster nr_cpu: {0} cpus: {1}  Online cpus: {2} Isolated cpus: {3} (core_ctl nr_isol: {4})".format(
                         bin(cluster_cpus[i]).count('1'),
                         mask_bitset_pos(cluster_cpus[i]),
                         mask_bitset_pos(cluster_online_cpus),
                         mask_bitset_pos(cluster_isolated_cpus), crctl_nr_isol))
+
+    cpu_logical_map = get_cpu_logical_map(ramdump)
+    if cpu_logical_map: print_out_str(f"\tcpu_logical_map = {get_cpu_logical_map(ramdump)}")
+    print_out_str("")
 
 def dump_rq_lock_information(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
@@ -306,6 +310,31 @@ def parse_cpufreq_minidump(ramdump):
 
     print_out_str("\n(Note: Shows requested freq; system may pick nearest value)")
 
+def mpidr_to_index(ramdump, mpidr):
+    vcpu_index = 0
+    if mpidr:
+        if hasattr(ramdump.board, 'aff_shift'):
+            aff_shift = ramdump.board.aff_shift
+        else:
+            aff_shift = [0,0,0,0]
+        tmp_vcpu_index = mpidr
+        for i in range(0, len(aff_shift)):
+            vcpu_index |= ((tmp_vcpu_index >> (i * 8)) & 0xff) << aff_shift[i]
+        if hasattr(ramdump.board, 'core_map'):
+            vcpu_index = ramdump.board.core_map.get(vcpu_index, vcpu_index)
+    else:
+        vcpu_index = mpidr
+    return vcpu_index
+
+def get_cpu_logical_map(ramdump):
+    cpu_logical_map = {}
+    logical_map_addr = ramdump.address_of('__cpu_logical_map')
+    if not logical_map_addr:
+        return cpu_logical_map
+    for i in ramdump.iter_cpus():
+        hw_coreid = ramdump.read_u64(logical_map_addr + (i * 8))
+        cpu_logical_map[i] = mpidr_to_index(ramdump, hw_coreid)
+    return cpu_logical_map
 
 @register_parser('--sched-info', 'Verify scheduler\'s various parameter status')
 class Schedinfo(RamParser):
