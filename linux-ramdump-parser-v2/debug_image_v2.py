@@ -34,6 +34,7 @@ from tlbdumplib import lookup_tlb_type
 from vsens import VsensData
 from sysregs import SysRegDump
 from fcmdump import FCM_Dump
+from sched_info import get_cpu_logical_map, mpidr_to_index
 
 MEMDUMPV2_MAGIC = 0x42445953
 MEMDUMPV_HYP_MAGIC = 0x42444832
@@ -177,6 +178,12 @@ class DebugImage_v2():
         else:
             self.event_call = 'struct ftrace_event_call'
             self.event_class = 'struct ftrace_event_class'
+        self.coremap = self.get_coremap(ramdump)
+
+    def get_coremap(self, ramdump):
+        cpu_logical_map = get_cpu_logical_map(ramdump)
+        cpu_phy_map = {v: k for k, v in cpu_logical_map.items()}
+        return cpu_phy_map
 
     def parse_scandump(self, version, start, end, client_id, ram_dump):
         scandump_file_prefix = "scandump_core"
@@ -245,23 +252,26 @@ class DebugImage_v2():
 
         return
 
-    def get_vcpu_index(self, ram_dump, affinity):
-        vcpu_index = 0
-        if affinity:
-            if hasattr(ram_dump.board, 'aff_shift'):
-                aff_shift = ram_dump.board.aff_shift
-            else:
-                aff_shift = [0,0,0,0]
-            tmp_vcpu_index = affinity
-            for i in range(0, len(aff_shift)):
-                vcpu_index |= ((tmp_vcpu_index >> (i * 8)) & 0xff) << aff_shift[i]
-            if hasattr(ram_dump.board, 'core_map'):
-                vcpu_index = ram_dump.board.core_map.get(vcpu_index, vcpu_index)
-        else:
-            vcpu_index = affinity
-        return vcpu_index
+    def match_vmid(self, ram_dump, dump_data_name):
+        matched = False
+        if dump_data_name:
+            m = re.search(r'vm_(\d+)_vcpu', dump_data_name)
+            vmid_found = int(m.group(1)) if m else None
+            if vmid_found is not None:
+                if hasattr(ram_dump.board, 'vmid'):
+                    if ram_dump.board.vmid == vmid_found:
+                        matched = True
+                else:
+                    hw_id = ram_dump.hw_id
+                    vm_checks = {
+                        3:  lambda hw: not (hw.endswith("svm") or hw.endswith("oemvm")),
+                        45: lambda hw: hw.endswith("svm"),
+                        49: lambda hw: hw.endswith("oemvm"),
+                    }
+                    matched = vm_checks.get(vmid_found, lambda hw: False)(hw_id)
+        return matched
 
-    def parse_cpu_ctx(self, version, start, end, client_id, ram_dump,dump_data_name=None):
+    def parse_cpu_ctx(self, version, start, end, client_id, ram_dump, dump_data_name=None):
         core = client_id - client.MSM_DUMP_DATA_CPU_CTX
 
         if version == 32 or version == "32":
@@ -303,9 +313,15 @@ class DebugImage_v2():
                 if regset_addr_offset is None:
                     regset_addr_offset = 0x8
                 affinity = ram_dump.read_u32(start + cpu_index_offset,False)
-                cpu_index = self.get_vcpu_index(ram_dump, affinity)
+                cpu_index = mpidr_to_index(ram_dump, affinity)
+                if self.match_vmid(ram_dump, dump_data_name) and self.coremap:
+                    logic_cpu_index = self.coremap.get(cpu_index, cpu_index)
+                else:
+                    logic_cpu_index = cpu_index
                 print_out_str(
-                    'Parsing CPU{2:d} affinity {5:x} context start {0:x} end {1:x} version {3} client_id-> {4:x}'.format(start, end, cpu_index, version, client_id, affinity))
+                    'Parsing CPU{2:d} affinity {5:x} context start {0:x} end {1:x} ' \
+                    'version {3} client_id-> {4:x}'.format(start, end, logic_cpu_index,\
+                     version, client_id, affinity))
                 cpu_type = ram_dump.read_u32(start + cpu_type_offset,False)
                 print_out_str("cpu_type = {0}".format(msm_dump_cpu_type[cpu_type]))
                 ctx_type = ram_dump.read_u32(start + ctx_type_offset,False)
@@ -510,8 +526,8 @@ class DebugImage_v2():
         size = ram_dump.read_u32(common_list + size_offset)
         signed = ram_dump.read_u32(common_list + signed_offset)
 
-        if re.match('(.*)\[(.*)', type_str) and not(re.match('__data_loc', type_str)):
-            s = re.split('\[', type_str)
+        if re.match(r'(.*)\[(.*)', type_str) and not(re.match(r'__data_loc', type_str)):
+            s = re.split(r'\[', type_str)
             s[1] = '[' + s[1]
             self.formats_out.write("\tfield:{0} {1}{2};\toffset:{3};\tsize:{4};\tsigned:{5};\n".format(s[0], field_name, s[1], offset, size, signed))
         else:
@@ -622,6 +638,8 @@ class DebugImage_v2():
         # get first column of client_types
         client_names = [x[0] for x in client_types]
 
+        unknown_results = list()
+
         for j in range(0, table_num_entries):
             client_entry = table + j * dump_entry_size
             client_id = ram_dump.read_u32(
@@ -631,16 +649,18 @@ class DebugImage_v2():
                 if client_name not in client_table:
                     print_out_str(
                         '!!! client_id = 0x{0:x} client_name = {1} Does not have an associated function. Skipping!'.format(client_id,client_name))
+                    unknown_results.append((client_name, None, client_entry))
                     continue
             else:
                 print_out_str(
                     '!!! Invalid dump client id found 0x{0:x}'.format(client_id))
+                unknown_results.append(('UNKNOWN_0x{:x}'.format(client_id), None, client_entry))
                 continue
 
             results.append((client_name, client_table[client_name], client_entry))
 
         results.sort(key=lambda x: client_names.index(x[0]))
-        return results
+        return results + unknown_results
     def minidump_data_clients(self, ram_dump, client_id,entry_pa_addr,
                                       end_addr):
         results = list()
@@ -913,14 +933,16 @@ class DebugImage_v2():
                     print_out_str('Parsing debug information for {0}. Version: {1} Magic: {2:x} Source: {3}'.format(
                         client_name, dump_data_version, dump_data_magic,
                         dump_data_name))
-                    sdi_dump_out.write("Id = {0} type = {1} Addr = 0x{2:02x} "
-                    "version {3}  magic {4} DataAddr 0x{5:02x}  DataLen {6} "
+                    sdi_dump_out.write("Id = 0x{0:x} type = {1} Addr = 0x{2:02x} "
+                    "version {3}  magic 0x{4:08x} DataAddr 0x{5:02x}  DataLen {6} "
                     "Dataname {7} \n"
                     .format(client_id,client_type,client_addr,
                     dump_data_version,dump_data_magic,dump_data_addr,
                     dump_data_len,dump_data_name))
                     if dump_data_magic != MEMDUMPV2_MAGIC and dump_data_magic != MEMDUMPV_HYP_MAGIC:
                         print_out_str("!!! Magic {0:x} doesn't match! No context will be parsed".format(dump_data_magic))
+                        continue
+                    if func is None:
                         continue
                     if "parse_cpu_ctx" in func:
                         getattr(DebugImage_v2, func)(
@@ -971,7 +993,7 @@ class DebugImage_v2():
                 minidump_dump_table_value = dict(minidump_dump_table_type)
                 if entry_pa_addr in ram_dump.ebi_pa_name_map:
                     section_name = ram_dump.ebi_pa_name_map[entry_pa_addr]
-                    section_name = re.sub("\d+", "", section_name)
+                    section_name = re.sub(r"\d+", "", section_name)
                     #if section_name in minidump_dump_table_value.values():
                     lst = self.minidump_data_clients(
                         ram_dump, entry_id,entry_pa_addr,end_addr)
@@ -982,6 +1004,16 @@ class DebugImage_v2():
                         getattr(DebugImage_v2, func)(
                             self, 20, client_entry,
                             client_end, client_id, ram_dump)
+
+            md_pattern = re.compile(r'md_vm_3_vcpu', re.IGNORECASE)
+            for a in ram_dump.ebi_files:
+                if len(a) < 4:
+                    continue
+                if re.search(md_pattern, a[3]):
+                    getattr(DebugImage_v2, 'parse_cpu_ctx')(
+                        self, 32, a[1],
+                        a[2], client.MSM_DUMP_DATA_CPU_CTX, ram_dump)
+
         if ram_dump.sysreg:
             self.parse_sysreg(ram_dump)
         self.qdss.dump_standard(ram_dump)
