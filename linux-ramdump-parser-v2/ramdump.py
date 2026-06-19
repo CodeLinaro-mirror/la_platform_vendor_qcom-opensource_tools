@@ -18,13 +18,11 @@ from typing import List, Tuple
 import struct
 import gzip
 import functools
-import string
 import random
 import platform
 import stat
 import subprocess
 import enum
-import copy
 import threading
 from boards import get_supported_boards, get_supported_ids
 from tempfile import NamedTemporaryFile
@@ -33,12 +31,12 @@ from print_out import print_out_str, print_out_exception
 from mmu import Armv7MMU, Armv7LPAEMMU, Armv8MMU
 import parser_util
 import minidump_util
+import vmcore_util
 import ramreduction_util as elfutil
 import module_table
 from mm import mm_init
 from register import Register
 from collections import namedtuple
-import shlex
 import glob
 from linux_list import ListWalker
 import mmap
@@ -291,6 +289,69 @@ class AutoDumpInfodram_cs(AutoDumpInfo):
                         % (filename, filesize, end - start + 1))
                     continue
                 yield filename, start
+
+class AutoDumpInfoVMSSRdump(AutoDumpInfo):
+    '''
+    AutoDumpInfo subclass for VMSSR (VM Secure State Ramdump) dumps.
+
+    Supports two dump modes detected automatically:
+
+    **Minidump** (KELF_HD.bin present � checked first):
+      - md_KELF_HDR.BIN  : kernel binary (text/header region)
+      - dump_info.txt: metadata including IPA address (optional)
+
+    **Full dump** (VM_SSR_MEM.BIN present):
+      - VM_SSR_MEM.BIN : full memory binary dump of the VM
+      - dump_info.txt: metadata including VM name, IPA address, and memory size
+                       (required for full dump)
+
+    Example dump_info.txt::
+
+        VM Name: trustedvm
+        IPA Address: 0x80000000
+        Memory Size: 0x4000000
+        Dump Path: /data/vendor/vm_ssrdump/fulldump/trustedvm_20260223120016
+    '''
+
+    def __init__(self, autodumpdir, minidump, reduceddump, svm=None):
+        super().__init__(autodumpdir, minidump, reduceddump, svm)
+
+    def _read_ipa_address(self):
+        """Read IPA Address from dump_info.txt. Returns None if not found."""
+        dump_info_path = os.path.join(self.autodumpdir, 'dump_info.txt')
+        if not os.path.exists(dump_info_path):
+            return None
+        with open(dump_info_path) as f:
+            for line in f.readlines():
+                m = re.match(r'IPA Address:\s*(0x[0-9a-fA-F]+)', line.strip())
+                if m:
+                    return int(m.group(1), 16)
+        return None
+
+    def _parse(self):
+        # --- Minidump path: presence of KELF_HD.bin indicates VMSSR minidump ---
+        minidump_flag_file = os.path.join(self.autodumpdir, 'vm_ssr_minidump.txt')
+        kelf_hd_path = os.path.join(self.autodumpdir, 'md_KELF_HDR.BIN')
+        if self.minidump:
+            if os.path.exists(minidump_flag_file) and os.path.exists(kelf_hd_path):
+                print_out_str('VMSSR minidump detected (md_KELF_HDR.BIN found)')
+                yield 'md_KELF_HDR.BIN', 0
+            else:
+                print_out_str('!!! AutoParse could not find vm_ssr_minidump.txt or md_KELF_HDR.BIN for VMSSR dump!')
+                return
+        else:
+            # --- Full dump path: requires VM_SSR_MEM.BIN + IPA Address in dump_info.txt ---
+            ipa_address = self._read_ipa_address()
+            if ipa_address is None:
+                print_out_str('!!! Could not parse IPA Address from dump_info.txt for VMSSR dump!')
+                return
+
+            fulldump = 'VM_SSR_MEM.BIN'
+            if not os.path.exists(os.path.join(self.autodumpdir, fulldump)):
+                print_out_str('!!! AutoParse could not find VM_SSR_MEM.BIN for VMSSR dump!')
+                return
+
+            yield fulldump, ipa_address
 
 class RamDump():
     """The main interface to the RAM dump"""
@@ -787,6 +848,8 @@ class RamDump():
         return kimage_vaddr
 
     def get_elf_entry_address(self, header_ptr):
+        if self.fragmented_s2:
+            return None
         e_entry = None
         e_ident = self.read_u64(header_ptr, virtual=False)
         e_magic = e_ident & 0xffffffff
@@ -814,10 +877,13 @@ class RamDump():
         self.thread_name_prefix = "ThreadPoolExecutor-0"
         ##
         self.ebi_files_minidump = []
+        self.ebi_files_vmcoredump = []
         self.ebi_pa_name_map = {}
         self.md_dict = {}
         self.phys_offset = None
         self.ipa_addr = None
+        self.fragmented_s2 = False
+        self.mmu = None
         self.kaslr_offset = options.kaslr_offset
         self.tz_start = 0
         self.ebi_start = 0
@@ -899,6 +965,7 @@ class RamDump():
         self.linux_banner = None
         self.minidump = options.minidump
         self.reduceddump = options.reduceddump
+        self.vmcoredump = options.vmcoredump
         self.svm = options.svm
         self.elffile = None
         self.ram_elf_file = None
@@ -938,12 +1005,12 @@ class RamDump():
                 self.ebi_files.append((fd, start, end, file_path))
             if self.ebi_files:
                 self.ebi_files.sort(key=lambda x: x[1])
-
+        elif options.vmcoredump:
+            pass
         elif not options.reduceddump:
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & DDR files manually.")
                 sys.exit(1)
-
         elif options.reduceddump:
             if not self.auto_parse(options.autodump, options.minidump, options.svm):
                 print("Oops, auto-parse option failed. Please specify vmlinux & HLOS elf files manually.")
@@ -1019,6 +1086,28 @@ class RamDump():
                         self.md_dict[s.name].append([start,size])
                     fout.write('{:16}0x{:x}\n'.format(s.name, start))
                 fout.close()
+        elif options.vmcoredump:
+            vmcore_path = options.vmcoredump
+            try:
+                fd = open(vmcore_path, 'rb')
+                self.vmcore_elffile = ELFFile(fd)
+                self.vmcore_file = fd
+                self.vmcore_segments = vmcore_util.load_segments(self.vmcore_elffile)
+                self.vmcoreinfo = vmcore_util.parse_vmcoreinfo(self.vmcore_elffile)
+            except Exception as e:
+                print_out_str(f'!!! Failed to parse vmcore file: {e}')
+                sys.exit(1)
+
+            for seg in self.vmcore_segments:
+                pa = seg['paddr']
+                va = seg['vaddr']
+                size = seg['filesz']
+                end_addr = pa + size - 1
+                offset = seg['offset']
+                self.ebi_files_vmcoredump.append((pa, end_addr, va, size, offset))
+
+            if self.ebi_files_vmcoredump:
+                self.ebi_files_vmcoredump.sort(key=lambda x: x[0])
 
         if options.minidump:
             if self.ebi_start == 0:
@@ -1027,6 +1116,9 @@ class RamDump():
             if self.ebi_start == 0:
                 # options.elf_addr needs to be sorted for filename
                 self.ebi_start = self.elf_filemap[options.elf_addr[0]][0]
+        elif options.vmcoredump:
+            if self.ebi_start == 0 and self.ebi_files_vmcoredump:
+                self.ebi_start = self.ebi_files_vmcoredump[0][0]
         else:
             if self.ebi_start == 0:
                 self.ebi_start = self.ebi_files[0][1]
@@ -1041,7 +1133,7 @@ class RamDump():
                     options.phys_offset))
             self.phys_offset = options.phys_offset
         self.s2_walk = False
-        if self.svm and not self.minidump:
+        if self.svm and not self.minidump and not self.vmcoredump:
             from extensions.hyp_trace import HypDump
             hyp_dump = HypDump(self)
             try:
@@ -1112,8 +1204,11 @@ class RamDump():
         self.elf_entry_offset = None
         if self.s2_walk:
             if self.ipa_addr is not None:
-                early_s2mmu = Armv8MMU(self)
-                self.phys_offset = early_s2mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                self.mmu = Armv8MMU(self)
+                if not self.fragmented_s2:
+                    self.phys_offset = self.mmu.virt_to_physel2(self.ipa_addr, skip_tlb=False, save_in_tlb=False)
+                else:
+                    self.phys_offset = self.ipa_addr
                 if self.phys_offset is not None:
                     print_out_str('Switch the phys_offset to {}'.format(hex(self.phys_offset)))
                 else:
@@ -1126,15 +1221,11 @@ class RamDump():
 
         self.pfn_range = None
         self.vmemmap = None
+
         ''' determine kaslr_offset, phys_offset and kimage_voffset @start '''
-        # value is None in ARM32
         self.__kimage_vaddr_var_va = self.address_of('kimage_vaddr')
-        # Virtual address of the variable 'kimage_voffset'
-        # value is None in ARM32 before kernel version 5.4
         self.__kimage_voffset_var_va = self.address_of('kimage_voffset')
-        # virtual address of start of kernel image
         self.__kimage_vaddr_va = self.get_kimage_vaddr(need_aslr=False)
-        # address of linux_banner variable
         self.__linux_banner_va = self.address_of('linux_banner')
         self.kimage_voffset = None
         print_out_str(f"kimage_vaddr is: 0x{self.__kimage_vaddr_va:x}")
@@ -1190,9 +1281,11 @@ class RamDump():
 
         pg_dir_size = self.kernel_text_offset + self.page_offset \
             - self.swapper_pg_dir_addr
+
         if self.arm64:
-            print_out_str('Using 64bit MMU')
-            self.mmu = Armv8MMU(self)
+            if self.mmu is None:
+                print_out_str('Using 64bit MMU')
+                self.mmu = Armv8MMU(self)
         elif pg_dir_size == 0x4000:
             print_out_str('Using non-LPAE MMU')
             if self.minidump:
@@ -1335,6 +1428,21 @@ class RamDump():
 
     def __del__(self):
         self.clear_mmap_regions()
+
+        for fd, _, _, _ in getattr(self, 'ebi_files', []):
+            if fd:
+                try:
+                    fd.close()
+                except:
+                    pass
+
+        vmcore_file = getattr(self, 'vmcore_file', None)
+        if vmcore_file:
+            try:
+                vmcore_file.close()
+            except:
+                pass
+
         if self.gdbmi:
             self.gdbmi.close()
         if self.gdbmi_hyp:
@@ -1445,12 +1553,12 @@ class RamDump():
             if vm_v is None:
                 print_out_str('!!! Could not read linux_banner from vmlinux!')
                 sys.exit(1)
-            v = re.search('Linux version (\d{0,2}\.\d{0,2}\.\d{0,3})', vm_v)
+            v = re.search(r'Linux version (\d{0,2}\.\d{0,2}\.\d{0,3})', vm_v)
             if v is None:
                 print_out_str('!!! Could not extract version info!')
                 sys.exit(1)
             self.version = v.group(1)
-            match = re.search('(\d+)\.(\d+)\.(\d+)', self.version)
+            match = re.search(r'(\d+)\.(\d+)\.(\d+)', self.version)
             if match is not None:
                 self.version = tuple(map(int, match.groups()))
                 self.kernel_version = self.version
@@ -1465,19 +1573,23 @@ class RamDump():
         if self.minidump:
             return minidump_util.minidump_virt_to_phys(self.ebi_files_minidump,addr)
         else:
+            phys_addr = None
             if self.kimage_voffset is None:
-                return addr - self.page_offset + self.phys_offset
+                phys_addr = addr - self.page_offset + self.phys_offset
             else:
                 if self.kernel_version > (4, 20, 0):
                     if not (addr & (1 << (self.va_bits - 1))):
-                        return addr - self.page_offset + self.phys_offset
+                        phys_addr = addr - self.page_offset + self.phys_offset
                     else:
-                        return addr - (self.kimage_voffset)
+                        phys_addr = addr - self.kimage_voffset
                 else:
                     if addr & (1 << (self.va_bits - 1)):
-                        return addr - self.page_offset + self.phys_offset
+                        phys_addr = addr - self.page_offset + self.phys_offset
                     else:
-                        return addr - (self.kimage_voffset)
+                        phys_addr = addr - self.kimage_voffset
+            if self.fragmented_s2:
+                phys_addr = self.mmu.virt_to_physel2(phys_addr, skip_tlb=False, save_in_tlb=False)
+            return phys_addr
 
     def match_version(self):
         banner_addr = self.address_of('linux_banner')
@@ -1695,6 +1807,10 @@ class RamDump():
             if self.elf_addr:
                 for file in self.elf_addr:
                     startup_script.write('data.load.elf {0} /noclear\n'.format(file))
+
+            if self.vmcoredump:
+                vmcore_path = os.path.abspath(self.vmcoredump)
+                startup_script.write('data.load.elf {0}\n'.format(vmcore_path))
 
             if not self.minidump:
                 if self.arm64:
@@ -2021,11 +2137,22 @@ class RamDump():
             self.kaslr_addr = None
             if self.svm_kaslr_offset:
                 self.kaslr_offset = self.svm_kaslr_offset
-            else:
+            elif self.kaslr_offset is None:
                 self.kaslr_offset = 0
-            self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
-            if self.elf_entry_offset:
-                self.kimage_voffset -= self.elf_entry_offset
+                if self.fragmented_s2:
+                    try:
+                        self.kaslr_offset, self.kimage_voffset = self.validate_phys_offset(self.phys_offset)
+                    except Exception as err:
+                        print(f"!!! determine_kaslr_offset: error: {err}")
+            if self.kimage_voffset is None:
+                self.kimage_voffset = self.__kimage_vaddr_va + self.kaslr_offset - self.phys_offset
+                if self.elf_entry_offset:
+                    self.kimage_voffset -= self.elf_entry_offset
+            return
+        elif self.vmcoredump:
+            self.kaslr_offset = int(self.vmcoreinfo.get('KERNELOFFSET', '0'), 16)
+            self.kimage_voffset = int(self.vmcoreinfo.get('NUMBER(kimage_voffset)', '0'), 16)
+            print_out_str(f"VMCOREINFO: KASLR offset: 0x{self.kaslr_offset:x}, kimage_voffset: 0x{self.kimage_voffset:x}")
             return
         else:
             __kaslr_offset = None
@@ -2192,16 +2319,23 @@ class RamDump():
             ## kaslr_offset>0 means a given kaslr value provided, treat it as correct value
             ## kaslr_offset=None need to be calculated
             if self.arm64:
-                kimage_voffset = self.__kimage_vaddr_va   + kaslr_offset - phys_offset
+                kimage_voffset = self.__kimage_vaddr_va + kaslr_offset - phys_offset
             else:
                 kimage_voffset = self.page_offset - phys_offset
         ## calculate kaslr_offset via kimage_voffset
         if self.__kimage_voffset_var_va != None and kaslr_offset == None:
             ## calculte depends on kimage_voffset variable which should exist
             kimage_voffset_pa = phys_offset + self.__kimage_voffset_var_va - self.__kimage_vaddr_va
+            if self.fragmented_s2:
+                kimage_voffset_ipa = kimage_voffset_pa
+                kimage_voffset_pa = self.mmu.virt_to_physel2(kimage_voffset_ipa, skip_tlb=False, save_in_tlb=False)
+                if not kimage_voffset_pa:
+                    raise Exception("!!! validate_phys_offset: translation failed for kimage_voffset")
             kimage_voffset_tmp = self.read_word(kimage_voffset_pa, False)
             if kimage_voffset_tmp is not None:
                 kimage_voffset = kimage_voffset_tmp
+                if self.fragmented_s2:
+                    kimage_voffset_pa = kimage_voffset_ipa
                 kimage_voffset_va_kaslr = kimage_voffset_pa + kimage_voffset_tmp
                 if kimage_voffset_va_kaslr >= self.__kimage_voffset_var_va:
                     kaslr_offset = kimage_voffset_va_kaslr - self.__kimage_voffset_var_va
@@ -2223,10 +2357,20 @@ class RamDump():
 
         ## Second step,  check if kimage_voffset value == "&kimage_voffset"
         kimage_voffset_var_phys = self.__kimage_voffset_var_va + kaslr_offset - kimage_voffset
+        if self.fragmented_s2:
+            kimage_voffset_var_ipa = kimage_voffset_var_phys
+            kimage_voffset_var_phys = self.mmu.virt_to_physel2(kimage_voffset_var_ipa, skip_tlb=False, save_in_tlb=False)
+            if not kimage_voffset_var_phys:
+                raise Exception("!!! validate_phys_offset: translation failed for kimage_voffset value")
         kimage_voffset_var_val = self.read_word(kimage_voffset_var_phys, False)
         if kimage_voffset_var_val == kimage_voffset:
             ## check if string from &linux_banner on DDR == string from  &linux_banner on vmlinux
             linux_banner_phys = self.__linux_banner_va + kaslr_offset - kimage_voffset
+            if self.fragmented_s2:
+                linux_banner_ipa = linux_banner_phys
+                linux_banner_phys = self.mmu.virt_to_physel2(linux_banner_ipa, skip_tlb=False, save_in_tlb=False)
+                if not linux_banner_phys:
+                    raise Exception("!!! validate_phys_offset: translation failed for linux_banner")
             banner_string = self.read_cstring(linux_banner_phys, len(self.linux_banner), False)
             if banner_string and (banner_string == self.linux_banner):
                 print_out_str(f"<-= Determined kaslr_offset: 0x{kaslr_offset:x} phys_offset: 0x{phys_offset:x} kimage_voffset: 0x{kimage_voffset:x} =->")
@@ -2382,6 +2526,8 @@ class RamDump():
             self.phys_offset = board.phys_offset
         if hasattr(board, 'ipa_addr'):
             self.ipa_addr = board.ipa_addr
+        if hasattr(board, 'fragmented_s2'):
+            self.fragmented_s2 = board.fragmented_s2
         self.tz_addr = board.wdog_addr
         self.ebi_start = board.ram_start
         self.tz_start = board.imem_start
@@ -2950,7 +3096,7 @@ class RamDump():
 
     def address_of(self, symbol):
         cached_data = self.cached_data['addressof']
-        kaslr_tmp = self.get_kaslr_offset()
+        kaslr_tmp = self.gdbmi.kaslr_offset
         if kaslr_tmp in cached_data:
             if symbol in cached_data[kaslr_tmp]:
                 return cached_data[kaslr_tmp][symbol]
@@ -3031,7 +3177,7 @@ class RamDump():
             if val is not None and val > 0:
                 return val
 
-        # Method 2: Try new kernel's init_pid_ns.pid_max
+       # Method 2: Try new kernel's init_pid_ns.pid_max
         init_pid_ns_addr = self.address_of('init_pid_ns')
         if init_pid_ns_addr is not None:
             pid_max_offset = self.field_offset('struct pid_namespace', 'pid_max')
@@ -3130,6 +3276,23 @@ class RamDump():
             return self.gdbmi.type_of(symbol)
         except gdbmi.GdbMIException:
             pass
+
+    def get_structure_members(self, struct_name):
+        """
+        Returns a dict of member info for a given structure.
+        """
+        try:
+            result = self.gdbmi.get_structure_members(struct_name)
+            if result:
+                return result
+        except gdbmi.GdbMIException:
+            pass
+        if self.hyp:
+            try:
+                return self.gdbmi_hyp.get_structure_members(struct_name)
+            except gdbmi.GdbMIException:
+                pass
+        return {}
 
     def set_priority_namespace(self, filename):
         """
@@ -3230,6 +3393,8 @@ class RamDump():
 
     def setup_module_layout(self):
         mod_list = self.address_of('modules')
+        if not mod_list:
+            return
         list_offset = self.field_offset('struct module', 'list')
         name_offset = self.field_offset('struct module', 'name')
 
@@ -3412,7 +3577,7 @@ class RamDump():
         return
 
     def setup_cached_mmap(self):
-        if self.minidump or self.reduceddump:
+        if self.minidump or self.reduceddump or self.vmcoredump:
             return
         self.mmap_regions = []
         self.phys_cache = LRUCacheDict(max_bytes=500<<20)
@@ -3459,13 +3624,15 @@ class RamDump():
                         self.ebi_files_minidump, self.ebi_files,self.elffile,
                         addr, length)
             return addr_data
-
+        elif self.vmcoredump:
+            data = vmcore_util.read_physical_vmcore(
+                        self.ebi_files_vmcoredump, self.vmcore_file, addr, length)
+            return data
         elif self.reduceddump:
             data = elfutil.read_physical(self.elf_vector, self.elf_htable,
                                             self.elf_filemap, self.ebi_files,
                                             addr, length)
             return data
-
         else:
             if self.use_multithread and threading.current_thread().name.startswith(self.thread_name_prefix):
                 '''multi-thread enabled'''
@@ -4095,7 +4262,7 @@ class RamDump():
     def __is_primary_type(self, d_type):
         d_type = d_type.rstrip()
         if d_type[-1] == "]":
-            re_obj = re.search("(.*)\[\d+\]",d_type)
+            re_obj = re.search(r"(.*)\[\d+\]",d_type)
             d_type = re_obj.group(1)
         if "*" in d_type or "enum " in d_type or d_type == "enum":
             return True
@@ -4143,13 +4310,13 @@ class RamDump():
             re1 = re2 = 0
             for i in range(1):           # using a one iteration loop to implement break
                 # sample match : "/*    0      |    40 */    struct thread_info {"
-                re1 = re.search('\s+(\d+)\s+[|]\s+(\d+) \*\/\s+(struct|union) .*{', line)   #sample match:"/*    0      |    40 */    struct thread_info {"
+                re1 = re.search(r'\s+(\d+)\s+[|]\s+(\d+) \*\/\s+(struct|union) .*{', line)   #sample match:"/*    0      |    40 */    struct thread_info {"
                 if re1:
                     curr_offset = int(re1.group(1))
                     size = int(re1.group(2))
                     break
                 # sample match : "/*                 8 */            struct {"
-                re2 = re.search('\/\*\s+(\d+) \*\/\s+(struct|union) .*{', line)
+                re2 = re.search(r'\/\*\s+(\d+) \*\/\s+(struct|union) .*{', line)
                 if re2:
                     size = int(re2.group(1))
             if re1 or re2:
@@ -4170,7 +4337,7 @@ class RamDump():
                 re1 = re2 = re3 = re4 = 0
                 for i in range(1):              # using a one iteration loop to implement break
                     # sample match : "/*   20      |     4 */                u32 need_resched;"
-                    re1 = re.search('/\*\s+(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
+                    re1 = re.search(r'/\*\s+(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
                     if re1 is not None:
                         curr_offset = int(re1.group(1))
                         size = int(re1.group(2))
@@ -4178,14 +4345,14 @@ class RamDump():
                         attr_name = (re1.group(4))
                         break
                     # sample match : "/*                 4 */    uint32_t v;"
-                    re2 = re.search('/\*\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
+                    re2 = re.search(r'/\*\s+(\d+)\s\*/\s+([^:]+) (\S+);', line)
                     if re2 is not None:
                         size = int(re2.group(1))
                         datatype = re2.group(2)
                         attr_name = (re2.group(3))
                         break
                     # sample match : "/*  868: 3   |     4 */        unsigned int dl_overrun : 1;"
-                    re3 = re.search('/\*\s+(\d+)[:]\s*(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
+                    re3 = re.search(r'/\*\s+(\d+)[:]\s*(\d+)\s+[|]\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
                     if re3 is not None:
                         curr_offset = int(re3.group(1)) + (int(re3.group(2))/100)
                         size = int(re3.group(3)) + (int(re3.group(6))/100)
@@ -4193,7 +4360,7 @@ class RamDump():
                         attr_name = (re3.group(5))
                         break
                     # sample match : "/*                  4 */        unsigned int x : 1;"
-                    re4 = re.search('/\*\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
+                    re4 = re.search(r'/\*\s+(\d+)\s\*/\s+([^:]+) (\S+) [:] (\d+);', line)
                     if re4 is not None:
                         size = int(re4.group(1)) + (int(re4.group(4))/100)
                         datatype = re4.group(2)
@@ -4213,13 +4380,13 @@ class RamDump():
                     else:
                         setattr(curr_obj, attr_name, [curr_offset - base_offset, size, datatype])
                     continue
-                re_obj = re.search('\s*} (\S+);', line)
+                re_obj = re.search(r'\s*} (\S+);', line)
                 if re_obj is not None:
                     return curr_obj, re_obj.group(1), curr_index
-                re_obj = re.search('\s*};', line)
+                re_obj = re.search(r'\s*};', line)
                 if re_obj:
                     return curr_obj, None, curr_index
-                re_obj = re.search('\s*}\s*(\[\d+\])', line)
+                re_obj = re.search(r'\s*}\s*(\[\d+\])', line)
                 if re_obj:
                     return curr_obj, re_obj.group(1), curr_index
         # None means unnamed union or struct
