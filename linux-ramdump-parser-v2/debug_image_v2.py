@@ -638,6 +638,8 @@ class DebugImage_v2():
         # get first column of client_types
         client_names = [x[0] for x in client_types]
 
+        unknown_results = list()
+
         for j in range(0, table_num_entries):
             client_entry = table + j * dump_entry_size
             client_id = ram_dump.read_u32(
@@ -647,16 +649,18 @@ class DebugImage_v2():
                 if client_name not in client_table:
                     print_out_str(
                         '!!! client_id = 0x{0:x} client_name = {1} Does not have an associated function. Skipping!'.format(client_id,client_name))
+                    unknown_results.append((client_name, None, client_entry))
                     continue
             else:
                 print_out_str(
                     '!!! Invalid dump client id found 0x{0:x}'.format(client_id))
+                unknown_results.append(('UNKNOWN_0x{:x}'.format(client_id), None, client_entry))
                 continue
 
             results.append((client_name, client_table[client_name], client_entry))
 
         results.sort(key=lambda x: client_names.index(x[0]))
-        return results
+        return results + unknown_results
     def minidump_data_clients(self, ram_dump, client_id,entry_pa_addr,
                                       end_addr):
         results = list()
@@ -929,14 +933,16 @@ class DebugImage_v2():
                     print_out_str('Parsing debug information for {0}. Version: {1} Magic: {2:x} Source: {3}'.format(
                         client_name, dump_data_version, dump_data_magic,
                         dump_data_name))
-                    sdi_dump_out.write("Id = {0} type = {1} Addr = 0x{2:02x} "
-                    "version {3}  magic {4} DataAddr 0x{5:02x}  DataLen {6} "
+                    sdi_dump_out.write("Id = 0x{0:x} type = {1} Addr = 0x{2:02x} "
+                    "version {3}  magic 0x{4:08x} DataAddr 0x{5:02x}  DataLen {6} "
                     "Dataname {7} \n"
                     .format(client_id,client_type,client_addr,
                     dump_data_version,dump_data_magic,dump_data_addr,
                     dump_data_len,dump_data_name))
                     if dump_data_magic != MEMDUMPV2_MAGIC and dump_data_magic != MEMDUMPV_HYP_MAGIC:
                         print_out_str("!!! Magic {0:x} doesn't match! No context will be parsed".format(dump_data_magic))
+                        continue
+                    if func is None:
                         continue
                     if "parse_cpu_ctx" in func:
                         getattr(DebugImage_v2, func)(
