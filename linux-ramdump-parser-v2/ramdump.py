@@ -3177,7 +3177,7 @@ class RamDump():
             if val is not None and val > 0:
                 return val
 
-        # Method 2: Try new kernel's init_pid_ns.pid_max
+       # Method 2: Try new kernel's init_pid_ns.pid_max
         init_pid_ns_addr = self.address_of('init_pid_ns')
         if init_pid_ns_addr is not None:
             pid_max_offset = self.field_offset('struct pid_namespace', 'pid_max')
@@ -3276,6 +3276,23 @@ class RamDump():
             return self.gdbmi.type_of(symbol)
         except gdbmi.GdbMIException:
             pass
+
+    def get_structure_members(self, struct_name):
+        """
+        Returns a dict of member info for a given structure.
+        """
+        try:
+            result = self.gdbmi.get_structure_members(struct_name)
+            if result:
+                return result
+        except gdbmi.GdbMIException:
+            pass
+        if self.hyp:
+            try:
+                return self.gdbmi_hyp.get_structure_members(struct_name)
+            except gdbmi.GdbMIException:
+                pass
+        return {}
 
     def set_priority_namespace(self, filename):
         """
