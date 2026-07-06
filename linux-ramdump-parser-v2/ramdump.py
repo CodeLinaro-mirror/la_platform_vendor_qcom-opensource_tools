@@ -423,8 +423,12 @@ class RamDump():
             ret_lookup = self.ramdump.unwind_lookup(frame.pc)
             if ret_lookup:
                 symname, offset = ret_lookup
-                # Extend tuple for additional handlers
-                if symname and symname.startswith(("ret_to_kernel",)):
+                # ret_to_kernel uses startswith; el1h_64_* are exact matches to
+                # avoid matching el1h_64_irq_handler (C wrapper) which has no pt_regs.
+                el1h_asm_stubs = {"el1h_64_irq", "el1h_64_fiq",
+                                  "el1h_64_sync", "el1h_64_error"}
+                if symname and (symname.startswith("ret_to_kernel")
+                                or symname in el1h_asm_stubs):
                     pt_regs_addr = frame.sp
                     ptregs["sp"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'sp')
                     ptregs["pc"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'pc')
