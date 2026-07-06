@@ -2019,10 +2019,18 @@ class RamDump():
                         startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm/kernel/linux/etc/gdb/gdb_autoload.cmm"' + '\n')
                         startup_script.write(')\n')
                 if self.module_table.sym_path_list:
-                    startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
-                    if len(self.module_table.sym_path_list) > 1 :
-                        for path in self.module_table.sym_path_list[1:]:
-                            startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
+                    # Recursively find all subdirectories containing .ko files and add to y.spath
+                    ko_dirs = set()
+                    for path in self.module_table.sym_path_list:
+                        if not os.path.exists(path):
+                            continue
+                        for root, dirs, files in os.walk(path):
+                            for f in files:
+                                if f.endswith(".ko"):
+                                    ko_dirs.add(root)
+                                    break
+                    for ko_dir in sorted(ko_dirs):
+                        startup_script.write("y.spath +=  " +'"{0}"'.format(ko_dir)+ '\n')
                 else:
                     startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
                 startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
