@@ -12,6 +12,7 @@
 
 import rb_tree
 import minidump_util
+import re
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
 
@@ -233,57 +234,150 @@ class RunQueues(RamParser):
                 if wname is not None:
                     print_out_str('0x{0:x}:{1}'.format(i, wname))
 
-    def print_md_latest_call_stack(self):
+    def _scan_stack_for_callstack(self, stack_virt_addr, stack_size, stack_align, text_start_addr, text_end_addr, collect_mode=False):
+        callstack_lines = [] if collect_mode else None
+        stack_corrupted = False
+        for j in range(stack_virt_addr, stack_virt_addr + stack_size, stack_align):
+            try:
+                callstack_addr = self.ramdump.read_word(j)
+            except Exception:
+                stack_corrupted = True
+                continue
+            if callstack_addr is None:
+                continue
+            if text_start_addr <= callstack_addr < text_end_addr:
+                wname = self.ramdump.unwind_lookup(callstack_addr)
+                if wname is not None:
+                    line = '0x{0:x}:{1}'.format(j, wname)
+                    if collect_mode:
+                        callstack_lines.append(line)
+                    else:
+                        print_out_str(line)
+        if stack_corrupted:
+            print_out_str("\nCurrent call stack maybe incomplete or corrupted, please check")
+        return callstack_lines if collect_mode else None
+
+    def print_md_latest_call_stack(self, runqueue_text=None):
         text_start_addr = self.ramdump.address_of('_text')
         text_end_addr = self.ramdump.address_of('_etext')
-        minidump_stack_addr = next((s for s in self.ramdump.elffile.iter_sections() if s.name == 'KSTACK0_0'), None)
-        if minidump_stack_addr is None:
-            core_stack_addr = self.ramdump.address_of('md_stack_data')
-            if core_stack_addr is None:
-                print_out_str("\nCurrent call stack support is not present\n")
-                return
-        print_out_str('\ncurrent callstack is maybe\n')
+        # Determine which data source to use
+        plan_use_section = False
+        # Determine if there is real any section (such as it only has md_KSTACK2_0.BIN ad md_KSTACK7_0.BIN)
+        have_any_section = False
+
+        core_stack_addr = self.ramdump.address_of('md_stack_data')
+        if core_stack_addr is None:
+            plan_use_section = True
+
+        # Determine stack parameters
+        if self.ramdump.arm64:
+            stack_align = 8
+            stack_size = 0x1000
+            loop = 4
+        else:
+            stack_align = 4
+            stack_size = 0x1000
+            loop = 2
+
         no_of_cpus = self.ramdump.get_num_cpus()
-        index = 0
-        while index < no_of_cpus:
-            if minidump_stack_addr is None:
-                md_stack_addr = core_stack_addr + self.ramdump.per_cpu_offset(index)
+
+        # Collect callstack for each CPU
+        callstacks = {}
+        for cpu_index in range(no_of_cpus):
+            callstack_lines = []
+
+            if plan_use_section:
+                for i in range(loop):
+                    section_name = 'KSTACK{0}_{1}'.format(cpu_index, i)
+                    section = next((s for s in self.ramdump.elffile.iter_sections()
+                               if s.name == section_name), None)
+
+                    if section is None:
+                        continue
+
+                    have_any_section = True
+                    stack_virt_addr = section['sh_addr']
+                    lines_from_stack = self._scan_stack_for_callstack(
+                        stack_virt_addr, stack_size, stack_align,
+                        text_start_addr, text_end_addr, collect_mode=True
+                    )
+                    if lines_from_stack:
+                        callstack_lines.extend(lines_from_stack)
+            else:
+                md_stack_addr = core_stack_addr + self.ramdump.per_cpu_offset(cpu_index)
                 if self.ramdump.arm64:
                     md_stack_addr = (md_stack_addr & 0xffffffffffffffff)
                 else:
                     md_stack_addr = (md_stack_addr & 0xffffffff)
+
                 stack_mdr = md_stack_addr + self.ramdump.field_offset('struct md_stack_cpu_data', 'stack_mdr')
-                stack_virt_addr = stack_mdr + self.ramdump.field_offset('struct md_region', 'virt_addr')
-                stack_virt_addr = self.ramdump.read_u64(stack_virt_addr)
 
-            if self.ramdump.arm64:
-                stack_align = 8
-                stack_size = 0x1000
-                loop = 4
-            else:
-                stack_align = 4
-                stack_size = 0x1000
-                loop = 2
-            print_out_str('\nCore_{} call stack :\n'.format(index))
-            for i in range(loop):
-                if minidump_stack_addr is not None:
-                    section_name = 'KSTACK{0}_{1}'.format(index, i)
-                    minidump_stack_addr = next((s for s in self.ramdump.elffile.iter_sections() if s.name == section_name), None)
-                    stack_virt_addr = minidump_stack_addr['sh_addr']
-                for j in range(stack_virt_addr, stack_virt_addr + stack_size, stack_align):
-                    callstack_addr = self.ramdump.read_word(j)
-                    if callstack_addr is None:
-                        continue
-                    if text_start_addr <= callstack_addr and callstack_addr < text_end_addr:
-                        wname = self.ramdump.unwind_lookup(callstack_addr)
-                        if wname is not None:
-                            print_out_str('0x{0:x}:{1}'.format(j, wname))
-                if minidump_stack_addr is None:
+                for i in range(loop):
+                    stack_virt_addr_ptr = stack_mdr + self.ramdump.field_offset('struct md_region', 'virt_addr')
+                    stack_virt_addr = self.ramdump.read_u64(stack_virt_addr_ptr)
+
+                    if stack_virt_addr is None:
+                        break
+
+                    lines_from_stack = self._scan_stack_for_callstack(
+                        stack_virt_addr, stack_size, stack_align,
+                        text_start_addr, text_end_addr, collect_mode=True
+                    )
+                    if lines_from_stack:
+                        callstack_lines.extend(lines_from_stack)
+                    # Move to next md_region
                     stack_mdr = stack_mdr + self.ramdump.sizeof('struct md_region')
-                    stack_virt_addr = stack_mdr + self.ramdump.field_offset('struct md_region', 'virt_addr')
-                    stack_virt_addr = self.ramdump.read_u64(stack_virt_addr)
-            index = index + 1
 
+            callstacks[cpu_index] = callstack_lines
+
+        # Handle different scenarios based on available data
+        # Case 1: Have sections but no runqueue text - print callstack only
+        if have_any_section and not runqueue_text:
+            for cpu_index in range(no_of_cpus):
+                if cpu_index in callstacks and callstacks[cpu_index]:
+                    print_out_str('\nCPU{0} call stack:'.format(cpu_index))
+                    for callstack_line in callstacks[cpu_index]:
+                        print_out_str(callstack_line)
+            return
+
+        # Case2: Neither
+        if not have_any_section and not runqueue_text:
+            print_out_str("\nCurrent call stack support is not present\n")
+            return
+
+        # Case 3: No sections available but have runqueue text - print runqueue
+        if not have_any_section and runqueue_text:
+            print_out_str(runqueue_text)
+
+        # Combine the runqueue info and core stack info if it exists
+        lines = runqueue_text.split('\n')
+        current_cpu = -1
+
+        # Pattern to match: "CPU0 has 2 process, current is pid 8247456" This pattern
+        # is printed by the minidump module. We want to align its format with the fulldump,
+        # so we need to parse the CPU number and thread count information.
+        cpu_pattern = re.compile(r'^CPU(\d+)\s+has\s+(\d+)\s+process,\s+current\s+is\s+pid\s+(\d+)$')
+
+        for line in lines:
+            # Check if line matches the pattern
+            match = cpu_pattern.match(line)
+            if match:
+                cpu_num = match.group(1)
+                process_count = match.group(2)
+                pid = match.group(3)
+                # Transform to new format aligned with fulldump format
+                print_out_str('CPU{0} {1} process is running'.format(cpu_num, process_count))
+                print_out_str('current is pid {0}'.format(pid))
+            else:
+                print_out_str(line)
+
+            if line.startswith('RT has ') and line.endswith(' process'):
+                current_cpu += 1
+                if current_cpu < no_of_cpus and current_cpu in callstacks:
+                    if callstacks[current_cpu]:
+                        print_out_str('current callstack is maybe:')
+                        for callstack_line in callstacks[current_cpu]:
+                            print_out_str(callstack_line)
 
     def print_irq_context(self):
         text_start_addr = self.ramdump.address_of('_text')
@@ -322,7 +416,6 @@ class RunQueues(RamParser):
                     if wname is not None:
                         print_out_str('0x{0:x}:{1}'.format(i, wname))
 
-
     def parse(self):
         print_out_str(
             '======================= RUNQUEUE STATE ============================')
@@ -330,14 +423,10 @@ class RunQueues(RamParser):
             runqueue_text = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
                                                                            self.ramdump.ebi_files,
                                                                            self.ramdump.elffile, "KRUNQUEUE")
-            if runqueue_text:
-                print_out_str(runqueue_text)
-            else:
-                print_out_str("KRUNQUEUE section not found in minidump\n")
-
-            self.print_md_latest_call_stack()
+            self.print_md_latest_call_stack(runqueue_text)
             self.print_irq_context()
             return
+
         runqueues_addr = self.ramdump.address_of('runqueues')
         nr_running_offset = self.ramdump.field_offset(
             'struct rq', 'nr_running')
