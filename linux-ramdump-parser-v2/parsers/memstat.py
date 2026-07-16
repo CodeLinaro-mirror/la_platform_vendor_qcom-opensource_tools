@@ -11,6 +11,7 @@
 # GNU General Public License for more details.
 
 from parser_util import register_parser, RamParser
+from print_out import print_out_str
 import minidump_util
 import os
 import linux_radix_tree
@@ -396,55 +397,195 @@ class MemStats(RamParser):
         out_mem_stat.write('\n\n{0:30}: {1:8} MB'.format(
                             "Total Unaccounted Memory ",unaccounted_mem))
 
+    def parse_and_format_minidump_meminfo(self, memstat_text, out_mem_stat):
+        """
+        Parse and format MEMINFO section from minidump.
+        Returns a dictionary containing all parsed memory values in MB.
+        """
+        # Field name mapping for renaming specific fields to align with Fulldump format
+        field_mapping = {
+            'MemTotal': 'Total RAM',
+            'MemFree': 'Free memory:',
+            'Slab': 'Total Slab memory:',
+            'VmallocUsed': 'vmalloc',
+            'Cached': 'Cached'
+        }
+
+        # Dictionary to store parsed memory values for calculating "Others"
+        memstat_dict = {}
+
+        first_line = True
+        # Process each line from MEMINFO section
+        for line in memstat_text.split('\n'):
+            try:
+                # Skip empty lines
+                if not line.strip():
+                    continue
+
+                # Skip the lines without colon
+                if ':' not in line:
+                    continue
+
+                # Parse line: "MemTotal:        : 11533328 KB" -> key="MemTotal", value="  : 11533328 KB"
+                key, value = line.split(':', 1)
+                key = key.strip()
+
+                # Extract number and convert KB to MB: ": 11533328 KB" -> skip ":" -> "11533328" -> 11263 MB
+                value_parts = value.strip().split()
+
+                # Handle different formats:
+                # Format 1: "MemTotal:        : 11533328 KB" -> value_parts = [':', '11533328', 'KB']
+                # Format 2: "MemTotal: 11533328 KB" -> value_parts = ['11533328', 'KB']
+                if len(value_parts) >= 2:
+                    if value_parts[0] == ':':
+                        # Format 1: skip the ':' and take the number
+                        if len(value_parts) >= 3:
+                            value_kb = int(value_parts[1])
+                        else:
+                            # Invalid format, skip this line
+                            continue
+                    else:
+                        # Format 2: take the first element as number
+                        value_kb = int(value_parts[0])
+                else:
+                    # Invalid format, skip this line
+                    continue
+
+                value_mb = value_kb // 1024
+
+                # Store the value in dictionary for later calculation
+                memstat_dict[key] = value_mb
+
+                # Use mapped name if exists, otherwise keep original
+                display_name = field_mapping.get(key, key)
+
+                # Format control: add newline before each line except first
+                prefix = '' if first_line else '\n'
+                # Add extra newline after "Free memory:" for spacing
+                suffix = '\n' if display_name == 'Free memory:' else ''
+
+                # Write formatted output such as: "Total RAM      :    11263 MB"
+                out_mem_stat.write('{0}{1:40}: {2:8} MB{3}'.format(
+                    prefix, display_name, value_mb, suffix))
+
+                first_line = False
+            except (ValueError, IndexError) as e:
+                # Skip lines with invalid format or non-numeric values
+                print_out_str("Warning: Failed to parse line '{}': {} ({})\n".format(
+                    line.strip(), type(e).__name__, str(e)))
+                continue
+
+        return memstat_dict
+
+    def calculate_other_mem_minidump(self, memstat_dict):
+        """
+        Calculate other memory from minidump data, similar to calculate_vm_node_zone_stat_pages
+        Other memory = NR_ANON_MAPPED + NR_FILE_PAGES + NR_PAGETABLE + NR_KERNEL_STACK
+        Where:
+        - NR_ANON_MAPPED = AnonPages (approximation, see note below)
+        - NR_FILE_PAGES = Cached + SwapCached + Buffers
+        - NR_PAGETABLE = PageTables
+        - NR_KERNEL_STACK = KernelStack
+
+        NOTE: AnonPages >= NR_ANON_MAPPED in reality
+        Using AnonPages as approximation for NR_ANON_MAPPED will cause the calculated
+        "Others" memory to be larger than actual, which in turn causes "Total Unaccounted
+        Memory" to be smaller than actual.
+
+        TODO: Need to find a way to extract actual NR_ANON_MAPPED from minidump to get
+        more accurate statistics. Possible approaches:
+        1. Parse vm_node_stat/vm_zone_stat from minidump if available
+        2. Use a correction factor based on empirical data
+        3. Add NR_ANON_MAPPED to minidump MEMINFO section in kernel
+
+        Returns memory in MB
+        """
+        try:
+            # Get NR_ANON_MAPPED approximation
+            # WARNING: AnonPages >= NR_ANON_MAPPED, this will overestimate "Others" memory
+            vmstat_anon_pages = memstat_dict.get('AnonPages', 0)
+
+            # Calculate vmstat_file_pages from Cached + SwapCached + Buffers
+            cached = memstat_dict.get('Cached', 0)
+            swap_cached = memstat_dict.get('SwapCached', 0)
+            buffers = memstat_dict.get('Buffers', 0)
+            vmstat_file_pages = cached + swap_cached + buffers
+
+            # Get PageTables
+            vmstat_pagetbl = memstat_dict.get('PageTables', 0)
+
+            # Get KernelStack
+            vmstat_kernelstack = memstat_dict.get('KernelStack', 0)
+
+            # Calculate other memory (all values already in MB)
+            # Similar to calculate_vm_node_zone_stat_pages:
+            # other_mem = vmstat_anon_pages + vmstat_file_pages + vmstat_pagetbl + vmstat_kernelstack
+            other_mem = vmstat_anon_pages + vmstat_file_pages + vmstat_pagetbl + vmstat_kernelstack
+
+            return other_mem
+        except Exception as e:
+            print_out_str("Error calculating other memory from minidump: {}\n".format(str(e)))
+            return 0
+
     def print_mem_stats_minidump(self, out_mem_stat):
         memstat_text = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
                                                                       self.ramdump.ebi_files,
                                                                       self.ramdump.elffile, "MEMINFO")
         if memstat_text:
             try:
-                # Field name mapping for renaming specific fields to align with Fulldump format
-                field_mapping = {
-                    'MemTotal': 'Total RAM',
-                    'MemFree': 'Free memory:',
-                    'Slab': 'Total Slab memory:',
-                    'VmallocUsed': 'vmalloc',
-                    'Cached': 'Cached'
-                }
+                # Parse and format MEMINFO section, get dictionary of memory values
+                memstat_dict = self.parse_and_format_minidump_meminfo(memstat_text, out_mem_stat)
 
-                first_line = True
-                # Process each line from MEMINFO section
-                for line in memstat_text.split('\n'):
-                    try:
-                        # Skip the lines without colon
-                        if ':' not in line:
-                            continue
+                # Total DMA memory, KGSL, and ZRAM compressed are not available in minidump.
+                # Display them with value 0 and a "(not supported)" marker embedded in the label.
+                # The label placement ensures downstream parsers using line.split(" ")[-2]
+                # still receive an integer-convertible token ("0") at position [-2].
+                out_mem_stat.write('\n{0:40}: {1:8} MB'.format(
+                    "Total DMA memory (not supported)", 0))
+                out_mem_stat.write('\n{0:40}: {1:8} MB'.format(
+                    "KGSL (not supported)", 0))
+                out_mem_stat.write('\n{0:40}: {1:8} MB'.format(
+                    "ZRAM compressed (not supported)", 0))
 
-                        # Parse line: "MemTotal:        : 11533328 KB" -> key="MemTotal", value="  : 11533328 KB"
-                        key, value = line.split(':', 1)
-                        key = key.strip()
+                # Calculate and display "Others" memory
+                other_mem = self.calculate_other_mem_minidump(memstat_dict)
+                if other_mem > 0:
+                    out_mem_stat.write('\n{0:40}: {1:8} MB'.format("Others", other_mem))
 
-                        # Extract number and convert KB to MB: ": 11533328 KB" -> skip ":" -> "11533328" -> 11263 MB
-                        value_parts = value.strip().split()
-                        # Skip the first ":" if present, take the number
-                        value_kb = int(value_parts[1] if value_parts[0] == ':' else value_parts[0])
-                        value_mb = value_kb // 1024
+                # Calculate Total Unaccounted Memory
+                # Similar to fulldump print_mem_stats logic:
+                # accounted_mem = total_free + total_slab + kgsl_memory + zram_mb + vmalloc_size + other_mem + ion_mem
+                # unaccounted_mem = total_mem - accounted_mem
 
-                        # Use mapped name if exists, otherwise keep original
-                        display_name = field_mapping.get(key, key)
+                total_mem = memstat_dict.get('MemTotal', 0)
+                total_free = memstat_dict.get('MemFree', 0)
+                total_slab = memstat_dict.get('Slab', 0)
+                vmalloc_used = memstat_dict.get('VmallocUsed', 0)
 
-                        # Format control: add newline before each line except first
-                        prefix = '' if first_line else '\n'
-                        # Add extra newline after "Free memory:" for spacing
-                        suffix = '\n' if display_name == 'Free memory:' else ''
+                # LIMITATION: Minidump MEMINFO section does not contain kgsl_memory, zram_mb, and ion_mem
+                # Setting them to 0 will cause accounted_mem to be underestimated,
+                # which in turn causes unaccounted_mem to be overestimated.
+                # This is a known limitation of minidump-based memory statistics.
+                kgsl_memory = 0
+                zram_mb = 0
+                ion_mem = 0
 
-                        # Write formatted output such as: "Total RAM      :    11263 MB"
-                        out_mem_stat.write('{0}{1:30}: {2:8} MB{3}'.format(
-                            prefix, display_name, value_mb, suffix))
+                # Calculate accounted memory
+                # NOTE: This will be smaller than actual due to missing kgsl_memory, zram_mb, ion_mem
+                accounted_mem = total_free + total_slab + kgsl_memory + zram_mb + vmalloc_used + other_mem
 
-                        first_line = False
-                    except (ValueError, IndexError):
-                        # Skip lines with invalid format or non-numeric values
-                        continue
+                if ion_mem > 0:
+                    accounted_mem += ion_mem
+
+                # Calculate unaccounted memory
+                # NOTE: This will be larger than actual due to underestimated accounted_mem
+                unaccounted_mem = total_mem - accounted_mem
+
+                # Display Total Unaccounted Memory with (Minidump) suffix as a debug hint
+                # The (Minidump) suffix indicates this value may be overestimated due to
+                # missing memory components (kgsl, zram, ion) that are not available in minidump
+                out_mem_stat.write('\n\n{0:40}: {1:8} MB'.format(
+                    "Total Unaccounted Memory(Minidump)", unaccounted_mem))
 
             except Exception as e:
                 print_out_str("Error extracting memstat from minidump: {}\n".format(str(e)))
