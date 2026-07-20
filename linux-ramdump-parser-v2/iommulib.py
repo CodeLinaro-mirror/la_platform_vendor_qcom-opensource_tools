@@ -16,10 +16,12 @@ import re
 import linux_list as llist
 from mm import phys_to_virt
 from print_out import print_out_str
+from dpd_proxy_iommulib import _collect_mappings as _dpd_collect_mappings
 
 ARM_SMMU_DOMAIN = 0
 MSM_SMMU_DOMAIN = 1
 MSM_SMMU_AARCH64_DOMAIN = 2
+DPD_SMMU_DOMAIN = 3
 ARM_LPAE_MAX_LEVELS=4
 
 class Domain(object):
@@ -35,6 +37,19 @@ class Domain(object):
 
     def __repr__(self):
         return "#%d: %s" % (self.domain_num, self.client_name)
+
+
+class DpdSmmuDomain(Domain):
+        def __init__(self, domain_ptr, smmu_domain_ptr, client_name,
+                 si_domain_id, attached):
+           super(DpdSmmuDomain, self).__init__(
+               pg_table=0, redirect=0, ctx_list=[],
+               client_name=client_name, domain_type=DPD_SMMU_DOMAIN)
+           self.domain_ptr      = domain_ptr
+           self.smmu_domain_ptr = smmu_domain_ptr
+           self.si_domain_id    = si_domain_id
+           self.attached        = attached
+           self.mappings        = []
 
 
 class IommuLib(object):
@@ -54,6 +69,8 @@ class IommuLib(object):
             if self.ramdump.arm_smmu_v12:
                 self.arm_smmu_v12 = True
                 self.find_iommu_domains_device_core()
+
+        self._find_dpd_proxy_domains()
 
     """
     legacy code - pre-8996/kernel 4.4?
@@ -295,6 +312,120 @@ class IommuLib(object):
         except Exception as e:
             print_out_str("[iommulib] _find_iommu_domains_arm_smmu_v3 failed "
                           "for '%s': %s" % (client_name, str(e)))
+    
+    def _find_dpd_proxy_domains(self):
+        """
+        Walk the global device list and append a DpdSmmuDomain to
+        self.domain_list for every device whose IOMMU is the DPD proxy driver.
+
+        This method is called unconditionally from __init__() so that DPD proxy
+        domains are found regardless of which of the three primary discovery
+        paths (msm_iommu / debug_attachments / device_core) was taken.
+        """
+        dpd_smmu_driver_addr = self.ramdump.address_of('dpd_smmu_driver')
+        if dpd_smmu_driver_addr is None:
+            return
+
+        driver_offset = self.ramdump.field_offset(
+            'struct platform_driver', 'driver')
+        if driver_offset is None:
+            return
+        dpd_driver_addr = dpd_smmu_driver_addr + driver_offset
+
+        devices_kset = self.ramdump.read_pointer('devices_kset')
+        if not devices_kset:
+            return
+
+        list_head = devices_kset + self.ramdump.field_offset('struct kset', 'list')
+        dev_entry_offset = self.ramdump.field_offset('struct device', 'kobj.entry')
+        list_walker = llist.ListWalker(self.ramdump, list_head, dev_entry_offset)
+
+        seen_domains = set()
+
+        for dev in list_walker:
+            try:
+                iommu_group = self.ramdump.read_structure_field(
+                    dev, 'struct device', 'iommu_group')
+                if not iommu_group:
+                    continue
+
+                domain_ptr = self.ramdump.read_structure_field(
+                    iommu_group, 'struct iommu_group', 'domain')
+                if not domain_ptr:
+                    continue
+
+                if domain_ptr in seen_domains:
+                    continue
+
+                iommu_ptr = self.ramdump.read_structure_field(
+                    dev, 'struct device', 'iommu')
+                if not iommu_ptr:
+                    continue
+
+                iommu_dev = self.ramdump.read_structure_field(
+                    iommu_ptr, 'struct dev_iommu', 'iommu_dev')
+                if not iommu_dev:
+                    continue
+
+                iommu_dev_dev = self.ramdump.read_structure_field(
+                    iommu_dev, 'struct iommu_device', 'dev')
+                if not iommu_dev_dev:
+                    continue
+
+                parent_dev = self.ramdump.read_structure_field(
+                    iommu_dev_dev, 'struct device', 'parent')
+                if not parent_dev:
+                    continue
+
+                parent_driver = self.ramdump.read_structure_field(
+                    parent_dev, 'struct device', 'driver')
+
+                if parent_driver != dpd_driver_addr:
+                    continue
+
+                seen_domains.add(domain_ptr)
+
+                kobj_name_ptr = self.ramdump.read_structure_field(
+                    dev, 'struct device', 'kobj.name')
+                client_name = (self.ramdump.read_cstring(kobj_name_ptr)
+                               if kobj_name_ptr else 'unknown') or 'unknown'
+
+                self._find_iommu_domains_dpd_proxy(
+                    domain_ptr, client_name, self.domain_list)
+
+            except Exception as e:
+                print_out_str(
+                    "DPD proxy IOMMU: exception processing device "
+                    "0x%x: %s" % (dev, e))
+                continue
+
+    def _find_iommu_domains_dpd_proxy(self, domain_ptr, client_name, domain_list):
+        domain_field_offset = self.ramdump.field_offset(
+            'struct dpd_smmu_domain', 'domain')
+        if domain_field_offset is None:
+            print_out_str(
+                "DPD proxy IOMMU: 'struct dpd_smmu_domain' not found in "
+                "debug info. Ensure the module was built with debug symbols.")
+            return
+
+        smmu_domain_ptr = domain_ptr - domain_field_offset
+
+        si_domain_id = self.ramdump.read_structure_field(
+            smmu_domain_ptr, 'struct dpd_smmu_domain', 'si_domain_id')
+        attached = self.ramdump.read_structure_field(
+            smmu_domain_ptr, 'struct dpd_smmu_domain', 'attached')
+
+        domain = DpdSmmuDomain(
+            domain_ptr      = domain_ptr,
+            smmu_domain_ptr = smmu_domain_ptr,
+            client_name     = client_name,
+            si_domain_id    = si_domain_id,
+            attached        = bool(attached) if attached is not None else False,
+        )
+
+        _dpd_collect_mappings(self.ramdump, domain, smmu_domain_ptr)
+
+        domain_list.append(domain)
 
     def _find_iommu_domains_arm_smmu_v12(self, domain_ptr, client_name, domain_list):
         if self.ramdump.field_offset('struct iommu_domain', 'priv') \
