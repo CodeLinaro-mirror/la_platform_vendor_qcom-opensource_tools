@@ -16,8 +16,11 @@ from datetime import datetime, timezone
 
 from parser_util import register_parser, RamParser, cleanupString
 from print_out import print_out_str
+import traceback
 from utasklib import UTaskLib
 from utasklib import ProcessNotFoundExcetion
+from linux_radix_tree import RadixTreeWalker
+from mm import page_to_pfn
 
 # ---------------------------------------------------------------------------
 # Low-level helpers
@@ -393,131 +396,145 @@ def fmt_short(entry, color=False):
 # ---------------------------------------------------------------------------
 @register_parser('--journalctl', 'Extract journalctl logs from ramdump ')
 class Journald(RamParser):
-    JOURNALCTL_FILE = "systemd.journald"
-    JOURNALCTL_LOG  = "journalctl.txt"
 
     def __init__(self, *args):
         super(Journald, self).__init__(*args)
-        self.vma_list    = []
         self.dumped_files = []
 
-    def _read_dentry_name(self, file_ptr):
-        """
-        Read the full filename from a struct file pointer by walking:
-          file -> f_path.dentry -> d_name.name (pointer to actual string)
-        Falls back to d_iname inline buffer if the pointer read fails.
-        """
+    def _init_offsets(self):
         rd = self.ramdump
-        try:
-            f_path_off  = rd.field_offset('struct file',   'f_path')
-            dentry_off  = rd.field_offset('struct path',   'dentry')
-            d_name_off  = rd.field_offset('struct dentry', 'd_name')
-            d_iname_off = rd.field_offset('struct dentry', 'd_iname')
-            if d_iname_off is None:
-                d_iname_off = rd.field_offset('struct dentry', 'd_shortname')
+        self.files_offset       = rd.field_offset('struct task_struct', 'files')
+        self.fdt_offset         = rd.field_offset('struct files_struct', 'fdt')
+        self.fd_offset          = rd.field_offset('struct fdtable', 'fd')
+        self.max_fds_offset     = rd.field_offset('struct fdtable', 'max_fds')
+        self.f_path_offset      = rd.field_offset('struct file', 'f_path')
+        self.dentry_offset      = rd.field_offset('struct path', 'dentry')
+        self.f_mapping_offset   = rd.field_offset('struct file', 'f_mapping')
+        self.d_iname_offset     = rd.field_offset('struct dentry', 'd_iname')
+        self.i_size_offset      = rd.field_offset('struct inode', 'i_size')
+        self.i_mapping_offset   = rd.field_offset('struct inode', 'i_mapping')
+        # address_space.i_pages is the xarray of cached pages
+        self.i_pages_offset     = rd.field_offset('struct address_space', 'i_pages')
+        self.page_size          = 0x1000
 
-            dentry = rd.read_word(file_ptr + f_path_off + dentry_off)
-            if not dentry:
-                return ""
+    def _dentry_name(self, dentry):
+        rd = self.ramdump
+        # try d_name.name pointer first (handles long names)
+        d_name_off = rd.field_offset('struct dentry', 'd_name')
+        qstr_name_off = rd.field_offset('struct qstr', 'name')
+        qstr_hash_len_off = rd.field_offset('struct qstr', 'hash_len')
+        if d_name_off is not None and qstr_name_off is not None and qstr_hash_len_off is not None:
+            hash_len = rd.read_u64(dentry + d_name_off + qstr_hash_len_off)
+            if hash_len:
+                d_len = hash_len >> 32
+                name_ptr = rd.read_word(dentry + d_name_off + qstr_name_off)
+                if name_ptr and d_len:
+                    name = rd.read_cstring(name_ptr, d_len)
+                    if name:
+                        return cleanupString(name)
+        # fallback: inline d_iname
+        return cleanupString(rd.read_cstring(dentry + self.d_iname_offset, 32))
 
-            # struct qstr: { union { struct{u32 hash; u32 len;}; u64 hash_len; }; const char *name; }
-            # Use field_offset to locate qstr.name portably across kernel versions.
-            qstr_name_off = rd.field_offset('struct qstr', 'name')
-            fname = ""
-            if qstr_name_off is not None:
-                qstr_addr = dentry + d_name_off
-                name_ptr  = rd.read_word(qstr_addr + qstr_name_off)
-                if name_ptr:
-                    fname = cleanupString(rd.read_cstring(name_ptr, 256))
-            # fallback to d_iname
-            if not fname and d_iname_off is not None:
-                fname = cleanupString(rd.read_cstring(dentry + d_iname_off, 32))
-            return fname or ""
-        except Exception:
-            return ""
+    def _collect_page(self, page_addr, page_index, pages):
+        pages[page_index] = page_addr
 
-    def generate_file(self, mmu):
-        if len(self.vma_list) == 0:
-            print_out_str("Failed to generate " + self.JOURNALCTL_FILE)
+    def _extract_file(self, file_ptr, fname):
+        rd = self.ramdump
+        # get f_mapping -> address_space
+        mapping = rd.read_word(file_ptr + self.f_mapping_offset)
+        if not mapping:
+            print_out_str(f"  {fname}: no f_mapping, skipping")
             return
-        for vma_info in self.vma_list:
-            # use the original journal filename (e.g. system.journal, systemd@2.journal)
-            # but change extension to .journald to avoid confusion
-            base = os.path.splitext(vma_info['file_name'])[0]
-            outfile_name = base + ".journald"
-            print_out_str(outfile_name + " base address is {0:x}".format(vma_info['start']))
-            self.ramdump.remove_file(outfile_name)
-            zero_pages = 0
-            with self.ramdump.open_file(outfile_name, 'ab') as out_file:
-                addr = vma_info['start']
-                end  = addr + vma_info['size']
-                while addr < end:
-                    phys = mmu.virt_to_phys(addr)
-                    if phys is None:
-                        out_file.write(b'\x00' * 0x1000)
-                        zero_pages += 1
-                    else:
-                        out_file.write(self.ramdump.read_physical(phys, 0x1000))
-                    addr += 0x1000
-            if zero_pages:
-                print_out_str("[journalctl] {} zero-filled pages in {}".format(
-                    zero_pages, outfile_name))
-            abs_path = os.path.join(self.ramdump.outdir, outfile_name)
-            self.dumped_files.append(abs_path)
 
-    def generate_journalctl_file(self, taskinfo):
-        '''
-        Dump systemd-journald VMA regions to binary .journald files.
-        Reads the real filename via d_name.name pointer to correctly distinguish
-        system.journal from systemd@N.journal archive files.
-        param taskinfo: utasklib.UTaskInfo
-        '''
-        seen = set()  # (file_ptr, vm_pgoff) to avoid duplicate VMAs
-        for vma in taskinfo.vmalist:
-            if not vma.file:
+        # get inode -> i_size
+        host_off = rd.field_offset('struct address_space', 'host')
+        inode = rd.read_word(mapping + host_off) if host_off is not None else None
+        i_size = rd.read_u64(inode + self.i_size_offset) if inode else 0
+        if not i_size:
+            print_out_str(f"  {fname}: i_size=0, skipping")
+            return
+
+        # walk i_pages xarray to collect (page_index -> page_addr)
+        pages = {}
+        i_pages_addr = mapping + self.i_pages_offset
+        walker = RadixTreeWalker(rd)
+        walker.walk_radix_tree_with_offset(i_pages_addr, self._collect_page, pages)
+
+        if not pages:
+            print_out_str(f"  {fname}: no pages in page cache, skipping")
+            return
+
+        n_pages = (i_size + self.page_size - 1) // self.page_size
+        print_out_str(f"  {fname}: i_size={i_size} n_pages={n_pages} cached={len(pages)}")
+
+        self.ramdump.remove_file(fname)
+        with self.ramdump.open_file(fname, 'wb') as out_file:
+            for idx in range(n_pages):
+                page_addr = pages.get(idx)
+                if page_addr is None:
+                    out_file.write(b'\x00' * self.page_size)
+                    continue
+                try:
+                    pfn = page_to_pfn(rd, page_addr)
+                    phys = pfn << rd.page_shift
+                except Exception:
+                    out_file.write(b'\x00' * self.page_size)
+                    continue
+                data = rd.read_physical(phys, self.page_size)
+                out_file.write(data if data else b'\x00' * self.page_size)
+
+        abs_path = os.path.join(self.ramdump.outdir, fname)
+        self.dumped_files.append(abs_path)
+
+    def _iter_journal_fds(self, task_addr):
+        rd = self.ramdump
+        files = rd.read_word(task_addr + self.files_offset)
+        if not files:
+            return
+        fdt = rd.read_word(files + self.fdt_offset)
+        if not fdt:
+            return
+        fd_array = rd.read_word(fdt + self.fd_offset)
+        max_fds = rd.read_u32(fdt + self.max_fds_offset)
+        if not fd_array or not max_fds:
+            return
+        ptr_size = 8
+        for i in range(max_fds):
+            file_ptr = rd.read_word(fd_array + i * ptr_size)
+            if not file_ptr:
                 continue
-            # read real filename via d_name.name pointer
-            fname = self._read_dentry_name(vma.file)
-            print_out_str("[journalctl] vma file={!r} file_ptr=0x{:x} pgoff=0x{:x} start=0x{:x} size=0x{:x}".format(
-                fname, vma.file, vma.vm_pgoff, vma.vm_start, vma.vm_end - vma.vm_start))
-            if not fname.endswith(".journal"):
+            dentry = rd.read_word(file_ptr + self.f_path_offset + self.dentry_offset)
+            if not dentry:
                 continue
-            key = (vma.file, vma.vm_pgoff)
-            if key in seen:
-                continue
-            seen.add(key)
-            self.vma_list.append({
-                'start'    : vma.vm_start,
-                'size'     : vma.vm_end - vma.vm_start,
-                'file_name': fname,
-            })
-            print_out_str("[journalctl] -> matched: {}".format(fname))
-        self.generate_file(taskinfo.mmu)
+            fname = self._dentry_name(dentry)
+            if fname and fname.endswith('.journal'):
+                yield file_ptr, fname
 
     def parse_journal_to_text(self):
         """
-        Parse every dumped binary .journald file and write
-        human-readable log lines to journalctl.txt in the output directory.
+        Parse every dumped binary .journald file and write each to its own
+        .txt file (e.g. system.journal -> system.txt) in the output directory.
         """
         if not self.dumped_files:
             print_out_str("[journalctl] No binary journal files to parse")
             return
 
-        log_name = self.JOURNALCTL_LOG
-        self.ramdump.remove_file(log_name)
-
-        total  = 0
+        total_entries = 0
         errors = 0
-        with self.ramdump.open_file(log_name, 'w') as log_file:
-            for jfile_path in self.dumped_files:
-                print_out_str("[journalctl] Parsing {}".format(jfile_path))
-                log_file.write("=== {} ===\n".format(os.path.basename(jfile_path)))
-                try:
-                    jf = JournalFile(jfile_path)
-                    d  = jf.data
-                    n_entries = u64(d, HDR_N_ENTRIES_OFF)
-                    head_rt   = _ts_human(str(u64(d, HDR_HEAD_ENTRY_REALTIME_OFF)))
-                    tail_rt   = _ts_human(str(u64(d, HDR_TAIL_ENTRY_REALTIME_OFF)))
+        for jfile_path in self.dumped_files:
+            base = os.path.splitext(os.path.basename(jfile_path))[0]
+            log_name = base + ".txt"
+            print_out_str("[journalctl] Parsing {} -> {}".format(
+                os.path.basename(jfile_path), log_name))
+            self.ramdump.remove_file(log_name)
+            count = 0
+            try:
+                jf = JournalFile(jfile_path)
+                d  = jf.data
+                n_entries = u64(d, HDR_N_ENTRIES_OFF)
+                head_rt   = _ts_human(str(u64(d, HDR_HEAD_ENTRY_REALTIME_OFF)))
+                tail_rt   = _ts_human(str(u64(d, HDR_TAIL_ENTRY_REALTIME_OFF)))
+                with self.ramdump.open_file(log_name, 'w') as log_file:
                     log_file.write(
                         "  machine_id : {}\n"
                         "  boot_id    : {}\n"
@@ -529,20 +546,19 @@ class Journald(RamParser):
                             head_rt, tail_rt))
                     for entry in jf.entries():
                         log_file.write(fmt_short(entry) + "\n")
-                        total += 1
-
-                except Exception as e:
-                    errors += 1
-                    msg = "[journalctl] ERROR parsing {}: {}".format(
-                          os.path.basename(jfile_path), e)
-                    print_out_str(msg)
-                    log_file.write(msg + "\n")
-                    traceback.print_exc()
-                log_file.write("\n")
+                        count += 1
+                total_entries += count
+                print_out_str("[journalctl] {} entries written to {}".format(count, log_name))
+            except Exception as e:
+                errors += 1
+                msg = "[journalctl] ERROR parsing {}: {}".format(
+                      os.path.basename(jfile_path), e)
+                print_out_str(msg)
+                traceback.print_exc()
 
         print_out_str(
-            "[journalctl] Wrote {} log entries to {} ({} file(s), {} error(s))".format(
-                total, log_name, len(self.dumped_files), errors))
+            "[journalctl] Done: {} total entries, {} file(s), {} error(s)".format(
+                total_entries, len(self.dumped_files), errors))
 
     def parse(self):
         try:
@@ -551,8 +567,21 @@ class Journald(RamParser):
             except ProcessNotFoundExcetion:
                 print_out_str("systemd-journald process is not started")
                 return
-            self.generate_journalctl_file(taskinfo)
+            self._init_offsets()
+
+            seen = set()
+            for file_ptr, fname in self._iter_journal_fds(taskinfo.task_addr):
+                if fname in seen:
+                    continue
+                seen.add(fname)
+                print_out_str(f"Extracting {fname}")
+                self._extract_file(file_ptr, fname)
+
+            if not seen:
+                print_out_str("No .journal files found in FD table")
+
             self.parse_journal_to_text()
+
         except Exception as result:
             print_out_str(str(result))
             traceback.print_exc()
