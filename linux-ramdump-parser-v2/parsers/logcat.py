@@ -1,5 +1,5 @@
 # Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -27,6 +27,8 @@ class Logcat(RamParser):
         self.f_path_offset = self.ramdump.field_offset('struct file', 'f_path')
         self.dentry_offset = self.ramdump.field_offset('struct path', 'dentry')
         self.d_iname_offset = self.ramdump.field_offset('struct dentry', 'd_iname')
+        if self.d_iname_offset is None:
+            self.d_iname_offset = self.ramdump.field_offset('struct dentry', 'd_shortname')
         self.limit_size = int("0x20000000", 16)
         self.vma_list = []
 
@@ -326,7 +328,7 @@ class Logcat(RamParser):
             try:
                 # generate system/vendor properties to Properties.txt
                 propertyParser.parse()
-                for name, value in propertyParser.proplist:
+                for name, value in propertyParser.proplist.items():
                     if name == "ro.build.version.sdk" or name == "ro.vndk.version":
                         ver = int(value)
             except:
@@ -365,6 +367,14 @@ class Logcat(RamParser):
                 #parser to supprot Android M
                 logcat = Logcat_m(self.ramdump, taskinfo)
                 logcat.parse()
+                #Add the logic to parse the logread & /var/log/messages
+                try:
+                    task = UTaskLib(self.ramdump).get_utask_info("syslogd")
+                    from parsers.syslog_busybox import Syslog_busybox
+                    syslog= Syslog_busybox(self.ramdump, task )
+                    syslog.parse()
+                except ProcessNotFoundExcetion:
+                    print_out_str("syslogd process is not started")
             elif self.is_openwrt_process(taskinfo):
                 print_out_str("Openwrt ramdump")
                 from parsers.logcat_openwrt import Logcat_openwrt

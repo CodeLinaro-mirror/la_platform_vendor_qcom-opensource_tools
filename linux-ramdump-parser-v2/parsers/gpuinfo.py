@@ -1,4 +1,5 @@
 # Copyright (c) 2013-2015, 2020-2021 The Linux Foundation. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -12,6 +13,7 @@
 from parser_util import register_parser, RamParser
 from parsers.gpu.gpuinfo_54 import GpuParser_54
 from parsers.gpu.gpuinfo_510 import GpuParser_510
+from parsers.gpu.gpuinfo_md import GpuMinidumpParser
 from print_out import print_out_str
 
 
@@ -29,7 +31,11 @@ class GpuParser(RamParser):
             return
 
         if (self.ramdump.kernel_version == (0, 0, 0) or
-           self.ramdump.kernel_version >= (5, 10, 0)):
+           self.ramdump.kernel_version >= (5, 10, 0)) \
+                and self.ramdump.minidump:
+            self.parser = GpuMinidumpParser(self.ramdump)
+        elif (self.ramdump.kernel_version == (0, 0, 0) or
+              self.ramdump.kernel_version >= (5, 10, 0)):
             self.parser = GpuParser_510(self.ramdump)
         elif self.ramdump.kernel_version >= (4, 9, 0):
             self.parser = GpuParser_54(self.ramdump)

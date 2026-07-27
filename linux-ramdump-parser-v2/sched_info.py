@@ -1,5 +1,5 @@
 # Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -123,15 +123,80 @@ def verify_active_cpus(ramdump):
             min_req_cpus = 1
 
         if ((cluster_nr_oncpus - cluster_nr_isocpus) < min_req_cpus):
-                print_out_str("\n" + "*" * 10 + " WARNING " + "*" * 10 + "\n")
-                print_out_str("\tMinimum active cpus are not available in the cluster {0}\n".format(i))
+            print_out_str("\n" + "*" * 10 + " WARNING " + "*" * 10 + "\n")
+            print_out_str("\tMinimum active cpus are not available in the cluster {0}\n".format(i))
+            print_out_str("*" * 10 + " WARNING " + "*" * 10 + "\n")
 
-                print_out_str("*" * 10 + " WARNING " + "*" * 10 + "\n")
-        print_out_str("\tCluster nr_cpu: {0} cpus: {1}  Online cpus: {2} Isolated cpus: {3} (core_ctl nr_isol: {4})\n".format(
+        print_out_str("\tCluster nr_cpu: {0} cpus: {1}  Online cpus: {2} Isolated cpus: {3} (core_ctl nr_isol: {4})".format(
                         bin(cluster_cpus[i]).count('1'),
                         mask_bitset_pos(cluster_cpus[i]),
                         mask_bitset_pos(cluster_online_cpus),
                         mask_bitset_pos(cluster_isolated_cpus), crctl_nr_isol))
+
+    cpu_logical_map = get_cpu_logical_map(ramdump)
+    if cpu_logical_map: print_out_str(f"\tcpu_logical_map = {get_cpu_logical_map(ramdump)}")
+    print_out_str("")
+
+def dump_dl_server_info(ramdump):
+    """Print dl_defer_armed, dl_defer_running, dl_runtime, dl_deadline for
+    fair_server and ext_server embedded in each CPU's runqueue.
+
+    dl_defer_armed and dl_defer_running are C bitfields; read_datatype() is
+    used so that LRDP decodes them from vmlinux DWARF metadata rather than
+    returning the raw storage-unit value.
+    """
+    runqueues_addr = ramdump.address_of('runqueues')
+    if not runqueues_addr:
+        print_out_str("runqueues symbol not found, skipping DL server info")
+        return
+
+    fair_server_off = ramdump.field_offset('struct rq', 'fair_server')
+    ext_server_off  = ramdump.field_offset('struct rq', 'ext_server')
+
+    if fair_server_off is None and ext_server_off is None:
+        print_out_str("fair_server/ext_server not found in struct rq "
+                      "(kernel may not support DL servers)")
+        return
+
+    # Attributes we want from struct sched_dl_entity.
+    # read_datatype() uses vmlinux DWARF info to correctly extract bitfields.
+    _DL_ATTRS = ['dl_defer_armed', 'dl_defer_running']
+
+    print_out_str("\nDL Server Information (fair_server / ext_server):\n" + "-" * 60)
+
+    for cpu in ramdump.iter_cpus():
+        per_cpu_off = ramdump.per_cpu_offset(cpu)
+        if per_cpu_off is None:
+            print_out_str("CPU {}: per_cpu_offset unavailable, skipping".format(cpu))
+            continue
+
+        rq_addr = runqueues_addr + per_cpu_off
+        print_out_str("CPU {}:".format(cpu))
+
+        for server_name, server_off in [('fair_server', fair_server_off),
+                                        ('ext_server',  ext_server_off)]:
+            if server_off is None:
+                print_out_str("  {}: not present in this kernel".format(server_name))
+                continue
+
+            dl_se_addr = rq_addr + server_off
+
+            try:
+                # read_datatype decodes bitfields via vmlinux DWARF metadata,
+                # so dl_defer_armed / dl_defer_running will be 0 or 1.
+                dl_se = ramdump.read_datatype(
+                    dl_se_addr,
+                    'struct sched_dl_entity',
+                    _DL_ATTRS)
+
+                print_out_str("  {}: dl_defer_armed={} dl_defer_running={}".format(
+                    server_name, dl_se.dl_defer_armed, dl_se.dl_defer_running))
+            except Exception as err:
+                print_out_str("  {}: error reading fields: {}".format(
+                    server_name, str(err)))
+
+    print_out_str("")
+
 
 def dump_rq_lock_information(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
@@ -145,6 +210,115 @@ def dump_rq_lock_information(ramdump):
             print_out_str("\n cpu {0} ->rq_lock owner cpu {1}".format(i, hex(lock_owner_cpu)))
         print_out_str("\n ")
 
+# ---------------------------------------------------------------------------
+# Votable-based halt isolation helpers (kernel >= 6.18)
+# ---------------------------------------------------------------------------
+
+# Halt type value -> human-readable name
+_HALT_TYPE_NAMES = {0: 'UNHALT', 1: 'PARTIAL', 2: 'HALT'}
+
+
+def _halt_type_name(val):
+    """Return a human-readable name for a halt-type integer value."""
+    return _HALT_TYPE_NAMES.get(val, 'UNKNOWN({})'.format(val))
+
+
+def _get_enum_client_names(ramdump, enum_name_list):
+    """
+    Build {int_value: name_str} for each name in *enum_name_list* by querying
+    the debug-info via gdbmi.  Returns an empty dict if gdbmi is unavailable
+    or the symbols are not present.
+    """
+    names = {}
+    for name in enum_name_list:
+        try:
+            val = ramdump.gdbmi.get_value_of(name)
+            names[val] = name
+        except Exception:
+            pass
+    return names
+
+
+def _dump_one_votable(ramdump, votable_ptr, client_names, label):
+    """Print the contents of a single struct votable at *votable_ptr*."""
+    if not votable_ptr:
+        print_out_str("\t\t{}: <null pointer>".format(label))
+        return
+
+    num_clients = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'num_clients')
+    effective_client_id = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'effective_client_id')
+    effective_result = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'effective_result')
+    voted_on = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'voted_on')
+
+    eff_client_name = client_names.get(effective_client_id,
+                                       str(effective_client_id))
+    eff_result_name = _halt_type_name(effective_result)
+
+    print_out_str(
+        "\t\t{}: effective_result={} effective_client={} num_clients={}".format(
+            label, eff_result_name, eff_client_name, num_clients))
+
+    if num_clients is None or num_clients <= 0:
+        return
+
+    votes_offset = ramdump.field_offset('struct votable', 'votes')
+    votes_base = votable_ptr + votes_offset
+
+    for i in range(min(num_clients, 8)):   # NUM_MAX_CLIENTS = 8
+        client_name = client_names.get(i)
+        if client_name is None:
+            continue  # skip slots not in _HALT_CLIENT_ENUM
+        vote_addr = ramdump.array_index(
+            votes_base, 'struct client_vote', i)
+        enabled = ramdump.read_structure_field(
+            vote_addr, 'struct client_vote', 'enabled')
+        value = ramdump.read_structure_field(
+            vote_addr, 'struct client_vote', 'value')
+        value_name = _halt_type_name(value)
+        print_out_str(
+            "\t\t\t{}: {} enabled={}".format(
+                client_name, value_name, bool(enabled)))
+
+
+def _dump_votable_isolation_data(ramdump):
+    """Dump halt_votable client votes for kernel >= 6.18."""
+    ramdump.set_priority_namespace('voter.h')
+    halt_votable_addr = ramdump.address_of('halt_votable')
+
+    if halt_votable_addr is None:
+        print_out_str("\nhalt_votable: symbol not found in dump")
+        return
+
+    # halt_votable clients come from enum pause_client
+    _HALT_CLIENT_ENUM = [
+        'PAUSE_INDIRECT', 'PAUSE_CORE_CTL', 'PAUSE_THERMAL',
+        'PAUSE_HYP', 'PAUSE_SBT',
+    ]
+
+    halt_client_names = _get_enum_client_names(ramdump, _HALT_CLIENT_ENUM)
+    if not halt_client_names:
+        # Minimal fallback: only PAUSE_INDIRECT=0 is guaranteed
+        halt_client_names = {0: 'PAUSE_INDIRECT'}
+
+    print_out_str("\nvotable isolation data:")
+
+    for cpu in ramdump.iter_cpus():
+        print_out_str("\tcpu{}:".format(cpu))
+
+        try:
+            halt_vot_ptr = ramdump.read_pointer(
+                ramdump.array_index(halt_votable_addr, 'struct votable *', cpu))
+            _dump_one_votable(ramdump, halt_vot_ptr,
+                              halt_client_names, 'halt_votable')
+        except Exception as e:
+            print_out_str(
+                "\t\thalt_votable: error reading: {}".format(str(e)))
+
+
 def dump_isolation_data(ramdump):
     try:
         if ramdump.address_of('cluster_state') is not None:
@@ -154,13 +328,16 @@ def dump_isolation_data(ramdump):
                 print_out_str("\tcluster{}: min_cpus = {} max_cpus = {} enable = {}".format(
                     idx, cluster_state[idx].min_cpus, cluster_state[idx].max_cpus,
                     cluster_state[idx].enable))
-        halt_state_ptr = ramdump.address_of('halt_state')
-        if halt_state_ptr is not None:
-            print_out_str("\nhalt_state:")
-            for cpu in ramdump.iter_cpus():
-                halt_state = ramdump.read_u16(halt_state_ptr, cpu=cpu)
-                print_out_str("\tcpu{}: client_vote_mask = ({}, {})".format(
-                    cpu, halt_state & 0xFF, (halt_state>>8) & 0xFF))
+        if ramdump.kernel_version >= (6, 18, 0):
+            _dump_votable_isolation_data(ramdump)
+        else:
+            halt_state_ptr = ramdump.address_of('halt_state')
+            if halt_state_ptr is not None:
+                print_out_str("\nhalt_state:")
+                for cpu in ramdump.iter_cpus():
+                    halt_state = ramdump.read_u16(halt_state_ptr, cpu=cpu)
+                    print_out_str("\tcpu{}: client_vote_mask = ({}, {})".format(
+                        cpu, halt_state & 0xFF, (halt_state>>8) & 0xFF))
     except Exception as err:
         print_out_str("{}\n".format(str(err)))
         pass
@@ -187,7 +364,10 @@ def dump_cpufreq_data(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
     print_out_str("\nCPU Frequency information:\n" + "-" * 10)
     for i in ramdump.iter_cpus():
-        cpu_data_addr = ramdump.read_u64(cpufreq_data_addr, cpu=i)
+        cpu_data_addr = ramdump.read_pointer(cpufreq_data_addr, cpu=i)
+        if not cpu_data_addr:
+            print_out_str("cpufreq_cpu_data for cpu{} is not available.".format(i))
+            continue
         rq_addr = runqueues_addr + ramdump.per_cpu_offset(i)
 
         cur_freq = ramdump.read_structure_field(cpu_data_addr, 'struct cpufreq_policy', 'cur')
@@ -223,7 +403,7 @@ def dump_cpufreq_data(ramdump):
                 freq_table_index = ramdump.array_index(freq_table, 'struct cpufreq_frequency_table', j)
                 frequency = ramdump.read_structure_field(freq_table_index, 'struct cpufreq_frequency_table', 'frequency')
                 print("%2d:%-10d" %(j, frequency), end= '', file = print_out.out_file)
-                if max_freq == frequency:
+                if cpuinfo_max_freq  == frequency:
                     break
         except Exception as err:
             print(err)
@@ -250,10 +430,92 @@ def dump_cpufreq_data(ramdump):
         except Exception as err:
             print(err)
 
+def parse_cpufreq_minidump(ramdump):
+    try:
+        minidump_stack_addr = next((s for s in ramdump.elffile.iter_sections() if s.name == "FREQ_LOG"), None)
+        cpuclk_log_virt_addr = minidump_stack_addr['sh_addr']
+        section_size = minidump_stack_addr['sh_size']
+    except Exception as e:
+        print_out_str("Extracting minidump FREQ_LOG section info failed: {}".format(str(e)))
+        return
+
+    freq_hist_size = ramdump.sizeof('struct freq_hist')
+    idx_offset = ramdump.field_offset('struct freq_hist ', 'idx')
+    freq_log_offset = ramdump.field_offset('struct freq_hist ', 'log')
+
+    ktime_offset = ramdump.field_offset('struct freq_log', 'ktime')
+    freq_offset = ramdump.field_offset('struct freq_log', 'freq')
+
+    freq_log_size = ramdump.sizeof('struct freq_log')
+    FREQ_LOG_IDX_MASK = 0xF
+
+    # 16 entries per cluster
+    max_entries = FREQ_LOG_IDX_MASK + 1
+
+    # Calculate number of cpu clusters
+    num_clusters = section_size // freq_hist_size
+
+    # Iterate through each cluster
+    for cluster in range(num_clusters):
+        cluster_addr = cpuclk_log_virt_addr + (cluster * freq_hist_size)
+        idx = ramdump.read_int(cluster_addr + idx_offset)
+
+        print_out_str(f"\nCluster {cluster} (total idx records: {idx})")
+
+        # Collect log entries
+        log_entries = []
+        for i in range(max_entries):
+            log_entry_addr = cluster_addr + freq_log_offset + (i * freq_log_size)
+            ktime = ramdump.read_u64(log_entry_addr + ktime_offset)
+            freq = ramdump.read_u64(log_entry_addr + freq_offset)
+
+            if ktime != 0 or freq != 0:
+                time_sec = ktime / 1_000_000_000.0
+                log_entries.append((time_sec, freq))
+
+        log_entries.sort(key=lambda x: x[0])
+
+        print_out_str("-" *40)
+        print_out_str("Index\tTime(sec)\t\tFrequency")
+
+        for idx, (time_sec, freq) in enumerate(log_entries):
+            print_out_str(f"{idx}\t\t{time_sec:.6f}\t\t{freq}")
+
+    print_out_str("\n(Note: Shows requested freq; system may pick nearest value)")
+
+def mpidr_to_index(ramdump, mpidr):
+    vcpu_index = 0
+    if mpidr:
+        if hasattr(ramdump.board, 'aff_shift'):
+            aff_shift = ramdump.board.aff_shift
+        else:
+            aff_shift = [0,0,0,0]
+        tmp_vcpu_index = mpidr
+        for i in range(0, len(aff_shift)):
+            vcpu_index |= ((tmp_vcpu_index >> (i * 8)) & 0xff) << aff_shift[i]
+        if hasattr(ramdump.board, 'core_map'):
+            vcpu_index = ramdump.board.core_map.get(vcpu_index, vcpu_index)
+    else:
+        vcpu_index = mpidr
+    return vcpu_index
+
+def get_cpu_logical_map(ramdump):
+    cpu_logical_map = {}
+    logical_map_addr = ramdump.address_of('__cpu_logical_map')
+    if not logical_map_addr:
+        return cpu_logical_map
+    for i in ramdump.iter_cpus():
+        hw_coreid = ramdump.read_u64(logical_map_addr + (i * 8))
+        cpu_logical_map[i] = mpidr_to_index(ramdump, hw_coreid)
+    return cpu_logical_map
 
 @register_parser('--sched-info', 'Verify scheduler\'s various parameter status')
 class Schedinfo(RamParser):
     def parse(self):
+        if self.ramdump.minidump:
+            parse_cpufreq_minidump(self.ramdump)
+            return
+
         global cpu_online_bits
         # Active cpu check verified by default!
         #verify_active_cpus(self.ramdump)
@@ -291,6 +553,21 @@ class Schedinfo(RamParser):
             print_out_str("\t\t sysctl_sched_rt_runtime Default:{0} and Value in dump:{1}\n".format(DEFAULT_RT_RUNTIME, sched_rt_runtime))
             print_out_str("\t\t sysctl_sched_rt_period Default:{0} and Value in dump:{1}\n".format(DEFAULT_RT_PERIOD, sched_rt_period))
 
+        # print sched feature
+        if self.ramdump.is_config_defined('CONFIG_SCHED_DEBUG'):
+            print_out_str('sched feature:')
+            sched_feat_names_addr = self.ramdump.address_of('sched_feat_names')
+            sysctl_sched_features_addr = self.ramdump.address_of('sysctl_sched_features')
+            sysctl_sched_features = self.ramdump.read_u32(sysctl_sched_features_addr)
+            for i in range(0, self.ramdump.gdbmi.get_value_of('__SCHED_FEAT_NR')):
+                name_addr = self.ramdump.read_pointer(self.ramdump.array_index(sched_feat_names_addr, 'char *',  i))
+                name = self.ramdump.read_cstring(name_addr, 48)
+                if sysctl_sched_features & (1 << i):
+                    print_out_str('\t{}'.format(name))
+                else:
+                    print_out_str('\tNO_{}'.format(name))
+            print_out_str('')
+
         # verify rq root domain
         runqueues_addr = self.ramdump.address_of('runqueues')
         rd_offset = self.ramdump.field_offset('struct rq', 'rd')
@@ -318,6 +595,7 @@ class Schedinfo(RamParser):
             print_out_str("*" * 5 + " WARNING:" + "\n")
             print_out_str("\t\t sysctl_sched_uclamp_util_min Default:{0} and Value in dump:{1}\n".format(SCHED_CAPACITY_SCALE, sched_uclamp_util_min))
             print_out_str("\t\t sysctl_sched_uclamp_util_max Default:{0} and Value in dump:{1}\n".format(SCHED_CAPACITY_SCALE, sched_uclamp_util_max))
+        dump_dl_server_info(self.ramdump)
         dump_rq_lock_information(self.ramdump)
         dump_isolation_data(self.ramdump)
         print_out.out_file.flush()

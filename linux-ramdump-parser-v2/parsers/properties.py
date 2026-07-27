@@ -1,5 +1,4 @@
-# Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
-# Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -20,9 +19,6 @@ import struct
 class Properties(RamParser):
     def __init__(self, *args):
         super(Properties, self).__init__(*args)
-        self.f_path_offset = self.ramdump.field_offset('struct file', 'f_path')
-        self.dentry_offset = self.ramdump.field_offset('struct path', 'dentry')
-        self.d_iname_offset = self.ramdump.field_offset('struct dentry', 'd_iname')
         self.SIZEOF_PROP_BT=0x14
         self.SIZEOF_PROP_INFO=0x60
         self.SIZEOF_PROP_AREA=0x80
@@ -30,7 +26,7 @@ class Properties(RamParser):
         self.OFFSET_DATA = self.SIZEOF_PROP_AREA
         self.PROP_NAME_MAX=100
         self.PROP_VALUE_MAX=92
-        self.proplist = []
+        self.proplist = {}
         self.data = ""
         self.header = ""
 
@@ -61,7 +57,15 @@ class Properties(RamParser):
                     self.OFFSET_DATA + prop + self.SIZEOF_PROP_INFO :
                     self.OFFSET_DATA + prop + self.SIZEOF_PROP_INFO + self.PROP_NAME_MAX
                     ].decode('ascii', 'ignore').split('\0')[0]
-                self.proplist.append([name, value])
+
+                if len(name.strip()) == 0:
+                    return True
+
+                if name in self.proplist:
+                    if len(value.strip()) != 0 and value != self.proplist[name]:
+                        self.proplist[name] = self.proplist[name] +"  compact value=" + value
+                else:
+                    self.proplist[name] = value
         if children != 0:
             err = self.foreach_property(children)
             if not err:
@@ -74,15 +78,8 @@ class Properties(RamParser):
 
     def parse_property(self, taskinfo):
         index = 0
-        prop_files = []
         for vma in taskinfo.vmalist:
             if "u:object_r:" in vma.file_name:
-                if vma.file_name in prop_files:
-                    # /dev/__properties__/appcompat_override/u:object_r:adbd_prop:s0
-                    # /dev/__properties__/u:object_r:adbd_prop:s0
-                    # avoid duplicate file
-                    continue
-                prop_files.append(vma.file_name)
                 self.data = UTaskLib.read_binary(
                     self.ramdump, taskinfo.mmu, vma.vm_start, vma.vm_end - vma.vm_start)
                 if index == 0 and self.OFFSET_MAGIC+8 <= len(self.data):
@@ -212,7 +209,7 @@ class Properties(RamParser):
             if self.header:
                 out_file.write(self.header)
 
-            for name, value in self.proplist:
+            for name, value in self.proplist.items():
                 out_file.write("{}={}\n".format(name, value))
         return len(self.proplist) > 0
 

@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -1397,6 +1397,10 @@ def get_wdog_timing(ramdump):
             wdog_data_addr = wdog_seg['sh_addr']
     if wdog_data_addr is None and not ramdump.minidump:
         get_upstream_wdog_timing(ramdump)
+        return
+
+    if not wdog_data_addr:
+        print_out_str("Watchdog data is empty")
         return
 
     pet_timer_off = ramdump.field_offset(

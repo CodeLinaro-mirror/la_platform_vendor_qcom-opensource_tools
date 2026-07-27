@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 from print_out import print_out_str
 from parser_util import RamParser, cleanupString, register_parser
@@ -106,26 +106,29 @@ def get_svmdmesg_with_pvmktime(svmdmesg, pvmdmesg, output_path):
 
 @register_parser('--svmdmesg-with-pvmktime', 'Print the svmdmesg with pvm ktime')
 class svmdmesg_with_pvmktime(RamParser):
-
     def __init__(self, *args):
         super(svmdmesg_with_pvmktime, self).__init__(*args)
 
     def parse(self):
-        svmdmesg = self.ramdump.open_file("svmdmesg.txt")
-        dmesglib.DmesgLib(self.ramdump, svmdmesg).extract_dmesg()
+        if self.ramdump.svm:
+            svmdmesg = self.ramdump.open_file("svmdmesg.txt")
+            dmesglib.DmesgLib(self.ramdump, svmdmesg).extract_dmesg()
+            svmdmesg.close()
+
+        if self.ramdump.svm:
+            pvmdmesg = self.ramdump.dump.open_file("pvmdmesg.txt")
+            dmesglib.DmesgLib(self.ramdump.dump, pvmdmesg).extract_dmesg()
+            pvmdmesg.close()
+            pvmdmesg_path = os.path.join(self.ramdump.dump.outdir, "pvmdmesg.txt")
+        else:
+            pvmdmesg = self.ramdump.open_file("pvmdmesg.txt")
+            dmesglib.DmesgLib(self.ramdump, pvmdmesg).extract_dmesg()
+            pvmdmesg.close()
+            pvmdmesg_path = os.path.join(self.ramdump.outdir, "pvmdmesg.txt")
+
         svmdmesg_path = os.path.join(self.ramdump.outdir, "svmdmesg.txt")
-
-        pvmdmesg = self.ramdump.dump.open_file("pvmdmesg.txt")
-        dmesglib.DmesgLib(self.ramdump.dump, pvmdmesg).extract_dmesg()
-        pvmdmesg_path = os.path.join(self.ramdump.dump.outdir, "pvmdmesg.txt")
-
-        svmdmesg_with_pvmktime = self.ramdump.open_file("svmdmesg_with_pvmktime.txt")
         svmdmesg_with_pvmktime_path = os.path.join(self.ramdump.outdir, "svmdmesg_with_pvmktime.txt")
         get_svmdmesg_with_pvmktime(svmdmesg_path, pvmdmesg_path, svmdmesg_with_pvmktime_path)
-
-        svmdmesg_with_pvmktime.close()
-        pvmdmesg.close()
-        svmdmesg.close()
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:

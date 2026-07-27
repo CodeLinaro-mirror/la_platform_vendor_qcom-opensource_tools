@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -266,7 +266,6 @@ class Logcat_base(RamParser, Constants):
                     'struct timezone ', 'tz_minuteswest')
         self.tz_minuteswest = self.ramdump.read_s32(sys_tz_addr + tz_minuteswest_offset)
         print_out_str("struct timezone --> tz_minuteswest= "+str(self.tz_minuteswest)+"min")
-        print("struct timezone --> tz_minuteswest= "+str(self.tz_minuteswest)+"min")
         self.wall_to_mono_found = False
         self.wall_to_monotonic_tv_sec = 0
         self.wall_to_monotonic_tv_nsec = 0

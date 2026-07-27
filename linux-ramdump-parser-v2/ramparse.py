@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -116,8 +116,6 @@ def prepare_vttbr_for_svm(options, dump):
 
     this method was used to generate corevcpu with host vmlinux and other host arguments
     '''
-    if has_debug_info(objdump_path, options.hyp):
-        return
 
     for _file in VCPU_CMM_FILES:
         ## find in dump folder
@@ -148,7 +146,7 @@ def prepare_vttbr_for_svm(options, dump):
     print_out_str("\n######### Using host vmlinux firstly to determine vttbr end!!!##########\n")
 
 if __name__ == '__main__':
-    starttime = time.time()
+    starttime = time.perf_counter()
     usage = 'usage: %prog [options to print]. Run with --help for more details'
     parser = OptionParser(usage)
     parser.add_option('', '--logcat_limit_time_sec',
@@ -216,9 +214,10 @@ if __name__ == '__main__':
     parser.add_option('', '--wlan', dest='wlan', help='wlan.ko path')
     parser.add_option('', '--minidump', action='store_true', dest='minidump',
                       help='Parse minidump')
-    # Adding option for reduced dump
     parser.add_option('', '--reduceddump', action='store_true', dest='reduceddump',
                   help='Parse reduceddump')
+    parser.add_option('', '--vmcoredump', dest='vmcoredump',
+                      help='Path to vmcore file for parsing')
     parser.add_option('', '--svm', default='', dest='svm',action='store',type="string",
                       help='Parse svm')
     parser.add_option('', '--ram-elf', dest='ram_elf_addr',
@@ -265,6 +264,11 @@ if __name__ == '__main__':
     parser.add_option('', '--skip_TLB_Cache_parse', action='store_true', help='Skip parsing TLB Cache Dumps in parse_debug_image')
     parser.add_option('--iommu-pg-table-format', action='store', choices=['fastrpc', 'default'],
                       default='default')
+    parser.add_option("--zram_parser_override", type='string', dest="zram_parser_override",
+                      help="""
+                      Specify a separate program to parse ZRAM-compressed pages with. The program must take in
+                      compressed input through stdin and output decompressed output through stdout.
+                      """)
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',
@@ -298,9 +302,14 @@ if __name__ == '__main__':
         default_list.append("PStore")
         default_list.append("Kconfig")
         default_list.append("ThermalTemp")
+        default_list.append("GpuParser")
         default_list.append("ipc_logging_cn")
         default_list.append("VaMinidump")
         default_list.append("SoftirqStat")
+        default_list.append("DumpTasks")
+        default_list.append("FtraceParser")
+        default_list.append("MemStats")
+        default_list.append("DumpProcessMemory")
 
     if options.everything:
         everything_exclusion_list.append("ROData")
@@ -367,13 +376,18 @@ if __name__ == '__main__':
 
     print_out_str('using vmlinux file {0}'.format(options.vmlinux))
 
-    if options.ram_addr is None and options.autodump is None and not options.minidump and not options.reduceddump:
+    if options.ram_addr is None and options.autodump is None and not options.minidump and not options.reduceddump and not options.vmcoredump:
         print_out_str('Need one of --auto-dump or at least one --ram-file')
         sys.exit(1)
 
     if options.reduceddump and not options.autodump:
         print_out_str('Need autodump with --reduceddump option')
         sys.exit(1)
+
+    if options.vmcoredump:
+        if not os.path.exists(options.vmcoredump):
+            print_out_str('!!! vmcore file {0} does not exist. Exiting...'.format(options.vmcoredump))
+            sys.exit(1)
 
     if options.ram_addr is not None:
         for a in options.ram_addr:
@@ -561,8 +575,8 @@ if __name__ == '__main__':
     if options.timeout:
         from func_timeout import func_timeout, FunctionTimedOut
 
-    print_out_str("Time taken to setup the subparsers run : {}".format(time.time()-starttime))
-    starttime = time.time()
+    print_out_str("Time taken to setup the subparsers run : {:.6f}".format(time.perf_counter()-starttime))
+    starttime = time.perf_counter()
     for i,p in enumerate(parsers_to_run):
         if options.everything:
             if p.cls.__name__ in everything_exclusion_list:
@@ -579,8 +593,8 @@ if __name__ == '__main__':
 
         print("    [%d/%d] %s ... " %
                          (i + 1, len(parsers_to_run), p.longopt), end='', flush=True)
-        before = time.time()
-        print_out_str("start time {0}".format(before))
+        before = time.perf_counter()
+        print_out_str("start time {:.6f}".format(before))
         with print_out_section(p.cls.__name__):
             try:
                 if options.timeout:
@@ -598,9 +612,9 @@ if __name__ == '__main__':
                     print("FAILED! ")
                 else:
                     raise
-        after = time.time()
-        print_out_str("end time {0} time cost {1} for {2}".format(after, (after - before), p.cls.__name__))
-        print("%fs" % (after - before),  flush=True)
+        after = time.perf_counter()
+        print_out_str("end time {:.6f} time cost {:.6f} for {}".format(after, (after - before), p.cls.__name__))
+        print("{:.6f}s".format(after - before),  flush=True)
         flush_outfile()
 
     sys.stderr.write("\n")
@@ -609,7 +623,9 @@ if __name__ == '__main__':
         dump.create_t32_launcher()
 
     dump.gdbmi.close()
-    print_out_str("Time taken to complete ramparser subscripts : {}".format(time.time()-starttime))
+    print_out_str("Time taken to complete ramparser subscripts : {:.6f}".format(time.perf_counter()-starttime))
     if options.reduceddump:
         print_out_str("Number of cache hits on full cache : {}".format(elfutil.cachehits))
         print_out_str("Number of cache misses on full cache : {}".format(elfutil.cachemiss))
+    if hasattr(dump, 'phys_cache'):
+        dump.phys_cache.print_stats("phys_cache")

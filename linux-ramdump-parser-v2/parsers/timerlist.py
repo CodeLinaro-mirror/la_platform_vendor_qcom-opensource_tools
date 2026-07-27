@@ -1,5 +1,5 @@
 # Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -74,6 +74,11 @@ class TimerList(RamParser) :
 
     def timer_list_walker(self, node, type, index, base):
         remarks = ''
+        timer_format = "\t{0:<6} {1:<18x} {2:<14} {3:<14} {4:<40} {5:<52} {6}\n"
+        if (node & 0xFFFF000000000000) == 0xDEAD000000000000:
+            output = timer_format.format(index, node, "NA", "NA", "NA", "NA", "LIST_POISON(DELETED)")
+            self.output.append(output)
+            return
         function_addr = node + self.ramdump.field_offset('struct timer_list', 'function')
         expires_addr = node + self.ramdump.field_offset('struct timer_list', 'expires')
         try:
@@ -116,7 +121,7 @@ class TimerList(RamParser) :
                 remarks += "Timer Base Mismatch detected"
 
         expires_s = (expires-(0xFFFFFFFF - 300 * int(self.HZ)) )/(self.HZ)
-        output = "\t{0:<6} {1:<18x} {2:<14} {3:<14} {4:<40} {5:<52} {6}\n".format(index, node, expires, str(expires_s) + 's', function, data, remarks)
+        output = timer_format.format(index, node, expires, str(expires_s) + 's', function, data, remarks)
         self.output.append(output)
 
     def iterate_vec(self, type, base):
@@ -254,7 +259,9 @@ class TimerList(RamParser) :
         node = self.ramdump.struct_field_addr(hrtimer_base , 'struct hrtimer', 'node')
         expires = self.ramdump.read_structure_field(node, 'struct timerqueue_node', 'expires')
         function = self.ramdump.read_structure_field(hrtimer_base, 'struct hrtimer', 'function')
-        function_name = self.ramdump.unwind_lookup(function)
+        function_name = None
+        if function:
+            function_name = self.ramdump.unwind_lookup(function)
         if function_name == None:
             function_name = 'n/a'
         _softexpires = self.ramdump.read_structure_field(hrtimer_base, 'struct hrtimer', '_softexpires')

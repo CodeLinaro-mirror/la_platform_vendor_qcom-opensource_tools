@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2015, 2017, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -59,10 +59,13 @@ class IrqParse(RamParser):
             hwirq = ram_dump.read_word(irq_desc + i + hwirq_num_offset)
             if ram_dump.kernel_version >= (4,4,0):
                 affinity = ram_dump.read_int(
-                    irq_desc + irq_common_data_offset + affinity_offset)
+                        irq_desc + i + irq_common_data_offset + affinity_offset)
+                if ram_dump.is_config_defined('CONFIG_CPUMASK_OFFSTACK'):
+                    cpumask_array = ram_dump.read_datatype(affinity, "struct cpumask")
+                    affinity = cpumask_array.bits[0] & 0xFFFFFFFF
             else:
                 affinity = ram_dump.read_int(
-                    irq_desc + affinity_offset)
+                    irq_desc + i + affinity_offset)
             irqcount = ram_dump.read_word(irq_desc + i + irq_count_offset)
             action = ram_dump.read_word(irq_desc + i + irq_action_offset)
             kstat_irqs_addr = ram_dump.read_word(
@@ -216,7 +219,15 @@ class IrqParse(RamParser):
         hwirq = irq_desc.irq_data.hwirq
 
         if self.ramdump.kernel_version >= (4,4,0):
-            affinity = irq_desc.irq_common_data.affinity.bits[0] & 0xFFFFFFFF
+            if self.ramdump.is_config_defined('CONFIG_SMP'):
+                if self.ramdump.is_config_defined('CONFIG_CPUMASK_OFFSTACK'):
+                    affinity = irq_desc.irq_common_data.affinity
+                    cpumask_array = self.ramdump.read_datatype(affinity, "struct cpumask")
+                    affinity = cpumask_array.bits[0] & 0xFFFFFFFF
+                else:
+                    affinity = irq_desc.irq_common_data.affinity.bits[0] & 0xFFFFFFFF
+            else:
+                affinity = 0  # Default value if CONFIG_SMP is not enabled
         else:
             affinity = irq_desc.irq_data.affinity.bits[0] & 0xFFFFFFFF
 

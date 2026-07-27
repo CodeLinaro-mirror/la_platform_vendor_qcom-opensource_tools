@@ -1,5 +1,5 @@
 #SPDX-License-Identifier: GPL-2.0-only
-#Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+#Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 from print_out import print_out_str
 from parser_util import cleanupString
@@ -46,6 +46,8 @@ class UTaskLib:
         self.f_path_offset = ramdump.field_offset('struct file', 'f_path')
         self.dentry_offset = ramdump.field_offset('struct path', 'dentry')
         self.d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
+        if self.d_iname_offset is None:
+            self.d_iname_offset = ramdump.field_offset('struct dentry', 'd_shortname')
         self.active_mm_offset = ramdump.field_offset('struct task_struct', 'active_mm')
         self.pid_offset = ramdump.field_offset('struct task_struct', 'pid')
         self.ramdump = ramdump

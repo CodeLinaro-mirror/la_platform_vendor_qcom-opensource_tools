@@ -1,5 +1,5 @@
 # Copyright (c) 2014-2015, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -136,6 +136,8 @@ class DmesgLib(object):
                 caller_id_data = tid_info + str(caller_id_data)
             text_len = self.ramdump.read_u16(curr_idx + text_len_offset)
             text_str = self.ramdump.read_cstring(curr_idx + log_size, text_len)
+            if text_str is None and text_len == 0:
+                text_str = ""
             if text_str is not None:
                 for partial in text_str.split('\n'):
                     if self.ramdump.is_config_defined('CONFIG_PRINTK_CALLER'):
@@ -237,6 +239,8 @@ class DmesgLib(object):
 
                 text = self.ramdump.read_cstring(data_addr +
                                                     text_start, text_len)
+                if text is None:
+                    text = ""
 
             time_stamp = self.ramdump.read_u64(infos_addr +
                                                     info_off + ts_off)

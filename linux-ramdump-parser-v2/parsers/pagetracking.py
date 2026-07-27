@@ -1,5 +1,5 @@
 # Copyright (c) 2012,2014-2015,2017-2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -13,7 +13,7 @@
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
 from mm import pfn_to_page, page_buddy, page_count, for_each_pfn
-from mm import page_to_pfn, pfn_to_section
+from mm import page_to_pfn, pfn_to_section, page_slab
 import sys
 import os
 from collections import defaultdict
@@ -21,7 +21,19 @@ from collections import defaultdict
 class StackDepot(object):
     def __init__(self, ramdump):
         self.ramdump = ramdump
+        self.max_frames = 16
+        if self.ramdump.kernel_version >= (6, 18, 0):
+            self.max_frames = self.get_max_frames()
         self.get_handle_offsets()
+
+    def get_max_frames(self):
+        try:
+            val = self.ramdump.get_config_val('CONFIG_STACKDEPOT_MAX_FRAMES')
+            if val is not None:
+                return int(val)
+        except Exception:
+            pass
+        return 64
 
     def get_handle_offsets(self):
         depot_stack_bits = self.ramdump.sizeof('depot_stack_handle_t') * 8
@@ -34,7 +46,10 @@ class StackDepot(object):
         self.depot_index_offset = 0
 
         if self.ramdump.field_offset('union handle_parts', 'pool_index_plus_1') is not None:
-            self.stack_slabs = self.ramdump.address_of('stack_pools')
+            if self.ramdump.kernel_version >= (6, 18, 0):
+                self.stack_slabs = self.ramdump.read_word('stack_pools')
+            else:
+                self.stack_slabs = self.ramdump.address_of('stack_pools')
             self.stack_alloc_index_bits = depot_stack_bits - self.stack_alloc_offset_bits - depot_extra_bits
             self.depot_index_offset = 1
         elif self.ramdump.field_offset('union handle_parts', 'pool_index') is not None:
@@ -73,7 +88,7 @@ class StackDepot(object):
 
         if stack_nr_entries is None:
             return -1, None, None
-        if stack_nr_entries <= 0 or stack_nr_entries > 16:
+        if stack_nr_entries <= 0 or stack_nr_entries > self.max_frames:
             return -1, None, None
 
         stack_addr = []
@@ -101,6 +116,7 @@ class StackDepot(object):
 class PageTrace(object):
     def __init__(self, ramdump):
         self.ramdump = ramdump
+        self.max_trace_entries = 16
         self.trace_entry_size = self.ramdump.sizeof('unsigned long')
         self.trace_offset = 0
         self.nr_entries_offset = 0
@@ -118,6 +134,7 @@ class PageTrace(object):
                             'struct page_ext', 'trace')
             if self.ramdump.is_config_defined('CONFIG_STACKDEPOT'):
                 self.stackdepot = StackDepot(self.ramdump)
+                self.max_trace_entries = self.stackdepot.max_frames
             else:
                 self.trace_entries_offset = self.ramdump.field_offset(
                             'struct page_ext', 'trace_entries')
@@ -152,12 +169,26 @@ class PageTrace(object):
         self.offset_comm = self.ramdump.field_offset('struct page_owner', 'comm')
         self.offset_freepid = self.ramdump.field_offset('struct page_owner', 'free_pid')
 
-    def page_trace(self, pfn, alloc):
+    def is_alloced(self, pfn, ext_flags=None):
+        alloced = False
+        page = pfn_to_page(self.ramdump, pfn)
+        if not (page_buddy(self.ramdump, page) or
+            (page_count(self.ramdump, page) == 0 and not page_slab(self.ramdump, page))):
+            alloced = True
+        #Rely on PAGE_EXT_OWNER_ALLOCATED if page_ext->flags has it
+        if self.ramdump.kernel_version >= (5, 17, 0):
+            if ext_flags and ext_flags != -1 and (ext_flags & (1<<1)) != 0:
+                alloced = True
+        return alloced
+
+    def page_trace(self, pfn, alloc=None):
         offset = 0
         struct_holding_trace_entries = 0
         gfp = 0
         comm = -1
 
+        if alloc is None:
+            alloc = self.is_alloced(pfn)
         if not alloc and self.ramdump.kernel_version < (5, 4, 0):
             return -1, -1, -1, -1, -1, -1
 
@@ -191,6 +222,7 @@ class PageTrace(object):
             try:
                 page_ext_flags = self.ramdump.read_structure_field(
                             temp_page_ext, 'struct page_ext', 'flags')
+                alloc = self.is_alloced(pfn, page_ext_flags)
             except:
                 page_ext_flags = -1
 
@@ -230,7 +262,7 @@ class PageTrace(object):
                 struct_holding_trace_entries = temp_page_ext
 
                 if nr_trace_entries is not None:
-                    if  nr_trace_entries > 0 and nr_trace_entries <= 16:
+                    if  nr_trace_entries > 0 and nr_trace_entries <= self.max_trace_entries:
                         for i in range(0, nr_trace_entries):
                             addr = self.ramdump.read_word(
                                     struct_holding_trace_entries + self.trace_entries_offset + i *
@@ -263,7 +295,7 @@ class PageTrace(object):
 
         if nr_trace_entries is None:
             return -1, -1, -1, -1, -1, -1, -1
-        if nr_trace_entries <= 0 or nr_trace_entries > 16:
+        if nr_trace_entries <= 0 or nr_trace_entries > self.max_trace_entries:
             return -1, -1, -1, -1, -1, -1, -1
         if order >= self.max_order:
             return -1, -1, -1, -1, -1, -1, -1
@@ -296,35 +328,31 @@ class PageTracking(RamParser):
         self.pagetrace = PageTrace(self.ramdump)
         return
 
-    def parse_output(self, pfn, out_tracking, out_tracking_freed,
+    def parse_output(self, pfn, out_tracking_alloc, out_tracking_free,
                      page_size, sorted_pages):
-        str_f = "PFN : 0x{0:x}-0x{1:x} Page : 0x{2:x} Order : {3} PID : {4} {5}ts_nsec {6} gfp 0x{7:x} pgext 0x{8:x}\n" \
-              "{9}\n"
-        page = pfn_to_page(self.ramdump, pfn)
-        order = 0
-        if (page_buddy(self.ramdump, page) or
-            page_count(self.ramdump, page) == 0):
-            function_list, order, pid, ts_nsec, gfp, comm, ext_flags = self.pagetrace.page_trace(pfn, False)
-            if function_list == -1:
-                return 0
-            nr_pages = (1 << order) - 1
-            out_tracking_freed.write(str_f.format(pfn, pfn + nr_pages,
-                                                  page, order, pid,
-                                                  "Comm: {} ".format(comm) if comm != -1 else "",
-                                                  ts_nsec, gfp, ext_flags, function_list))
-            return nr_pages
-
-        function_list, order, pid, ts_nsec, gfp, comm, ext_flags = self.pagetrace.page_trace(pfn, True)
+        function_list, order, pid, ts_nsec, gfp, comm, ext_flags = self.pagetrace.page_trace(pfn)
         if function_list == -1:
             return 0
+        alloc = self.pagetrace.is_alloced(pfn, ext_flags)
+        out_tracking_fd = out_tracking_alloc if alloc else out_tracking_free
         if order >= self.max_order:
-            out_tracking.write('PFN 0x{:x} page 0x{:x} skip as order '
-                               '0x{:x}\n'.format(pfn, page, order))
+            out_tracking_fd.write('PFN 0x{:x} page 0x{:x} skip as order '
+                               '{}\n'.format(pfn, page, order))
+            return 0
+        page = pfn_to_page(self.ramdump, pfn)
         nr_pages = (1 << order) - 1
-        out_tracking.write(str_f.format(pfn, pfn + nr_pages,
-                            page, order, pid, "Comm: {} ".format(comm) if comm != -1 else "",
-                            ts_nsec, gfp, ext_flags, function_list))
-
+        out_tracking_fd.write(
+            "PFN : 0x{0:x}-0x{1:x} Page : 0x{2:x} Order : {3} PID : {4} {5}ts_nsec {6} gfp 0x{7:x} pgext 0x{8:x}\n"
+            "{9}\n".format(
+                pfn, pfn + nr_pages,
+                page, order, pid,
+                "Comm: {} ".format(comm) if comm != -1 else "",
+                ts_nsec, gfp, ext_flags,
+                function_list
+            )
+        )
+        if not alloc:
+            return nr_pages
         if comm != -1:
             pid = "{}-{}".format(pid, comm)
         if function_list in sorted_pages:

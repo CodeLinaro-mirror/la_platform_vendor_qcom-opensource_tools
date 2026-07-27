@@ -1,5 +1,5 @@
 # Copyright (c) 2017-2022, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -13,6 +13,7 @@
 import os,re
 from collections import OrderedDict
 
+import minidump_util
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from tempfile import NamedTemporaryFile
@@ -33,7 +34,10 @@ class FtraceParser(RamParser):
         self.whitelisted_trace_names = []
         self.ftrace_buffer_size_kb = None
         self.per_cpu_buffer_pages = None
-        self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
+        self.pid_max = self.ramdump.read_pid_max()
+        print_out_str("pid_max={0}".format(self.pid_max))
+        if not self.ramdump.minidump:
+            self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
         if len(self.ramdump.ftrace_args):
             self.whitelisted_trace_names = self.ramdump.ftrace_args
         if self.ramdump.ftrace_max_size:
@@ -59,8 +63,8 @@ class FtraceParser(RamParser):
             str_error =  'v.v (struct ftrace_event_field)0x{0:x} type_str or field_name is None'.format(common_list)
             print_out_str(str_error)
             return
-        if re.match('(.*)\[(.*)', type_str) and not (re.match('__data_loc', type_str)):
-            s = re.split('\[', type_str)
+        if re.match(r'(.*)\[(.*)', type_str) and not (re.match(r'__data_loc', type_str)):
+            s = re.split(r'\[', type_str)
             s[1] = '[' + s[1]
             self.formats_out.write(
                 "\tfield:{0} {1}{2};\toffset:{3};\tsize:{4};\tsigned:{5};\n".format(s[0], field_name, s[1], offset,
@@ -93,7 +97,9 @@ class FtraceParser(RamParser):
         class_offset = ram_dump.field_offset(self.event_call, 'class')
         flags_offset = ram_dump.field_offset(self.event_call, 'flags')
         flags = ram_dump.read_word(ftrace_list + flags_offset)
-        if ram_dump.kernel_version >= (4, 14):
+        if ram_dump.kernel_version >= (6, 15):
+            TRACE_EVENT_FL_TRACEPOINT = 0x8
+        elif ram_dump.kernel_version >= (4, 14):
             TRACE_EVENT_FL_TRACEPOINT = 0x10
         elif ram_dump.kernel_version >= (4, 9):
             TRACE_EVENT_FL_TRACEPOINT = 0x20
@@ -218,7 +224,7 @@ class FtraceParser(RamParser):
                     continue
                 if self.per_cpu_buffer_pages and self.per_cpu_buffer_pages < nr_pages:
                     nr_pages = self.per_cpu_buffer_pages
-                nr_total_buffer_pages = nr_total_buffer_pages +  nr_pages
+                nr_total_buffer_pages = nr_total_buffer_pages + nr_pages
                 trace_buffer_info['nr_pages_per_buffer'][cpu_idx] = nr_pages
                 trace_buffer_info['rb_per_cpu'][cpu_idx] = b
             trace_buffer_info['nr_total_buffer_pages'] = nr_total_buffer_pages
@@ -245,9 +251,144 @@ class FtraceParser(RamParser):
             per_cpu_buffer = trace_buffer_info['rb_per_cpu'][cpu_idx]
             if per_cpu_buffer is not None:
                 evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,fevent_list.ftrace_event_type,
-                        fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
+                        fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd,self.pid_max)
                 evt.ring_buffer_per_cpu_parsing(per_cpu_buffer, nrpages_limit)
         return ftrace_time_data
+
+    def _dump_enabled_ftrace_events(self, fevent_list):
+        """
+        Dump enabled trace events using existing FtraceParser_Event_List info.
+        Only checks the static_key of each tracepoint; does not re-derive names.
+        """
+        out_path = self.ramdump.outdir + "/ftrace_enabled_events.txt"
+        rd = self.ramdump
+
+        try:
+            with open(out_path, "w") as fout:
+                print(
+                    "---------------------enabled events list "
+                    "cat /sys/kernel/tracing/set_event ---------------- \n",
+                    file=fout,
+                )
+
+                trace_event_call_struct_name="struct ftrace_event_call"
+                trace_event_file_struct_name="struct ftrace_event_file"
+
+                if self.ramdump.kernel_version >= (4, 4, 0):
+                    trace_event_call_struct_name="struct trace_event_call"
+                    trace_event_file_struct_name="struct trace_event_file"
+
+                # Walk trace_event_call list once more, just to inspect keys.
+                event_call_off = rd.field_offset(trace_event_call_struct_name, "event")
+                tp_off = rd.field_offset(trace_event_call_struct_name, "tp")
+                tp_name_off = rd.field_offset("struct tracepoint", "name")
+                list_off = rd.field_offset(trace_event_call_struct_name, "list")
+                head = rd.address_of("ftrace_events")
+                list_next_off = rd.field_offset("struct list_head", "next")
+
+                if rd.arm64:
+                    entry = rd.read_u64(head + list_next_off)
+                else:
+                    entry = rd.read_u32(head + list_next_off)
+
+                key_off = rd.field_offset("struct tracepoint", "key")
+                enabled_off = rd.field_offset("struct static_key", "enabled")
+                type_off = rd.field_offset("struct trace_event", "type")
+                max_iterations = 10000  # Reasonable upper bound for number of events
+                iteration_count = 0
+                visited_entries = set()
+                while entry != head and iteration_count < max_iterations:
+                    if entry in visited_entries:
+                        print_out_str("Circular reference detected in ftrace_events list")
+                        break
+                    visited_entries.add(entry)
+                    iteration_count += 1
+
+                    call = entry - list_off
+                    call_event = call + event_call_off
+                    tp_data = call + tp_off
+
+                    if not call_event:
+                        break
+                    etype = rd.read_u16(call_event + type_off)
+                    etype_str = str(etype)
+
+                    if rd.arm64:
+                        tp_ptr = rd.read_u64(tp_data)
+                        name_ptr = rd.read_u64(tp_ptr + tp_name_off)
+                    else:
+                        tp_ptr = rd.read_u32(tp_data)
+                        name_ptr = rd.read_u32(tp_ptr + tp_name_off)
+
+                    # Event name is already known via fevent_list.event_name_by_type
+                    event_name = fevent_list.event_name_by_type.get(etype_str)
+                    if not event_name:
+                        event_name = rd.read_cstring(name_ptr) or "<unknown>"
+
+                    enabled = None
+                    if tp_ptr:
+                        try:
+                            key = tp_ptr + key_off
+                            enabled = rd.read_u32(key + enabled_off)
+                        except Exception:
+                            enabled = None
+
+                    if enabled is not None and enabled == 1:
+                        print("%-48s" % event_name, file=fout)
+
+                    # Advance to next
+                    if rd.arm64:
+                        entry = rd.read_u64(entry + list_next_off)
+                    else:
+                        entry = rd.read_u32(entry + list_next_off)
+            if iteration_count >= max_iterations:
+                print_out_str("Warning: Maximum iteration limit reached in ftrace_events traversal")
+            print_out_str("Wrote enabled ftrace events to %s" % out_path)
+
+        except Exception as e:
+            print_out_str("failed to _dump_enabled_ftrace_events: %s" % e)
+
+    def _dump_ftrace_buffer_info(self):
+        """
+        Dump ftrace buffer size information derived from the dump:
+        - number of CPUs
+        - nr_pages per CPU
+        - total pages and bytes per trace buffer
+        """
+        page_size = self.ramdump.get_page_size()
+        try:
+            fout = self.ramdump.open_file('ftrace_buffer_info.txt', 'w')
+        except Exception as e:
+            print_out_str("Failed to open ftrace_buffer_info.txt: {}".format(e))
+            return
+
+        print("# ftrace ring buffer size information from dump", file=fout)
+        print("# page_size: {} bytes".format(page_size), file=fout)
+        print("#", file=fout)
+        total_bytes_all = 0
+        for name, info in self.trace_buffers.items():
+            cpus = info.get('cpus', 0)
+            nr_pages_per_buffer = info.get('nr_pages_per_buffer', [])
+            nr_total_pages = info.get('nr_total_buffer_pages', 0)
+
+            total_bytes = nr_total_pages * page_size
+            print("buffer: {}".format(name), file=fout)
+            print("  cpus: {}".format(cpus), file=fout)
+            print("  total_pages: {} ({} KiB)".format(
+                nr_total_pages, total_bytes >> 10), file=fout)
+            total_bytes_all +=total_bytes >> 10
+            # per-CPU details
+            for cpu_idx in range(cpus):
+                pages = nr_pages_per_buffer[cpu_idx]
+                if pages is None:
+                    continue
+                bytes_cpu = pages * page_size
+                print("    cpu{:03d}: pages={} ({} KiB)".format(
+                    cpu_idx, pages, bytes_cpu >> 10), file=fout)
+            print("", file=fout)
+        print("Total buffer size: %dKB" %(total_bytes_all), file = fout)
+        fout.close()
+        print_out_str("Wrote ftrace buffer size info to ftrace_buffer_info.txt")
 
     def ftrace_extract(self):
         trace_array_list = self.ramdump.address_of('ftrace_trace_arrays')
@@ -262,12 +403,21 @@ class FtraceParser(RamParser):
             print_out_str("A ftrace buffer is not found")
             return
         self.ftrace_get_buffer_pages()
+        try:
+            self._dump_ftrace_buffer_info()
+        except Exception as e:
+            print_out_str("failed to dump ftrace buffer info: %s".format(e))
         main_trace = self.ftrace_main_buffer()
 
         ftrace_event_time = 0
         post_ftrace_event_time = 0
         log_pattern = re.compile(r'\s*(.*)-(\d+)\s*\[(\d+)\]\s*.*')
-        fevent_list = self.ftrace_get_format();
+        # Build event type/name maps and write enabled events summary
+        fevent_list = self.ftrace_get_format()
+        try:
+            self._dump_enabled_ftrace_events(fevent_list)
+        except Exception as e:
+            print_out_str("failed to get_enabled_ftrace_events: %s\n".format(e))
         for trace_buffer_name, trace_buffer_info in self.trace_buffers.items():
             trace_array = trace_buffer_info['addr']
             trace_name = trace_buffer_name
@@ -365,10 +515,27 @@ class FtraceParser(RamParser):
         #print("Post Ftrace Event Sorting and Write took {} secs".format(post_ftrace_event_time))
         return
 
-    def parse(self):
-        if self.ramdump.ftrace_limit_time == 0:
-            self.ftrace_extract()
+    def ftrace_extract_minidump(self):
+        ftrace_text = minidump_util.minidump_extract_section_context(self.ramdump.ebi_files_minidump,
+                                                                      self.ramdump.ebi_files,
+                                                                      self.ramdump.elffile, "KFTRACE")
+        if ftrace_text:
+            try:
+                # Use 'with' statement to ensure file is properly closed
+                with self.ramdump.open_file('ftrace.txt') as ftrace_out:
+                    ftrace_out.write(ftrace_text)
+            except Exception as e:
+                print_out_str("Error extracting ftrace from minidump: {}".format(str(e)))
         else:
-            from func_timeout import func_timeout
-            print_out_str("Limit ftrace parser running time to {}s".format(self.ramdump.ftrace_limit_time))
-            func_timeout(self.ramdump.ftrace_limit_time, self.ftrace_extract)
+            print_out_str("No KFTRACE section found in minidump")
+
+    def parse(self):
+        if self.ramdump.minidump:
+            self.ftrace_extract_minidump()
+        else:
+            if self.ramdump.ftrace_limit_time == 0:
+                self.ftrace_extract()
+            else:
+                from func_timeout import func_timeout
+                print_out_str("Limit ftrace parser running time to {}s".format(self.ramdump.ftrace_limit_time))
+                func_timeout(self.ramdump.ftrace_limit_time, self.ftrace_extract)

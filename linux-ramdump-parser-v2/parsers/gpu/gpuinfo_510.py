@@ -1,5 +1,5 @@
 # Copyright (c) 2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -12,6 +12,7 @@
 
 import linux_list
 import linux_radix_tree
+import struct
 import traceback
 
 from math import log2
@@ -20,89 +21,8 @@ from parsers.gpu.gmu_info import generate_gmu_t32_files
 from parsers.gpu.gpu_snapshot import create_snapshot_from_ramdump
 from parsers.gpu.gpu_snapshot import extract_gmu_mem_from_snapshot
 from parsers.gpu.gpu_eventlog import parse_eventlog_buffer
+from parsers.gpu.gpuinfo_common import *
 from print_out import print_out_str
-
-
-# Global Configurations
-ADRENO_DISPATCH_DRAWQUEUE_SIZE = 128
-KGSL_DEVMEMSTORE_SIZE = 40
-KGSL_PRIORITY_MAX_RB_LEVELS = 4
-KGSL_MAX_PWRLEVELS = 16
-KGSL_MAX_POOLS = 6
-PAGE_SIZE = 4096
-
-KGSL_CACHEMODE_MASK = 0x0C000000
-KGSL_CACHEMODE_SHIFT = 26
-KGSL_MEMALIGN_MASK = 0x00FF0000
-KGSL_MEMALIGN_SHIFT = 16
-KGSL_MEMTYPE_MASK = 0x0000FF00
-KGSL_MEMTYPE_SHIFT = 8
-
-KGSL_CONTEXT_SECURE = 0x00020000
-
-KGSL_MEMDESC_GLOBAL = (1 << 1)
-KGSL_MEMDESC_SECURE = (1 << 4)
-KGSL_MEMDESC_PRIVILEGED = (1 << 6)
-KGSL_MEMDESC_UCODE = (1 << 7)
-KGSL_MEMDESC_RANDOM = (1 << 8)
-
-KGSL_MEMFLAGS_GPUREADONLY = (1 << 24)
-KGSL_MEMFLAGS_USE_CPU_MAP = (1 << 28)
-KGSL_MEMFLAGS_VBO = (1 << 34)
-
-VRB_PREEMPT_COUNT_TOTAL_L0_IDX = 6
-VRB_PREEMPT_COUNT_TOTAL_L1A_IDX = 7
-VRB_PREEMPT_COUNT_TOTAL_L1B_IDX = 8
-
-kgsl_cachemode = ['-', 'u', 't', 'b']
-
-kgsl_ctx_type = ['ANY', 'GL', 'CL', 'C2D', 'RS', 'VK']
-
-kgsl_ctx_priv = [
-    ((1 << 0), 's', 'submitted'),           # KGSL_CONTEXT_PRIV_SUBMITTED
-    ((1 << 1), 'd', 'detached'),            # KGSL_CONTEXT_PRIV_DETACHED
-    ((1 << 2), 'i', 'invalid'),             # KGSL_CONTEXT_PRIV_INVALID
-    ((1 << 3), 'p', 'pagefault'),           # KGSL_CONTEXT_PRIV_PAGEFAULT
-    ((1 << 16), 'F', 'Fault'),              # ADRENO_CONTEXT_FAULT
-    ((1 << 17), 'H', 'GPU Hang'),           # ADRENO_CONTEXT_GPU_HANG
-    ((1 << 18), 'T', 'GPU Hang FT'),        # ADRENO_CONTEXT_GPU_HANG_FT
-    ((1 << 19), 'E', 'Skip EOF'),           # ADRENO_CONTEXT_SKIP_EOF
-    ((1 << 20), 'P', 'Force Preamble'),     # ADRENO_CONTEXT_FORCE_PREAMBLE
-    ((1 << 21), 'C', 'Skip CMD'),           # ADRENO_CONTEXT_SKIP_CMD
-    ((1 << 22), 'L', 'Fence Log')           # ADRENO_CONTEXT_FENCE_LOG
-]
-
-kgsl_memtype = [
-                'any(0)',
-                'framebuffer',
-                'renderbuffer',
-                'arraybuffer',
-                'elementarraybuffer',
-                'vertexarraybuffer',
-                'texture',
-                'surface',
-                'egl_surface',
-                'gl',
-                'cl',
-                'cl_buffer_map',
-                'cl_buffer_nomap',
-                'cl_image_map',
-                'cl_image_nomap',
-                'cl_kernel_stack',
-                'command',
-                '2d',
-                'egl_image',
-                'egl_shadow',
-                'egl_multisample',
-                'kernel'
-]
-
-adreno_preempt_state = ['NONE', 'START', 'TRIGGERED', 'FAULTED', 'PENDING',
-                        'COMPLETE']
-
-
-def strhex(x): return str(hex(x))
-def str_convert_to_kb(x): return str(x//1024) + 'kb'
 
 
 class GpuParser_510(RamParser):
@@ -123,6 +43,9 @@ class GpuParser_510(RamParser):
             (self.parse_mutex_data, "KGSL Mutexes", 'gpuinfo.txt'),
             (self.parse_scratch_memory, "Scratch Memory", 'gpuinfo.txt'),
             (self.parse_vrb_info, "VRB", 'gpuinfo.txt'),
+            (self.parse_dcvs_tunables, "GMU DCVS Tunables", 'gpuinfo.txt'),
+            (self.parse_active_fences, "Active Fences", 'hw_fences.txt'),
+            (self.parse_hwsched_info, "HWSCHED", 'gpuinfo.txt'),
             (self.parse_memstore_memory, "Memstore", 'gpuinfo.txt'),
             (self.parse_context_data, "Open Contexts", 'gpuinfo.txt'),
             (self.parse_active_context_data, "Active Contexts", 'gpuinfo.txt'),
@@ -137,6 +60,7 @@ class GpuParser_510(RamParser):
             (self.parse_eventlog_data, "Eventlog Buffer", 'eventlog.txt'),
             (self.parse_gpu_dcvs_data, "GPU DCVS Info",
              'gpuinfo.txt'),
+            (self.parse_non_context_data, "Non Context Overrides", 'gpuinfo.txt'),
         ]
 
         self.rtw = linux_radix_tree.RadixTreeWalker(dump)
@@ -335,7 +259,8 @@ class GpuParser_510(RamParser):
                                        "MEMDESC_SIZE", "GPUADDR", "FLAGS",
                                        "USAGE", "PENDING_FREE", "PRIV"))
 
-        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset(
+            'struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
@@ -482,7 +407,7 @@ class GpuParser_510(RamParser):
                          'ADRENO_DCVS_PROFILE', ]
 
         for i, feature in enumerate(features_list):
-            if(features >> i) & 1:
+            if (features >> i) & 1:
                 enabled.append(feature)
             else:
                 disabled.append(feature)
@@ -496,14 +421,7 @@ class GpuParser_510(RamParser):
                      str(len(features_list)-1))
 
     def parse_kgsl_data(self, dump):
-        adreno_boolean_field = ['long_ib_detect', 'lm_enabled', 'acd_enabled',
-                                'hwcg_enabled', 'throttling_enabled',
-                                'sptp_pc_enabled', 'bcl_enabled',
-                                'clx_enabled', 'dcvs_profile_enabled',
-                                'dms_enabled', 'gmu_ab',
-                                'gpu_llc_slice_enable',
-                                'gpuhtw_llc_slice_enable', 'lpac_enabled',
-                                'perfcounter', ]
+        adreno_boolean_list = adreno_boolean_data + ['dcvs_profile_enabled']
         kgsl_generic_field = ['open_count', 'active_cnt', 'state',
                               'requested_state', 'speed_bin',
                               'reset_counter', ]
@@ -515,7 +433,7 @@ class GpuParser_510(RamParser):
                                               kgsl_field)
             self.writeln(f'{kgsl_field}: ' + str(value))
 
-        for adreno_field in adreno_boolean_field:
+        for adreno_field in adreno_boolean_list:
             addr = dump.struct_field_addr(self.devp,
                                           'struct adreno_device', adreno_field)
             value = dump.read_bool(addr)
@@ -590,16 +508,17 @@ class GpuParser_510(RamParser):
         page_count_offset = dump.field_offset('struct kgsl_page_pool',
                                               'page_count')
         for i in range(KGSL_MAX_POOLS):
+            if pools_base_addr is None or order_offset is None:
+                break
             p_order = dump.read_int(pools_base_addr + order_offset)
             pool_order.append(p_order)
             page_count = dump.read_int(pools_base_addr + page_count_offset)
-
             pool_size.append(page_count * (1 << p_order))
             pools_base_addr += shift
 
         self.writeln('\nKGSL Pool Size: ' +
                      str_convert_to_kb(sum(pool_size)*PAGE_SIZE))
-        for i in range(KGSL_MAX_POOLS):
+        for i in range(len(pool_order)):
             self.writeln('\t' + str(pool_order[i]) + ' order pool size: ' +
                          str_convert_to_kb(pool_size[i]*PAGE_SIZE))
 
@@ -831,13 +750,7 @@ class GpuParser_510(RamParser):
                                            str(queue[8])))
 
     def parse_pwrctrl_data(self, dump):
-        pwrctl_data = ['active_pwrlevel', 'previous_pwrlevel',
-                       'default_pwrlevel', 'thermal_pwrlevel',
-                       'thermal_time', 'power_flags', 'ctrl_flags',
-                       'rt_bus_hint', 'rt_pwrlevel_hint', 'num_pwrlevels',
-                       'min_pwrlevel', 'max_pwrlevel', 'bus_percent_ab',
-                       'bus_width', 'bus_ab_mbytes', 'cur_buslevel',
-                       'interval_timeout', ]
+        pwrctrl_list = pwrctrl_data + ['rt_pwrlevel_hint']
         pwrctl_data_hex = ['power_flags', 'ctrl_flags']
 
         pwrctrl_address = dump.struct_field_addr(self.devp,
@@ -850,9 +763,11 @@ class GpuParser_510(RamParser):
         self.writeln('pwrctrl_address:  ' + strhex(pwrctrl_address))
         self.writeln('bus_control: ' + str(bus_control))
 
-        for data in pwrctl_data:
+        for data in pwrctrl_list:
             value = dump.read_structure_field(pwrctrl_address,
                                               'struct kgsl_pwrctrl', data)
+            if data == 'num_pwrlevels':
+                num_pwrlevels = value
             if data in pwrctl_data_hex:
                 self.writeln(f'{data}: ' + strhex(value))
             else:
@@ -863,7 +778,7 @@ class GpuParser_510(RamParser):
         pwrlevels_base_address = pwrctrl_address + \
             dump.field_offset('struct kgsl_pwrctrl', 'pwrlevels')
 
-        for i in range(0, KGSL_MAX_PWRLEVELS):
+        for i in range(0, num_pwrlevels):
             pwr_levels_temp = []
             pwrlevels_array_idx_addr = dump.array_index(
                 pwrlevels_base_address, "struct kgsl_pwrlevel", i)
@@ -936,40 +851,141 @@ class GpuParser_510(RamParser):
         else:
             self.writeln("UNLOCKED")
 
+    def is_hwsched_enabled(self):
+        dump = self.ramdump
+
+        hwsched_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'hwsched')
+        hwsched_ops = dump.read_structure_field(hwsched_addr,
+                                                'struct adreno_hwsched',
+                                                'hwsched_ops')
+        return bool(hwsched_ops)
+
+    def get_scratch_memory_memdesc(self):
+        dump = self.ramdump
+        hwsched_enabled = self.is_hwsched_enabled()
+        if not hwsched_enabled:
+            scratch_obj = dump.read_structure_field(self.devp,
+                                                    'struct kgsl_device',
+                                                    'scratch')
+            return scratch_obj
+
+        gpucore = dump.read_structure_field(self.devp,
+                                            'struct adreno_device', 'gpucore')
+        gpurev = dump.read_structure_field(gpucore,
+                                           'struct adreno_gpu_core', 'gpurev')
+        if gpurev >= 0x80000:
+            hwsched_device_struct = 'struct gen8_hwsched_device'
+            hwsched_hfi_struct = 'struct gen8_hwsched_hfi'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen8_device',
+                                                   'adreno_dev', 'gmu')
+        elif gpurev >= 0x70000:
+            hwsched_device_struct = 'struct gen7_hwsched_device'
+            hwsched_hfi_struct = 'struct gen7_hwsched_hfi'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct gen7_device',
+                                                   'adreno_dev', 'gmu')
+        else:
+            hwsched_device_struct = 'struct a6xx_hwsched_device'
+            hwsched_hfi_struct = 'struct a6xx_hwsched_hfi'
+            gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                                   'struct a6xx_device',
+                                                   'adreno_dev', 'gmu')
+        try:
+            hwsched_addr = dump.struct_field_addr(self.devp,
+                                                  'struct adreno_device',
+                                                  'hwsched')
+            mem_alloc_entries = dump.read_structure_field(
+                hwsched_addr, 'struct adreno_hwsched', 'mem_alloc_entries')
+
+            if mem_alloc_entries is None:
+                raise ValueError("mem_alloc_entries is None")
+            mem_alloc_table_addr = dump.struct_field_addr(
+                hwsched_addr, 'struct adreno_hwsched', 'mem_alloc_table')
+
+        except Exception:
+            hwsched_hfi = dump.struct_field_addr(
+                gmu_dev_addr, hwsched_device_struct, 'hwsched_hfi'
+            )
+            mem_alloc_entries = dump.read_structure_field(
+                hwsched_hfi, hwsched_hfi_struct, 'mem_alloc_entries')
+            mem_alloc_table_addr = dump.struct_field_addr(
+                hwsched_hfi, hwsched_hfi_struct, 'mem_alloc_table')
+
+        if mem_alloc_entries is None:
+            return None
+
+        for i in range(mem_alloc_entries):
+            mem_alloc_table_idx_addr = dump.array_index(
+                mem_alloc_table_addr, "struct hfi_mem_alloc_entry",
+                i)
+            mem_kind = dump.read_structure_field(mem_alloc_table_idx_addr,
+                                                 'struct hfi_mem_alloc_desc',
+                                                 'mem_kind')
+            if mem_kind == KGSL_HFI_MEMKIND_SCRATCH:
+                scratch_obj = dump.read_structure_field(
+                    mem_alloc_table_idx_addr, 'struct hfi_mem_alloc_entry',
+                    'md')
+                return scratch_obj
+        return None
+
+    def print_scratch_swsched(self, scratch):
+        dump = self.ramdump
+
+        # struct adreno_rb_shadow format string
+        scratch_formatstr = '<IIIIQI'
+
+        format_str = '{0:20} {1:20} {2:20} {3:20} {4:20} {5:20} {6:20}'
+        self.writeln(format_str.format("Ringbuffer_Id", "RPTR_Value",
+                                       "BV_RPTR_Value", "BV_TS_Value",
+                                       "CUR_RB_PTNAME", "TTBR0", "CONTEXTIDR"))
+        for rb_id in range(MAX_NUM_RBS):
+            rptr, bv_rptr, bv_ts, current_rb_ptname, ttbr0, contextidr = \
+                dump.read_string(scratch, scratch_formatstr)
+            self.writeln(format_str.format(str(rb_id), str(rptr), str(bv_rptr),
+                                           str(bv_ts), str(current_rb_ptname),
+                                           strhex(ttbr0), str(contextidr)))
+            scratch += struct.calcsize(scratch_formatstr)
+
+    def print_scratch_hwsched(self, scratch):
+        dump = self.ramdump
+
+        # GMU FW struct RBScratch format string
+        scratch_formatstr = '<' + 'I'*MAX_NUM_RBS*5
+        scratch_data = dump.read_string(scratch, scratch_formatstr)
+
+        rptr = scratch_data[:MAX_NUM_RBS]
+        rptrBv = scratch_data[MAX_NUM_RBS:MAX_NUM_RBS*2]
+        sop = scratch_data[MAX_NUM_RBS*2:MAX_NUM_RBS*3]
+        eop = scratch_data[MAX_NUM_RBS*3:MAX_NUM_RBS*4]
+        tsBv = scratch_data[MAX_NUM_RBS*4:]
+
+        format_str = '{0:20} {1:20} {2:20} {3:20} {4:20} {5:20}'
+        self.writeln(format_str.format("Ringbuffer_Id", "RPTR_Value",
+                                       "BV_RPTR_Value", "BV_TS_Value",
+                                       "SOP", "EOP"))
+        for rb_id in range(MAX_NUM_RBS):
+            self.writeln(format_str.format(str(rb_id), str(rptr[rb_id]),
+                                           str(rptrBv[rb_id]),
+                                           str(tsBv[rb_id]), str(sop[rb_id]),
+                                           str(eop[rb_id])))
+
     def parse_scratch_memory(self, dump):
-        scratch_obj = dump.read_structure_field(self.devp,
-                                                'struct kgsl_device',
-                                                'scratch')
+        scratch_obj = self.get_scratch_memory_memdesc()
+        if not scratch_obj:
+            self.write("Scratch memory not found!\n")
+            return
+
         hostptr = dump.read_structure_field(scratch_obj, 'struct kgsl_memdesc',
                                             'hostptr')
         self.write("hostptr:  " + strhex(hostptr) + "\n")
 
-        def add_increment(x): return x + 4
-
-        format_str = '{0:20} {1:20} {2:20}'
-        self.writeln(format_str.format("Ringbuffer_id", "RPTR_Value",
-                                       "CTXT_RESTORE_ADD"))
-
-        rptr_0 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        rptr_1 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        rptr_2 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        rptr_3 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_0 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_1 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_2 = dump.read_s32(hostptr)
-        hostptr = add_increment(hostptr)
-        ctxt_3 = dump.read_s32(hostptr)
-
-        self.writeln(format_str.format(str(0), str(rptr_0), strhex(ctxt_0)))
-        self.writeln(format_str.format(str(1), str(rptr_1), strhex(ctxt_1)))
-        self.writeln(format_str.format(str(2), str(rptr_2), strhex(ctxt_2)))
-        self.writeln(format_str.format(str(3), str(rptr_3), strhex(ctxt_3)))
+        if self.is_hwsched_enabled():
+            self.print_scratch_hwsched(hostptr)
+        else:
+            self.print_scratch_swsched(hostptr)
 
     def parse_vrb_info(self, dump):
         gpucore = dump.read_structure_field(self.devp,
@@ -1021,6 +1037,41 @@ class GpuParser_510(RamParser):
         self.writeln(format_str.format('L1A', str(preempt_count_total_l1A)))
         self.writeln(format_str.format('L1B', str(preempt_count_total_l1B)))
 
+    def parse_dcvs_tunables(self, dump):
+        def get_tunable_value(base_addr, struct_name, field_name):
+            offset = dump.field_offset('struct adreno_hwsched', field_name)
+            addr = base_addr + offset
+            dcvs_struct = self.ramdump.read_datatype(addr, struct_name)
+            return getattr(dcvs_struct, 'value')
+
+        hwsched_offset = dump.field_offset('struct adreno_device', 'hwsched')
+        hwsched_addr = self.devp + hwsched_offset
+
+        self.writeln(f'{"Tunable Name":<35}{"Default Val":<15}{"Sysfs Val"}')
+
+        for index, tunable in enumerate(DCVS_Tunables_list):
+            default_field = f'default_dcvs_tunables[{index}]'
+            sysfs_field = f'sysfs_dcvs_tunables[{index}]'
+
+            default_val = get_tunable_value(hwsched_addr, "struct adreno_dcvs_tunable",
+                default_field)
+            sysfs_val = get_tunable_value(hwsched_addr, "struct adreno_dcvs_tunable",
+                sysfs_field)
+
+            self.writeln(f'{tunable:<35}{strhex(default_val):<15}{strhex(sysfs_val)}')
+
+    def parse_hwsched_info(self, dump):
+        hwsched_addr = dump.struct_field_addr(self.devp,
+                                              'struct adreno_device',
+                                              'hwsched')
+        flags = dump.read_structure_field(hwsched_addr,
+                                          'struct adreno_hwsched',
+                                          'flags')
+        self.writeln('flags: ' + strhex(flags))
+        for i, flag in enumerate(hwsched_flags_data):
+            value = (flags >> i) & 1
+            self.writeln(f'{flag}: ' + str(value))
+
     def parse_memstore_memory(self, dump):
         memstore_obj = dump.read_structure_field(self.devp,
                                                  'struct kgsl_device',
@@ -1029,47 +1080,7 @@ class GpuParser_510(RamParser):
                                             'struct kgsl_memdesc', 'hostptr')
         size = dump.read_structure_field(memstore_obj,
                                          'struct kgsl_memdesc', 'size')
-        preempted = dump.read_s32(hostptr + 16)
-        current_context = dump.read_s32(hostptr + 32)
-
-        self.writeln("hostptr: " + strhex(hostptr))
-        self.writeln("current_context: " + str(current_context))
-        self.writeln("preempted: " + str(preempted) + " [Deprecated]")
-
-        def add_increment(x): return x + 4
-
-        self.writeln("\nrb contexts:")
-        format_str = '{0:^20} {1:^20} {2:^20} {3:^20}'
-        self.writeln(format_str.format("rb_index", "soptimestamp",
-                                       "eoptimestamp", "current_context"))
-
-        # Skip process contexts since their timestamps are
-        # displayed in open/active context sections
-        hostptr = hostptr + size - (5 * KGSL_DEVMEMSTORE_SIZE) - 8
-        for rb_id in range(KGSL_PRIORITY_MAX_RB_LEVELS):
-            soptimestamp = dump.read_s32(hostptr)
-            hostptr = add_increment(hostptr)
-            # skip unused entry
-            hostptr = add_increment(hostptr)
-            eoptimestamp = dump.read_s32(hostptr)
-            hostptr = add_increment(hostptr)
-            # skip unused entry
-            hostptr = add_increment(hostptr)
-            # skip preempted entry
-            hostptr = add_increment(hostptr)
-            # skip unused entry
-            hostptr = add_increment(hostptr)
-            # skip ref_wait_ts entry
-            hostptr = add_increment(hostptr)
-            # skip unused entry
-            hostptr = add_increment(hostptr)
-            current_context = dump.read_s32(hostptr)
-            hostptr = add_increment(hostptr)
-            # skip unused entry
-            hostptr = add_increment(hostptr)
-
-            self.writeln(format_str.format(str(rb_id), str(soptimestamp),
-                                           str(eoptimestamp), current_context))
+        parse_memstore_memory_common(dump, hostptr, size, self.writeln)
 
     def parse_fence_data(self, dump):
         context_idr = dump.struct_field_addr(self.devp,
@@ -1113,7 +1124,8 @@ class GpuParser_510(RamParser):
                                        "KGSL_CUR_MEMORY", "DMABUF_CUR_MEMORY",
                                        "CTX_CNT", "STATE", "CMDLINE STRING"))
 
-        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'process_list')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset(
+            'struct kgsl_driver', 'process_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_process_private', 'list')
         open_process_list_walker = linux_list.ListWalker(
@@ -1163,7 +1175,8 @@ class GpuParser_510(RamParser):
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20}'
         self.writeln(format_str.format("PID", "pt_base", "ttbr0"))
-        node_addr = dump.address_of('kgsl_driver') + dump.field_offset('struct kgsl_driver', 'pagetable_list')
+        node_addr = dump.address_of('kgsl_driver') + dump.field_offset(
+            'struct kgsl_driver', 'pagetable_list')
         list_elem_offset = dump.field_offset(
                             'struct kgsl_pagetable', 'list')
         pagetable_list_walker = linux_list.ListWalker(
@@ -1186,6 +1199,27 @@ class GpuParser_510(RamParser):
 
         self.writeln(format_str.format(
             str(pid), strhex(pt_base), strhex(ttbr0_val)))
+
+    def parse_active_fences(self, dump):
+        format_str = '{0:14} {1:16} {2:20}'
+        self.writeln(format_str.format("ID", "timestamp", "index"))
+        node_addr = dump.address_of('hw_fence_list')
+        list_elem_offset = dump.field_offset(
+                            'struct kgsl_sync_fence', 'hw_fence_list')
+        fences_list_walker = linux_list.ListWalker(
+                                    dump, node_addr, list_elem_offset)
+        fences_list_walker.walk(self.walk_fences,
+                                dump, format_str)
+
+    def walk_fences(self, pt_base_addr, dump, format_str):
+        id = dump.read_structure_field(
+            pt_base_addr, 'struct kgsl_sync_fence', 'context_id')
+        timestamp = dump.read_structure_field(
+            pt_base_addr, 'struct kgsl_sync_fence', 'timestamp')
+        hw_fence_index = dump.read_structure_field(
+            pt_base_addr, 'struct kgsl_sync_fence', 'hw_fence_index')
+        self.writeln(format_str.format(
+            str(id), str(timestamp), str(hw_fence_index)))
 
     def parse_gmu_data(self, dump):
         gmu_core = dump.struct_field_addr(self.devp,
@@ -1304,12 +1338,14 @@ class GpuParser_510(RamParser):
         pgtbl_ops = dump.read_structure_field(arm_smmu,
                                               'struct arm_smmu_domain',
                                               'pgtbl_ops')
-        pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
+
+        if pgtbl_ops is not None:
+            pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
                                             'struct io_pgtable', 'ops', 'cfg')
-        ttbr0_val = dump.read_structure_field(pgtbl_cfg,
+            ttbr0_val = dump.read_structure_field(pgtbl_cfg,
                                               'struct io_pgtable_cfg',
                                               'arm_lpae_s1_cfg.ttbr')
-        self.writeln('ttbr0: ' + strhex(ttbr0_val))
+            self.writeln('ttbr0: ' + strhex(ttbr0_val))
 
         num_clks = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                              'num_clks')
@@ -1476,3 +1512,48 @@ class GpuParser_510(RamParser):
             self.writeln("mod_percent: " + str(mod_percent))
         else:
             self.writeln("DCVS data dump skipped if GPU state is not ACTIVE")
+
+    def parse_non_context_data(self, dump):
+        gpucore = dump.read_structure_field(self.devp,
+                                            'struct adreno_device',
+                                            'gpucore')
+        gpurev = dump.read_structure_field(gpucore,
+                                           'struct adreno_gpu_core',
+                                           'gpurev')
+        if gpurev < 0x80000:
+            return
+
+        gmu_dev_addr = dump.sibling_field_addr(self.devp,
+                                               'struct gen8_device',
+                                               'adreno_dev', 'gmu')
+
+        format_str = '{0:16} {1:16} {2:16} {3:16} {4:16}'
+        self.writeln(format_str.format("offset", "pipelines", "value",
+                                       "set", "list_type"))
+
+        nc_overrides_addr = dump.read_structure_field(gmu_dev_addr,
+                                                      'struct gen8_device',
+                                                      'nc_overrides')
+        struct_size = self.ramdump.sizeof('struct gen8_nonctxt_overrides')
+        while(1):
+            offset = dump.read_structure_field(nc_overrides_addr,
+                                               'struct gen8_nonctxt_overrides',
+                                               'offset')
+            if offset == 0:
+                return
+            pipelines = dump.read_structure_field(
+                nc_overrides_addr, 'struct gen8_nonctxt_overrides',
+                'pipelines')
+            value = dump.read_structure_field(nc_overrides_addr,
+                                              'struct gen8_nonctxt_overrides',
+                                              'val')
+            addr = dump.struct_field_addr(nc_overrides_addr,
+                                          'struct gen8_nonctxt_overrides',
+                                          'set')
+            set = dump.read_bool(addr)
+            list_type = dump.read_structure_field(
+                nc_overrides_addr, 'struct gen8_nonctxt_overrides',
+                'list_type')
+            self.writeln(format_str.format(strhex(offset), strhex(pipelines),
+                         strhex(value), str(set), strhex(list_type)))
+            nc_overrides_addr = nc_overrides_addr + struct_size

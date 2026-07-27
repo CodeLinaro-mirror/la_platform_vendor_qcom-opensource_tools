@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # Maple Tree implementation
 # Copyright (c) 2018-2022 Oracle Corporation
 # Authors: Liam R. Howlett <Liam.Howlett@oracle.com>
@@ -15,12 +15,15 @@ class MapleTreeWalker(object):
         self.init_mtvars()
 
     def init_mtvars(self):
-        self.ULONG_MAX = 0xFFFFFFFFFFFFFFFF
+        ul_bytes = self.ram_dump.sizeof('unsigned long')
+        is_64 = (ul_bytes == 8)
+
+        self.ULONG_MAX = 0xFFFFFFFFFFFFFFFF if is_64 else 0xFFFFFFFF
         self.XA_ZERO_ENTRY = self.xa_mk_internal(257)
         self.MAPLE_RESERVED_RANGE = 4096
-        self.MAPLE_NODE_SLOTS = 31
-        self.MAPLE_RANGE64_SLOTS = 16
-        self.MAPLE_ARANGE64_SLOTS = 10
+        self.MAPLE_NODE_SLOTS = 31 if is_64 else 63
+        self.MAPLE_RANGE64_SLOTS = 16 if is_64 else 32
+        self.MAPLE_ARANGE64_SLOTS = 10 if is_64 else 21
         self.MAPLE_NODE_MASK = 255
         self.MAPLE_NODE_TYPE_SHIFT = 0x03
         self.MAPLE_NODE_TYPE_MASK = 0x0F

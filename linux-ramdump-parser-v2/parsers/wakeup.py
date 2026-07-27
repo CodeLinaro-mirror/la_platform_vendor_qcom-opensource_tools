@@ -26,8 +26,8 @@ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Changes from Qualcomm Innovation Center are provided under the following license:
-Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+​​​​​Changes from Qualcomm Technologies, Inc. are provided under the following license:
+Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 SPDX-License-Identifier: BSD-3-Clause-Clear
 """
 
@@ -90,7 +90,8 @@ class wakeup_logging(RamParser):
             event_count = ram_dump.read_ulong(next + event_count_offset)
             wakeup_count = ram_dump.read_ulong(next + wakeup_count_offset)
             expire_count = ram_dump.read_ulong(next + expire_count_offset)
-            active = ram_dump.read_bool(next + active_offset)
+            active = ram_dump.read_byte(next + active_offset)
+            active &= 1
             total_time_addr = ram_dump.read_s64(next + total_time_offset)
             last_time_addr = ram_dump.read_s64(next + last_time_offset)
             start_prevent_time_addr = ram_dump.read_s64(next + start_prevent_time_offset)
