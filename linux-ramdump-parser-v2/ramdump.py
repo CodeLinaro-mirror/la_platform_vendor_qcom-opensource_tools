@@ -290,6 +290,69 @@ class AutoDumpInfodram_cs(AutoDumpInfo):
                     continue
                 yield filename, start
 
+class AutoDumpInfoVMSSRdump(AutoDumpInfo):
+    '''
+    AutoDumpInfo subclass for VMSSR (VM Secure State Ramdump) dumps.
+
+    Supports two dump modes detected automatically:
+
+    **Minidump** (KELF_HD.bin present � checked first):
+      - md_KELF_HDR.BIN  : kernel binary (text/header region)
+      - dump_info.txt: metadata including IPA address (optional)
+
+    **Full dump** (VM_SSR_MEM.BIN present):
+      - VM_SSR_MEM.BIN : full memory binary dump of the VM
+      - dump_info.txt: metadata including VM name, IPA address, and memory size
+                       (required for full dump)
+
+    Example dump_info.txt::
+
+        VM Name: trustedvm
+        IPA Address: 0x80000000
+        Memory Size: 0x4000000
+        Dump Path: /data/vendor/vm_ssrdump/fulldump/trustedvm_20260223120016
+    '''
+
+    def __init__(self, autodumpdir, minidump, reduceddump, svm=None):
+        super().__init__(autodumpdir, minidump, reduceddump, svm)
+
+    def _read_ipa_address(self):
+        """Read IPA Address from dump_info.txt. Returns None if not found."""
+        dump_info_path = os.path.join(self.autodumpdir, 'dump_info.txt')
+        if not os.path.exists(dump_info_path):
+            return None
+        with open(dump_info_path) as f:
+            for line in f.readlines():
+                m = re.match(r'IPA Address:\s*(0x[0-9a-fA-F]+)', line.strip())
+                if m:
+                    return int(m.group(1), 16)
+        return None
+
+    def _parse(self):
+        # --- Minidump path: presence of KELF_HD.bin indicates VMSSR minidump ---
+        minidump_flag_file = os.path.join(self.autodumpdir, 'vm_ssr_minidump.txt')
+        kelf_hd_path = os.path.join(self.autodumpdir, 'md_KELF_HDR.BIN')
+        if self.minidump:
+            if os.path.exists(minidump_flag_file) and os.path.exists(kelf_hd_path):
+                print_out_str('VMSSR minidump detected (md_KELF_HDR.BIN found)')
+                yield 'md_KELF_HDR.BIN', 0
+            else:
+                print_out_str('!!! AutoParse could not find vm_ssr_minidump.txt or md_KELF_HDR.BIN for VMSSR dump!')
+                return
+        else:
+            # --- Full dump path: requires VM_SSR_MEM.BIN + IPA Address in dump_info.txt ---
+            ipa_address = self._read_ipa_address()
+            if ipa_address is None:
+                print_out_str('!!! Could not parse IPA Address from dump_info.txt for VMSSR dump!')
+                return
+
+            fulldump = 'VM_SSR_MEM.BIN'
+            if not os.path.exists(os.path.join(self.autodumpdir, fulldump)):
+                print_out_str('!!! AutoParse could not find VM_SSR_MEM.BIN for VMSSR dump!')
+                return
+
+            yield fulldump, ipa_address
+
 class RamDump():
     """The main interface to the RAM dump"""
 
@@ -360,8 +423,12 @@ class RamDump():
             ret_lookup = self.ramdump.unwind_lookup(frame.pc)
             if ret_lookup:
                 symname, offset = ret_lookup
-                # Extend tuple for additional handlers
-                if symname and symname.startswith(("ret_to_kernel",)):
+                # ret_to_kernel uses startswith; el1h_64_* are exact matches to
+                # avoid matching el1h_64_irq_handler (C wrapper) which has no pt_regs.
+                el1h_asm_stubs = {"el1h_64_irq", "el1h_64_fiq",
+                                  "el1h_64_sync", "el1h_64_error"}
+                if symname and (symname.startswith("ret_to_kernel")
+                                or symname in el1h_asm_stubs):
                     pt_regs_addr = frame.sp
                     ptregs["sp"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'sp')
                     ptregs["pc"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'pc')
@@ -1738,7 +1805,7 @@ class RamDump():
                 startup_script.write('r.s m 0x13\n')
             for ram in self.ebi_files:
                 ebi_path = os.path.abspath(ram[3])
-                startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
+                startup_script.write('data.load.binary {0} 0x{1:x} /LOADONDEMAND\n'.format(
                     ebi_path, ram[1]))
             # Check to include Reduced dump elf's
             if self.elf_addr:
@@ -1825,9 +1892,9 @@ class RamDump():
             elif kaslr_offset != 0:
                 where += ' {}'.format(hex(kaslr_offset))
             if not self.minidump:
-                dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+                dloadelf = 'data.load.elf {} /nocode /LOADONDEMAND\n'.format(where)
             else:
-                dloadelf = 'data.load.elf {}\n'.format(where)
+                dloadelf = 'data.load.elf {} /LOADONDEMAND\n'.format(where)
             startup_script.write(dloadelf)
             if self.minidump:
                 dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
@@ -1952,10 +2019,18 @@ class RamDump():
                         startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm/kernel/linux/etc/gdb/gdb_autoload.cmm"' + '\n')
                         startup_script.write(')\n')
                 if self.module_table.sym_path_list:
-                    startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
-                    if len(self.module_table.sym_path_list) > 1 :
-                        for path in self.module_table.sym_path_list[1:]:
-                            startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
+                    # Recursively find all subdirectories containing .ko files and add to y.spath
+                    ko_dirs = set()
+                    for path in self.module_table.sym_path_list:
+                        if not os.path.exists(path):
+                            continue
+                        for root, dirs, files in os.walk(path):
+                            for f in files:
+                                if f.endswith(".ko"):
+                                    ko_dirs.add(root)
+                                    break
+                    for ko_dir in sorted(ko_dirs):
+                        startup_script.write("y.spath +=  " +'"{0}"'.format(ko_dir)+ '\n')
                 else:
                     startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
                 startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
@@ -3114,7 +3189,7 @@ class RamDump():
             if val is not None and val > 0:
                 return val
 
-        # Method 2: Try new kernel's init_pid_ns.pid_max
+       # Method 2: Try new kernel's init_pid_ns.pid_max
         init_pid_ns_addr = self.address_of('init_pid_ns')
         if init_pid_ns_addr is not None:
             pid_max_offset = self.field_offset('struct pid_namespace', 'pid_max')
@@ -3213,6 +3288,23 @@ class RamDump():
             return self.gdbmi.type_of(symbol)
         except gdbmi.GdbMIException:
             pass
+
+    def get_structure_members(self, struct_name):
+        """
+        Returns a dict of member info for a given structure.
+        """
+        try:
+            result = self.gdbmi.get_structure_members(struct_name)
+            if result:
+                return result
+        except gdbmi.GdbMIException:
+            pass
+        if self.hyp:
+            try:
+                return self.gdbmi_hyp.get_structure_members(struct_name)
+            except gdbmi.GdbMIException:
+                pass
+        return {}
 
     def set_priority_namespace(self, filename):
         """
