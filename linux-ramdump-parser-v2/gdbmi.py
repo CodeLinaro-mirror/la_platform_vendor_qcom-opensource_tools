@@ -239,6 +239,152 @@ class GdbMI(object):
         result = self._run_for_multi(cmd)
         return result
 
+    def get_structure_members(self, struct_name):
+        """
+        Parses GDB's 'ptype /o' output to extract DIRECT members only.
+
+        GDB's ptype /o expands all nested structs inline (all fields carry
+        /* offset | size */ prefixes regardless of nesting depth).  We track
+        brace depth so that only depth-1 fields are returned as direct members.
+
+        Named embedded struct/union closing lines  '} fieldname;'  supply the
+        field name; their opening line  '/* off | sz */  struct foo {'  supplies
+        the offset and size.  Anonymous struct/union members (closed by just
+        '};') are promoted to the parent level so that e.g. spinlock_t fields
+        inside an anonymous union still appear.
+
+        Returns: {name: {type, offset, size, array_size, is_pointer, is_struct}}
+        """
+        cmd = 'ptype /o {0}'.format(struct_name)
+        try:
+            result_lines = self._run_for_multi(cmd)
+            if not result_lines:
+                return {}
+        except GdbMIException:
+            return {}
+
+        members = {}
+
+        # Matches a normal field line at any depth:
+        #   /* offset[:bit] | size */   type *name[N] : bits;
+        field_regex = re.compile(
+            r'/\*\s*(\d+)(?::\d+)?\s*\|\s*(\d+)\s*\*/\s+'
+            r'(.*?)\b(\w+)(?:\[(\d+)\])?(?:\s*:\s*\d+)?\s*;\s*$'
+        )
+        # Matches a function-pointer member (field_regex can't handle these):
+        #   /* offset | size */   returntype (*fieldname)(params);
+        funcptr_regex = re.compile(
+            r'/\*\s*(\d+)(?::\d+)?\s*\|\s*(\d+)\s*\*/\s+'
+            r'(.*?)\(\s*\*\s*(\w+)\s*\)\s*\('
+        )
+        # Matches an embedded struct/union opening with an offset comment:
+        #   /* offset | size */   struct foo {   or   /* offset | size */  union {
+        open_regex = re.compile(
+            r'/\*\s*(\d+)(?::\d+)?\s*\|\s*(\d+)\s*\*/\s+'
+            r'((?:struct|union)\b\s*\w*)\s*\{'
+        )
+        # Fallback for anonymous-union members that GDB emits without /* offset | size */:
+        #   char *buf;  or  struct etr_buf *etr_buf;
+        bare_field_regex = re.compile(
+            r'^\s+(.*)\b(\w+)(?:\[(\d+)\])?\s*(?::\s*\d+)?\s*;$'
+        )
+
+        depth = 0
+        # Stack entry: (offset, size, type_str) for named opens,
+        # (offset, size, None) for anonymous opens with offset info,
+        # or None for opens without offset info.
+        struct_stack = []
+
+        def _add(offset, size, ftype, fname, arr):
+            ftype = ftype.strip()
+            is_ptr = '*' in ftype
+            is_strc = (
+                (ftype.startswith('struct ') or ftype.startswith('union ')
+                 or ftype in ('struct', 'union'))
+                and not is_ptr
+            )
+            members[fname] = {
+                'type': ftype,
+                'offset': offset,
+                'size': size,
+                'array_size': arr,
+                'is_pointer': is_ptr,
+                'is_struct': is_strc,
+            }
+
+        for line in result_lines:
+            stripped = line.strip()
+
+            # ── Opening brace ────────────────────────────────────────────────
+            if stripped.endswith('{'):
+                m = open_regex.search(line)
+                if m:
+                    type_str = m.group(3).strip()
+                    # anonymous struct/union: keyword only, no type name
+                    is_anon = type_str in ('struct', 'union')
+                    struct_stack.append(
+                        (int(m.group(1)), int(m.group(2)), None) if is_anon
+                        else (int(m.group(1)), int(m.group(2)), type_str)
+                    )
+                else:
+                    struct_stack.append(None)
+                depth += 1
+                continue
+
+            # ── Closing brace ─────────────────────────────────────────────────
+            if stripped.startswith('}'):
+                depth -= 1
+                close_m = re.match(r'\}\s*(\w+)\s*;', stripped)
+                entry = struct_stack.pop() if struct_stack else None
+
+                if close_m:
+                    # Named close: '} fieldname;' — use saved offset/size/type
+                    if depth == 1 and entry and entry[2] is not None:
+                        off, sz, ftype = entry
+                        _add(off, sz, ftype, close_m.group(1), 0)
+                else:
+                    # Anonymous close '};' — promote its captured fields upward.
+                    # They were collected while depth > 1, so re-scan is not
+                    # needed: fields captured BELOW this depth are already in
+                    # `members` because we do NOT filter by depth for anonymous
+                    # containers (see the capture block below).
+                    pass
+                continue
+
+            # ── Field line ───────────────────────────────────────────────────
+            # Capture depth-1 fields directly.
+            # Also capture fields inside anonymous structs/unions (where the
+            # enclosing open has no name) so that e.g. spinlock_t anonymous
+            # inner union members are visible.
+            at_named_depth = (depth == 1)
+            in_anonymous = (
+                depth > 1
+                and struct_stack
+                and (struct_stack[-1] is None or struct_stack[-1][2] is None)
+            )
+            if at_named_depth or in_anonymous:
+                m = field_regex.search(line)
+                if m:
+                    _add(int(m.group(1)), int(m.group(2)),
+                         m.group(3), m.group(4),
+                         int(m.group(5)) if m.group(5) else 0)
+                else:
+                    fp = funcptr_regex.search(line)
+                    if fp:
+                        _add(int(fp.group(1)), int(fp.group(2)),
+                             fp.group(3).strip() + '(*)()', fp.group(4), 0)
+                    elif in_anonymous:
+                        parent = struct_stack[-1] if struct_stack else None
+                        if parent is not None:
+                            bare_m = bare_field_regex.search(line)
+                            if bare_m:
+                                _add(parent[0], parent[1],
+                                     bare_m.group(1), bare_m.group(2),
+                                     int(bare_m.group(3)) if bare_m.group(3) else 0)
+
+        return members
+
+
     def frame_field_offset(self, frame_name, the_type, field):
         """Returns the offset of a field in a struct or type of selected frame
         if there are two vairable with same na,e in source code.
