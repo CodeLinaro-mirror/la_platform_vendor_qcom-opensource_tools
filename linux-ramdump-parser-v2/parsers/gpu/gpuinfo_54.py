@@ -1367,10 +1367,10 @@ class GpuParser_54(RamParser):
                                               'pgtbl_ops[0]')
         pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
                                             'struct io_pgtable', 'ops', 'cfg')
-        ttbr0_val = dump.read_structure_field(pgtbl_cfg,
+        ttbr1_val = dump.read_structure_field(pgtbl_cfg,
                                               'struct io_pgtable_cfg',
                                               'arm_lpae_s1_cfg.ttbr[0]')
-        self.writeln('ttbr0: ' + strhex(ttbr0_val))
+        self.writeln('ttbr1: ' + strhex(ttbr1_val))
 
         num_clks = dump.read_structure_field(a6xx_gmu_dev,
                                              'struct a6xx_gmu_device',
