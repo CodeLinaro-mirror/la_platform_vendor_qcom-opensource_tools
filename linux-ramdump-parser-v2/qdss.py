@@ -14,6 +14,9 @@ import struct
 import itertools
 import linux_list as llist
 import ctypes
+import re
+import os
+import html as _html
 from print_out import print_out_str
 from iommulib import IommuLib, MSM_SMMU_DOMAIN, MSM_SMMU_AARCH64_DOMAIN, ARM_SMMU_DOMAIN
 from aarch64iommulib import create_flat_mappings, create_collapsed_mapping
@@ -219,7 +222,7 @@ driver_types = [
     ('coresight-remote-etm', 'parse_remote_etm_atid'),
     ('coresight-etm4x', 'parse_single_atid'),
     ('coresight-dummy', 'parse_single_atid'),
-    ('coresight-uetm', 'parse_single_atid'),
+    ('coresight-uetm', 'parse_uetm_atid'),
 ]
 
 driver_structs = [
@@ -231,35 +234,40 @@ driver_structs = [
     ('coresight-uetm', 'struct uetm_drvdata'),
 ]
 
+# Use a list of candidate field names to handle renames across kernel versions
 qdss_atid_fields = [
-    ('coresight-stm', 'traceid'),
-    ('coresight-tpdm', 'traceid'),
-    ('coresight-remote-etm', 'traceid'),
-    ('coresight-etm4x', 'trcid'),
-    ('coresight-dummy', 'traceid'),
-    ('coresight-uetm', 'traceid'),
+    ('coresight-stm', ['traceid', 'trcid']),
+    ('coresight-tpdm', ['traceid', 'trcid']),
+    ('coresight-remote-etm', ['traceids']),
+    ('coresight-etm4x', ['trcid', 'traceid']),
+    ('coresight-dummy', ['traceid', 'trcid']),
+    ('coresight-uetm', ['traceid', 'trcid']),
 ]
 
 qdss_component_func = [
-	('coresight-tpdm', 'parse_tpdm_component'),
-	('coresight-tpda', 'parse_tpda_component'),
-	('coresight-stm', 'parse_stm_component'),
-	('coresight-uetm', 'parse_uetm_component'),
-	('coresight-qmi', 'parse_qmi_component'),
-	('coresight-static-tpdm', 'parse_static_tpdm_component'),
-	('coresight-trace-noc', 'parse_trace_noc_component'),
-	('coresight-remote-etm', 'parse_remote_etm_component'),
-	('coresight-tmc', 'parse_tmc_component'),
-	('coresight-csr', 'parse_csr_component'),
-	('coresight-dummy', 'parse_dummy_component'),
-	('coresight-tgu', 'parse_tgu_component'),
-	('coresight-cti', 'parse_cti_component'),
-	('coresight-secure-etr', 'parse_secure_etr_component'),
-	('coresight-etm4x', 'parse_etm4_platform_component'),
-	('coresight-dynamic-funnel', 'parse_dynamic_funnel_component'),
-	('coresight-static-funnel', 'parse_static_funnel_component'),
-	('coresight-dynamic-replicator', 'parse_dynamic_replicator_component'),
-	('coresight-static-replicator', 'parse_static_replicator_component'),
+    ('coresight-tpdm',              'parse_tpdm_component'),
+    ('coresight-static-tpdm',       'parse_tpdm_component'),
+    ('coresight-tpda',              'parse_tpda_component'),
+    ('coresight-stm',               'parse_stm_component'),
+    ('coresight-uetm',              'parse_uetm_component'),
+    ('coresight-qmi',               'parse_qmi_component'),
+    ('coresight-trace-noc',         'parse_trace_noc_component'),
+    ('coresight-remote-etm',        'parse_remote_etm_component'),
+    ('coresight-tmc',               'parse_tmc_component'),
+    ('coresight-csr',               'parse_csr_component'),
+    ('coresight-dummy',             'parse_dummy_component'),
+    ('coresight-tgu',               'parse_tgu_component'),
+    ('coresight-cti',               'parse_cti_component'),
+    ('coresight-secure-etr',        'parse_secure_etr_component'),
+    ('coresight-etm4x',             'parse_etm4_platform_component'),
+    # funnel variants: dynamic (old), static, and generic (kp6.0+)
+    ('coresight-dynamic-funnel',    'parse_funnel_component'),
+    ('coresight-funnel',            'parse_funnel_component'),
+    ('coresight-static-funnel',     'parse_funnel_component'),
+    # replicator variants: dynamic (old), static, and generic (kp6.0+)
+    ('coresight-dynamic-replicator', 'parse_replicator_component'),
+    ('coresight-replicator',         'parse_replicator_component'),
+    ('coresight-static-replicator',  'parse_replicator_component'),
 ]
 class QDSSDump():
 
@@ -669,6 +677,10 @@ class QDSSDump():
         addr_offset_offset = ram_dump.field_offset('struct dbgui_drvdata', 'addr_offset')
         data_offset_offset = ram_dump.field_offset('struct dbgui_drvdata', 'data_offset')
         size_offset = ram_dump.field_offset('struct dbgui_drvdata', 'size')
+        if addr is None or addr_offset_offset is None or data_offset_offset is None or size_offset is None:
+            dbgui_out.write('/* struct dbgui_drvdata symbol not available */\n')
+            dbgui_out.close()
+            return
         addr_offset = ram_dump.read_u32(addr + addr_offset_offset, True)
         data_offset = ram_dump.read_u32(addr + data_offset_offset, True)
         size = ram_dump.read_u32(addr + size_offset, True)
@@ -679,41 +691,173 @@ class QDSSDump():
                 ram_dump.read_u32(self.dbgui_start + data_offset + (4 * i), False)))
         dbgui_out.close()
 
-    def parse_single_atid(self, driver_name, drvdata, struct_name, atid_field):
-        atid_offset = self.ramdump.struct_field_addr(drvdata, struct_name, atid_field)
-        if atid_offset is None:
-            return
-        atid = self.ramdump.read_byte(atid_offset)
+    def parse_single_atid(self, driver_name, drvdata, struct_name, atid_fields):
+        atid = None
+        for field_name in atid_fields:
+            try:
+                # Try to read the field. If it doesn't exist, this will fail.
+                val = self.ramdump.read_structure_field(drvdata, struct_name, field_name)
+                if val is not None:
+                    atid = val
+                    break  # Found a valid field, stop searching
+            except Exception:
+                continue # Field does not exist, try the next one
+
+        if atid is None:
+            return # No suitable ATID field found
+
         csdev = self.ramdump.read_structure_field(drvdata, struct_name, 'csdev')
+        if not csdev:
+            return
         dev = self.ramdump.struct_field_addr(csdev, 'struct coresight_device', 'dev')
         csname = self.ramdump.read_cstring(self.ramdump.read_word(dev + self.name_offset))
-        print("{:<50} : {:#04x}".format(csname, atid),file = self.f)
+        print("{:<50} : {:#04x}".format(csname, atid), file=self.f)
 
     def parse_remote_etm_atid(self, driver_name, drvdata, struct_name, atid_field):
         atid_str = ''
-        atid_num = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'num_trcid')
+        atid_num = self.ramdump.read_structure_field(drvdata, struct_name, 'num_trcid')
         if atid_num is None:
             return
 
-        atid_addr = self.ramdump.read_structure_field(drvdata, "struct remote_etm_drvdata", "traceids")
+        atid_addr = None
+        for field_name in atid_field:
+            try:
+                # Try to get the pointer to the trace ids array
+                val = self.ramdump.read_structure_field(drvdata, struct_name, field_name)
+                if val is not None:
+                    atid_addr = val
+                    break
+            except Exception:
+                continue
+
+        if atid_addr is None:
+            return
+
         for i in range(atid_num):
             atid = self.ramdump.read_byte(atid_addr)
             atid_str = "{:#04x}".format(atid) + " " + atid_str
             atid_addr = atid_addr + 1
 
-        remote_etm_csdev = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'csdev')
+        remote_etm_csdev = self.ramdump.read_structure_field(drvdata, struct_name, 'csdev')
+        if not remote_etm_csdev:
+            return
         cs_dev = self.ramdump.struct_field_addr(remote_etm_csdev, 'struct coresight_device', 'dev')
         csname = self.ramdump.read_cstring(self.ramdump.read_word(cs_dev + self.name_offset))
-        print("{:<50} : {}".format(csname, atid_str), file = self.f)
+        print("{:<50} : {}".format(csname, atid_str), file=self.f)
+
+    def parse_uetm_atid(self, driver_name, drvdata, struct_name, atid_fields):
+        # v2 (kp6.0+): traceid lives in each uetm_instance, not in uetm_drvdata.
+        # Iterate uetm_instances[] and print one line per instance.
+        members = self.ramdump.get_structure_members(struct_name)
+        if members and 'uetm_instances' in members and 'uetm_cnt' in members:
+            uetm_cnt = self._read_member(
+                drvdata + members['uetm_cnt']['offset'],
+                members['uetm_cnt']['size'], False)
+            instances_ptr = self.ramdump.read_word(
+                drvdata + members['uetm_instances']['offset'])
+            if uetm_cnt and instances_ptr:
+                # derive instance struct type from field type (e.g. "struct uetm_instance **")
+                inst_type = members['uetm_instances'].get('type', 'struct uetm_instance **')
+                inst_type = inst_type.strip().rstrip('*').strip()
+                inst_m = self.ramdump.get_structure_members(inst_type)
+                if inst_m and 'traceid' in inst_m and 'csdev' in inst_m:
+                    ptr_size = members['uetm_instances']['size']
+                    for i in range(uetm_cnt):
+                        inst_ptr = self.ramdump.read_word(instances_ptr + i * ptr_size)
+                        if not inst_ptr:
+                            continue
+                        traceid = self._read_member(
+                            inst_ptr + inst_m['traceid']['offset'],
+                            inst_m['traceid']['size'], False)
+                        csdev = self.ramdump.read_word(
+                            inst_ptr + inst_m['csdev']['offset'])
+                        if not csdev:
+                            continue
+                        dev = self.ramdump.struct_field_addr(
+                            csdev, 'struct coresight_device', 'dev')
+                        csname = self.ramdump.read_cstring(
+                            self.ramdump.read_word(dev + self.name_offset))
+                        if traceid is not None:
+                            print("{:<50} : {:#04x}".format(csname, traceid), file=self.f)
+                    return
+        # v1 fallback: single traceid field directly in uetm_drvdata.
+        # parse_single_atid relies on drvdata->csdev which may not exist in old
+        # kernels.  Try it first; if it prints nothing, fall back to naming the
+        # entry from the coresight bus device stored in _current_atid_device.
+        atid = None
+        for field_name in atid_fields:
+            try:
+                val = self.ramdump.read_structure_field(drvdata, struct_name, field_name)
+                if val is not None:
+                    atid = val
+                    break
+            except Exception:
+                continue
+        if atid is None:
+            return
+
+        # Try to get the name from csdev embedded in the struct (normal v1 path).
+        csname = None
+        csdev = self.ramdump.read_structure_field(drvdata, struct_name, 'csdev')
+        if csdev:
+            try:
+                dev = self.ramdump.struct_field_addr(csdev, 'struct coresight_device', 'dev')
+                csname = self.ramdump.read_cstring(
+                    self.ramdump.read_word(dev + self.name_offset))
+            except Exception:
+                pass
+
+        # Fallback for old kernels where csdev is absent: use the coresight bus
+        # device name captured in list_qdss_atid.
+        if not csname:
+            _dev = getattr(self, '_current_atid_device', None)
+            if _dev is not None:
+                try:
+                    csname = self.ramdump.read_cstring(
+                        self.ramdump.read_word(
+                            _dev + self.kobj_offset + self.name_offset))
+                except Exception:
+                    pass
+
+        if csname:
+            print("{:<50} : {:#04x}".format(csname, atid), file=self.f)
+
+    def _resolve_atid_driver(self, drvname):
+        """Normalize driver name variants to the canonical key in qdss_drivers.
+
+        Handles two common naming patterns:
+          coresight-stm-platform  -> coresight-stm   (strip -platform suffix)
+          coresight-static-tpdm  -> coresight-tpdm   (strip -static- infix)
+        """
+        if drvname in self.qdss_drivers:
+            return drvname
+        if drvname.endswith('-platform'):
+            base = drvname[:-len('-platform')]
+            if base in self.qdss_drivers:
+                return base
+        normalized = drvname.replace('-static-', '-')
+        if normalized in self.qdss_drivers:
+            return normalized
+        return None
 
     def list_qdss_atid(self, device):
         drv = self.ramdump.read_structure_field(device, 'struct device', 'driver')
+        if not drv:
+            return
         drvdata = self.ramdump.read_structure_field(device, 'struct device', 'driver_data')
+        if not drvdata:
+            return
         drvname = self.ramdump.read_cstring(self.ramdump.read_word(drv + self.dev_drv_offset))
 
-        if drvname in self.qdss_drivers :
-            getattr(QDSSDump, self.qdss_drivers[drvname])(self, drvname, drvdata,
-                            self.qdss_structs[drvname], self.atid_fields[drvname])
+        resolved = self._resolve_atid_driver(drvname)
+        if resolved:
+            self._current_atid_device = device
+            try:
+                getattr(QDSSDump, self.qdss_drivers[resolved])(self, resolved, drvdata,
+                                self.qdss_structs[resolved], self.atid_fields[resolved])
+            except Exception as e:
+                print("[Debug] {}: Error parsing ATID for {}: {}".format(
+                    drvname, hex(drvdata), e), file=self.f)
 
     def parse_qdss_component_atid(self, ramdump):
         self.ramdump = ramdump
@@ -724,265 +868,92 @@ class QDSSDump():
         self.qdss_drivers = dict(driver_types)
         self.qdss_structs = dict(driver_structs)
         self.atid_fields = dict(qdss_atid_fields)
-        self.f = open(self.ramdump.outdir + "/ATID.txt", "w")
-        print("{:<50} {}".format("Source Name", "ATID"), file = self.f)
-        print("{}".format("=" * 60), file = self.f)
         devices_kset = self.ramdump.read_pointer('devices_kset')
+        if devices_kset is None:
+            print_out_str('!!! devices_kset symbol not found, skipping ATID parse')
+            return
         list_head = devices_kset + self.ramdump.field_offset('struct kset', 'list')
         list_offset = self.kobj_offset + self.entry_offset
         list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
-        list_walker.walk(self.list_qdss_atid)
-        self.f.close()
+        with open(self.ramdump.outdir + "/ATID.txt", "w") as self.f:
+            print("{:<50} {}".format("Source Name", "ATID"), file=self.f)
+            print("{}".format("=" * 60), file=self.f)
+            list_walker.walk(self.list_qdss_atid)
 
     def parse_qdss_field(self, addr, stru, field, tab=1, HEX=False, str=False, indent=1):
-        if str:
-            val = self.ramdump.read_structure_cstring(addr, stru, field)
-        else:
-            val = self.ramdump.read_structure_field(addr, stru, field)
-            if HEX:
-                val = hex(val)
-        print("{}{}{}= {},".format('\t'*indent, field, '\t'*tab, val), file = self.f)
+        try:
+            if str:
+                val = self.ramdump.read_structure_cstring(addr, stru, field)
+            else:
+                val = self.ramdump.read_structure_field(addr, stru, field)
+                if val is None:
+                    raise Exception
+                if HEX:
+                    val = hex(val)
+            print("{}{}{}= {},".format('\t'*indent, field, '\t'*tab, val), file=self.f)
+        except Exception:
+            print("{}{}{}= Not available,".format('\t'*indent, field, '\t'*tab), file=self.f)
 
     def parse_clk_core(self, core):
-        print("struct clk_core {} :".format(hex(core)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(core, 'struct clk_core', 'name', 2, str=True)
-        self.parse_qdss_field(core, 'struct clk_core', 'hw', 3, HEX=True)
-        self.parse_qdss_field(core, 'struct clk_core', 'dev', 3, HEX=True)
-        self.parse_qdss_field(core, 'struct clk_core', 'of_node', 2, HEX=True)
-        self.parse_qdss_field(core, 'struct clk_core', 'rate', 2)
-        self.parse_qdss_field(core, 'struct clk_core', 'req_rate')
-        self.parse_qdss_field(core, 'struct clk_core', 'new_rate')
-        self.parse_qdss_field(core, 'struct clk_core', 'flags', 2)
-        self.parse_qdss_field(core, 'struct clk_core', 'orphan', 2)
-        self.parse_qdss_field(core, 'struct clk_core', 'rpm_enabled')
-        self.parse_qdss_field(core, 'struct clk_core', 'need_sync')
-        self.parse_qdss_field(core, 'struct clk_core', 'boot_enabled')
-        self.parse_qdss_field(core, 'struct clk_core', 'enable_count')
-        self.parse_qdss_field(core, 'struct clk_core', 'prepare_count')
-        self.parse_qdss_field(core, 'struct clk_core', 'protect_count')
-        self.parse_qdss_field(core, 'struct clk_core', 'phase', 2)
-        self.parse_qdss_field(core, 'struct clk_core', 'notifier_count')
-        self.parse_qdss_field(core, 'struct clk_core', 'ref', 3)
-        print("}", file = self.f)
+        struct_name = 'struct clk_core'
+        print("struct clk_core {} :".format(hex(core)), file=self.f)
+        self.parse_dynamic_struct(core, struct_name)
 
     def parse_clk(self, clk):
         errno_max = -1000
         if clk == 0 or clk > ctypes.c_uint64(errno_max).value:
             return
-        core = self.ramdump.read_structure_field(clk, 'struct clk', 'core')
 
-        print("struct clk {} :".format(hex(clk)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(clk, 'struct clk', 'core', tab=2, HEX=True)
-        self.parse_qdss_field(clk, 'struct clk', 'dev_id', tab=2, str=True)
-        self.parse_qdss_field(clk, 'struct clk', 'con_id', tab=2, str=True)
-        self.parse_qdss_field(clk, 'struct clk', 'min_rate', HEX=True)
-        self.parse_qdss_field(clk, 'struct clk', 'max_rate', HEX=True)
-        self.parse_qdss_field(clk, 'struct clk', 'exclusive_count')
-        print("}", file = self.f)
-        self.clk_core_set.add(core)
+        struct_name = 'struct clk'
+        print("struct clk {} :".format(hex(clk)), file=self.f)
+        self.parse_dynamic_struct(clk, struct_name)
+
+        core = self.ramdump.read_structure_field(clk, 'struct clk', 'core')
+        if core:
+            self.clk_core_set.add(core)
+
+    def _print_csdev_dev_info(self, dev_addr, nesting_level=1):
+        """Print key fields of an embedded struct device at dev_addr."""
+        indent = '\t' * nesting_level
+        dev_m = self.ramdump.get_structure_members('struct device')
+        if not dev_m:
+            return
+
+        if 'kobj' in dev_m:
+            kobj_addr = dev_addr + dev_m['kobj']['offset']
+            kobj_m = self.ramdump.get_structure_members('struct kobject')
+            if kobj_m and 'name' in kobj_m:
+                name_ptr = self.ramdump.read_u64(kobj_addr + kobj_m['name']['offset'])
+                if name_ptr:
+                    name_str = self.ramdump.read_cstring(name_ptr, 64)
+                    print("{}kobj.name\t= \"{}\",".format(indent, name_str or ''), file=self.f)
+
+        if 'driver' in dev_m:
+            drv = self.ramdump.read_u64(dev_addr + dev_m['driver']['offset'])
+            print("{}driver\t= {},".format(indent, hex(drv) if drv else '0x0'), file=self.f)
+
+        if 'power' in dev_m:
+            power_addr = dev_addr + dev_m['power']['offset']
+            pm_type = dev_m['power'].get('type', 'struct dev_pm_info').strip()
+            pm_m = self.ramdump.get_structure_members(pm_type)
+            if pm_m:
+                for field in ('runtime_status', 'disable_depth'):
+                    if field in pm_m:
+                        sz = pm_m[field]['size']
+                        val = self._read_member(power_addr + pm_m[field]['offset'], sz, False)
+                        if val is not None:
+                            print("{}power.{}\t= {},".format(indent, field, val), file=self.f)
 
     def parse_csdev(self, csdev):
-        cstype = self.ramdump.read_structure_field(csdev, 'struct coresight_device', 'type')
-        cstype = self.ramdump.enum_lookup('enum coresight_dev_type', cstype)
-
-        print("struct coresight_device {} :".format(hex(csdev)), file = self.f)
-        print("{", file = self.f)
-        print("\ttype\t\t= {},".format(cstype), file =self.f)
-        self.parse_qdss_field(csdev, 'struct coresight_device', 'refcnt', tab=2)
-        self.parse_qdss_field(csdev, 'struct coresight_device', 'orphan', tab=2)
-        if (self.ramdump.kernel_version < (6, 9, 0)):
-            self.parse_qdss_field(csdev, 'struct coresight_device', 'enable', tab=2)
-            self.parse_qdss_field(csdev, 'struct coresight_device', 'activated')
-        else:
-            mode = self.ramdump.read_structure_field(csdev, 'struct coresight_device', 'mode')
-            mode = self.ramdump.enum_lookup('enum cs_mode', mode)
-            print("\tmode\t\t= {},".format(mode), file =self.f)
-            self.parse_qdss_field(csdev, 'struct coresight_device', 'sysfs_sink_activated')
-        self.parse_qdss_field(csdev, 'struct coresight_device', 'def_sink')
-        self.parse_qdss_field(csdev, 'struct coresight_device', 'nr_links')
-        self.parse_qdss_field(csdev, 'struct coresight_device', 'has_conns_grp')
-        print("}", file = self.f)
-
-    def parse_gpr_dataset(self, gpr):
-        gpr_dirty = self.read_array(gpr + self.ramdump.field_offset('struct gpr_dataset', 'gpr_dirty'), 3, 'u64')
-        gp_regs = self.read_array(gpr + self.ramdump.field_offset('struct gpr_dataset', 'gp_regs'), 3, 'u64')
-
-        print("struct gpr_dataset {} :".format(hex(gpr)), file = self.f)
-        print("{", file = self.f)
-        print("\tgpr_dirty\t= {},".format(gpr_dirty), file =self.f)
-        print("\tgp_regs\t\t= {}".format(gp_regs), file =self.f)
-        print("}", file = self.f)
-
-    def parse_bc_dataset(self, bc):
-        capture_mode = self.ramdump.read_structure_field(bc, 'struct bc_dataset', 'capture_mode')
-        capture_mode = self.ramdump.enum_lookup('enum tpdm_mode', capture_mode)
-        retrieval_mode = self.ramdump.read_structure_field(bc, 'struct bc_dataset', 'retrieval_mode')
-        retrieval_mode = self.ramdump.enum_lookup('enum tpdm_mode', retrieval_mode)
-        trig_val_lo = self.read_array(bc + self.ramdump.field_offset('struct bc_dataset', 'trig_val_lo'), 32, 'u32')
-        trig_val_hi = self.read_array(bc + self.ramdump.field_offset('struct bc_dataset', 'trig_val_hi'), 32, 'u32')
-        overflow_val = self.read_array(bc + self.ramdump.field_offset('struct bc_dataset', 'overflow_val'), 6, 'u32')
-        msr = self.read_array(bc + self.ramdump.field_offset('struct bc_dataset', 'msr'), 4, 'u32')
-
-        print("struct bc_dataset {} :".format(hex(bc)), file = self.f)
-        print("{", file = self.f)
-        print("\tcapture_mode\t= {},".format(capture_mode), file =self.f)
-        print("\tretrieval_mode\t= {},".format(retrieval_mode), file =self.f)
-        self.parse_qdss_field(bc, 'struct bc_dataset', 'sat_mode', 2)
-        self.parse_qdss_field(bc, 'struct bc_dataset', 'enable_counters')
-        self.parse_qdss_field(bc, 'struct bc_dataset', 'clear_counters')
-        self.parse_qdss_field(bc, 'struct bc_dataset', 'enable_irq', 2)
-        self.parse_qdss_field(bc, 'struct bc_dataset', 'clear_irq', 2)
-        print("\ttrig_val_lo\t= {},".format(trig_val_lo), file =self.f)
-        print("\ttrig_val_hi\t= {},".format(trig_val_hi), file =self.f)
-        self.parse_qdss_field(bc, 'struct bc_dataset', 'enable_ganging')
-        print("\toverflow_val\t= {},".format(overflow_val), file =self.f)
-        print("\tmsr\t\t\t= {}".format(msr), file =self.f)
-        print("}", file = self.f)
-
-    def parse_tc_dataset(self, tc):
-        capture_mode = self.ramdump.read_structure_field(tc, 'struct bc_dataset', 'capture_mode')
-        capture_mode = self.ramdump.enum_lookup('enum tpdm_mode', capture_mode)
-        retrieval_mode = self.ramdump.read_structure_field(tc, 'struct bc_dataset', 'retrieval_mode')
-        retrieval_mode = self.ramdump.enum_lookup('enum tpdm_mode', retrieval_mode)
-        trig_val_lo = self.read_array(tc + self.ramdump.field_offset('struct tc_dataset', 'trig_val_lo'), 8, 'u32')
-        trig_val_hi = self.read_array(tc + self.ramdump.field_offset('struct tc_dataset', 'trig_val_hi'), 8, 'u32')
-        trig_sel = self.read_array(tc + self.ramdump.field_offset('struct tc_dataset', 'trig_sel'), 8, 'u32')
-        msr = self.read_array(tc + self.ramdump.field_offset('struct tc_dataset', 'msr'), 6, 'u32')
-        print("struct tc_dataset {} :".format(hex(tc)), file = self.f)
-        print("{", file = self.f)
-        print("\tcapture_mode\t= {},".format(capture_mode), file =self.f)
-        print("\tretrieval_mode\t= {},".format(retrieval_mode), file =self.f)
-        self.parse_qdss_field(tc, 'struct tc_dataset', 'sat_mode', 2)
-        self.parse_qdss_field(tc, 'struct tc_dataset', 'enable_counters')
-        self.parse_qdss_field(tc, 'struct tc_dataset', 'clear_counters')
-        self.parse_qdss_field(tc, 'struct tc_dataset', 'enable_irq', 2)
-        self.parse_qdss_field(tc, 'struct tc_dataset', 'clear_irq', 2)
-        print("\ttrig_sel\t\t= {},".format(trig_sel), file =self.f)
-        print("\ttrig_val_lo\t\t= {},".format(trig_val_lo), file =self.f)
-        print("\ttrig_val_hi\t\t= {},".format(trig_val_hi), file =self.f)
-        print("\tmsr\t\t\t= {}".format(msr), file =self.f)
-        print("}", file = self.f)
-
-    def parse_dsb_dataset(self, dsb):
-        mode = self.ramdump.read_structure_field(dsb, 'struct dsb_dataset', 'mode')
-        edge_ctrl = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'edge_ctrl'), 16, 'u32')
-        edge_ctrl_mask = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'edge_ctrl_mask'), 8, 'u32')
-        patt_val = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'patt_val'), 8, 'u32')
-        patt_mask = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'patt_mask'), 8, 'u32')
-        trig_patt_val = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'trig_patt_val'), 8, 'u32')
-        trig_patt_mask = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'trig_patt_mask'), 8, 'u32')
-        select_val = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'select_val'), 8, 'u32')
-        msr = self.read_array(dsb + self.ramdump.field_offset('struct dsb_dataset', 'msr'), 8, 'u32')
-        print("struct dsb_dataset {} :".format(hex(dsb)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(dsb, 'struct dsb_dataset', 'mode', 2)
-        print("\tedge_ctrl\t= {},".format(edge_ctrl), file =self.f)
-        print("\tedge_ctrl_mask\t= {},".format(edge_ctrl_mask), file =self.f)
-        print("\tpatt_val\t= {},".format(patt_val), file =self.f)
-        print("\tpatt_mask\t= {},".format(patt_mask), file =self.f)
-        self.parse_qdss_field(dsb, 'struct dsb_dataset', 'patt_ts', 2)
-        self.parse_qdss_field(dsb, 'struct dsb_dataset', 'patt_type')
-        print("\ttrig_patt_val\t= {},".format(trig_patt_val), file =self.f)
-        print("\ttrig_patt_mask\t= {},".format(trig_patt_mask), file =self.f)
-        self.parse_qdss_field(dsb, 'struct dsb_dataset', 'trig_ts', 2)
-        self.parse_qdss_field(dsb, 'struct dsb_dataset', 'trig_type')
-        print("\tselect_val\t= {},".format(select_val), file =self.f)
-        print("\tmsr\t\t\t= {}".format(msr), file =self.f)
-        print("}", file = self.f)
-
-    def parse_cmb_dataset(self, cmb):
-        patt_val = self.read_array(cmb + self.ramdump.field_offset('struct cmb_dataset', 'patt_val'), 2, 'u32')
-        patt_mask = self.read_array(cmb + self.ramdump.field_offset('struct cmb_dataset', 'patt_mask'), 2, 'u32')
-        trig_patt_val = self.read_array(cmb + self.ramdump.field_offset('struct cmb_dataset', 'trig_patt_val'), 2, 'u32')
-        trig_patt_mask = self.read_array(cmb + self.ramdump.field_offset('struct cmb_dataset', 'trig_patt_mask'), 2, 'u32')
-        msr = self.read_array(cmb + self.ramdump.field_offset('struct cmb_dataset', 'msr'), 8, 'u32')
-        print("struct cmb_dataset {} :".format(hex(cmb)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(cmb, 'struct cmb_dataset', 'trace_mode')
-        self.parse_qdss_field(cmb, 'struct cmb_dataset', 'cycle_acc')
-        print("\tpatt_val\t= {},".format(patt_val), file =self.f)
-        print("\tpatt_mask\t= {},".format(patt_mask), file =self.f)
-        self.parse_qdss_field(cmb, 'struct cmb_dataset', 'patt_ts', 2)
-        print("\ttrig_patt_val\t= {},".format(trig_patt_val), file =self.f)
-        print("\ttrig_patt_mask\t= {},".format(trig_patt_mask), file =self.f)
-        self.parse_qdss_field(cmb, 'struct cmb_dataset', 'trig_ts', 2)
-        self.parse_qdss_field(cmb, 'struct cmb_dataset', 'ts_all', 2)
-        print("\tmsr\t\t\t= {},".format(msr), file =self.f)
-        self.parse_qdss_field(cmb, 'struct cmb_dataset', 'read_ctl_reg')
-        self.parse_qdss_field(cmb, 'struct cmb_dataset', 'mcmb', 2, HEX=True)
-        print("}", file = self.f)
-
-    def parse_tpdm_drvdata(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'base')
-        if base == 0:
-            base_phy = 0
-        else:
-            base_phy = self.ramdump.virt_to_phys(base)
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'atclk')
-        if (self.ramdump.kernel_version > (6, 7, 0)):
-            self.parse_csdev(csdev)
-            self.parse_clk(atclk)
-            return
-        nr_tclk = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'nr_tclk')
-        nr_treg = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'nr_treg')
-        gpr = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'gpr')
-        bc = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'bc')
-        tc = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'tc')
-        dsb = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'dsb')
-        cmb = self.ramdump.read_structure_field(drvdata, 'struct tpdm_drvdata', 'cmb')
-
-        print("struct tpdm_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        print("\tnr_tclk\t\t= {},".format(ctypes.c_int32(nr_tclk).value), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'tclk', 2, HEX=True)
-        print("\tnr_treg\t\t= {},".format(ctypes.c_int32(nr_treg).value), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'treg', 2, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'enable', 2)
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'clk_enable')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'datasets')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'enable_ds')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'tc_trig_type')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'bc_trig_type')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'bc_gang_type')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'bc_counters_avail')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'tc_counters_avail')
-        print("\tgpr\t\t\t= {},".format(hex(gpr)), file =self.f)
-        print("\tbc\t\t\t= {},".format(hex(bc)), file =self.f)
-        print("\ttc\t\t\t= {},".format(hex(tc)), file =self.f)
-        print("\tdsb\t\t\t= {},".format(hex(dsb)), file =self.f)
-        print("\tcmb\t\t\t= {},".format(hex(cmb)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'traceid', 2)
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'version', 2)
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'msr_support')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'msr_fix_req')
-        self.parse_qdss_field(drvdata, 'struct tpdm_drvdata', 'cmb_msr_skip')
-        print("\tatclk\t\t= {}".format(hex(atclk)), file =self.f)
-        print("}", file = self.f)
-        if gpr:
-            self.parse_gpr_dataset(gpr)
-        if bc:
-            self.parse_bc_dataset(bc)
-        if tc:
-            self.parse_tc_dataset(tc)
-        if dsb:
-            self.parse_dsb_dataset(dsb)
-        if cmb:
-            self.parse_cmb_dataset(cmb)
-        self.parse_csdev(csdev)
-        self.parse_clk(atclk)
+        struct_name = 'struct coresight_device'
+        print("coresight_device @ {} :".format(hex(csdev)), file=self.f)
+        self.parse_dynamic_struct(csdev, struct_name)
 
     def parse_tpdm_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        self.parse_tpdm_drvdata(drvdata, device)
-        self.parse_clk(clk)
-
-    def parse_static_tpdm_component(self, drvdata, device):
-        self.parse_tpdm_drvdata(drvdata, device)
+        struct_name = 'struct tpdm_drvdata'
+        print("struct tpdm_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name, visited=self._follow_visited)
 
     def read_array(self, addr, count, datatype):
         array = [0] *count
@@ -1001,582 +972,829 @@ class QDSSDump():
         return array
 
     def parse_tpda_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct tpda_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct tpda_drvdata', 'base')
-        base_phy = self.ramdump.virt_to_phys(base)
-        if (self.ramdump.kernel_version < (6, 7, 0)):
-            bc_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'bc_esize'), 32, 'u32')
-            tc_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'tc_esize'), 32, 'u32')
-        dsb_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'dsb_esize'), 32, 'u32')
-        cmb_esize = self.read_array(drvdata + self.ramdump.field_offset('struct tpda_drvdata', 'cmb_esize'), 32, 'u32')
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct tpda_drvdata', 'atclk')
-        print("struct tpda_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'enable', 2)
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'atid', 2)
-        if (self.ramdump.kernel_version < (6, 7, 0)):
-            print("\tbc_esize\t= {},".format(bc_esize), file =self.f)
-            print("\ttc_esize\t= {},".format(tc_esize), file =self.f)
-        print("\tdsb_esize\t= {},".format(dsb_esize), file =self.f)
-        print("\tcmb_esize\t= {},".format(cmb_esize), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'trig_async')
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'trig_flag_ts')
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'trig_freq')
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'freq_ts', 2)
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'freq_req_val')
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'freq_req')
-        self.parse_qdss_field(drvdata, 'struct tpda_drvdata', 'cmbchan_mode')
-        print("\tatclk\t\t= {}".format(hex(atclk)), file =self.f)
-        print("}", file = self.f)
-        self.parse_clk(clk)
-        self.parse_clk(atclk)
-        self.parse_csdev(csdev)
+        struct_name = 'struct tpda_drvdata'
+        print("struct tpda_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_stm_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct stm_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct stm_drvdata', 'base')
-        base_phy = self.ramdump.virt_to_phys(base)
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct stm_drvdata', 'atclk')
-        chs = drvdata + self.ramdump.field_offset('struct stm_drvdata', 'chs')
-        stm = drvdata + self.ramdump.field_offset('struct stm_drvdata', 'stm')
+        struct_name = 'struct stm_drvdata'
+        print("struct stm_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
-        print("struct stm_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tatclk\t\t= {},".format(hex(atclk)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        print("\tchs\t\t\t= {", file = self.f)
-        self.parse_qdss_field(chs, 'struct channel_space', 'base', 2, HEX=True, indent=2)
-        self.parse_qdss_field(chs, 'struct channel_space', 'phys', 2, HEX=True, indent=2)
-        self.parse_qdss_field(chs, 'struct channel_space', 'guaranteed', HEX=True, indent=2)
-        print("\t},", file = self.f)
-        print("\tstm\t\t\t= {", file = self.f)
-        self.parse_qdss_field(stm, 'struct stm_data', 'name', 2, str=True, indent=2)
-        self.parse_qdss_field(stm, 'struct stm_data', 'stm', 3, HEX=True, indent=2)
-        self.parse_qdss_field(stm, 'struct stm_data', 'sw_start', indent=2)
-        self.parse_qdss_field(stm, 'struct stm_data', 'sw_end', 2, indent=2)
-        self.parse_qdss_field(stm, 'struct stm_data', 'sw_nchannels', indent=2)
-        self.parse_qdss_field(stm, 'struct stm_data', 'sw_mmiosz', indent=2)
-        self.parse_qdss_field(stm, 'struct stm_data', 'hw_override', indent=2)
-        print("\t},", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'traceid', 2)
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'write_bytes')
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'stmsper', 2)
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'stmspscr')
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'numsp', 2)
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'stmheer', 2)
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'stmheter')
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'stmhebsr')
-        self.parse_qdss_field(drvdata, 'struct stm_drvdata', 'static_atid')
-        print("}", file = self.f)
-        self.parse_clk(clk)
-        self.parse_clk(atclk)
-        self.parse_csdev(csdev)
+    def _uetm_instance_type(self):
+        """Return the struct type name for uetm_instance, derived from debug info."""
+        if not hasattr(self, '_uetm_inst_type_cache'):
+            m = self.ramdump.get_structure_members('struct uetm_drvdata')
+            if m and 'uetm_instances' in m:
+                raw = m['uetm_instances'].get('type', '')
+                self._uetm_inst_type_cache = raw.strip().rstrip('*').strip() or 'struct uetm_instance'
+            else:
+                self._uetm_inst_type_cache = 'struct uetm_instance'
+        return self._uetm_inst_type_cache
 
     def parse_uetm_component(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct uetm_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct uetm_drvdata', 'base')
-        base_phy = self.ramdump.virt_to_phys(base)
-        print("struct uetm_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'lane', 2)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'base_address', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'uetm_id', 2)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'traceid', 2)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'size', 2)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'core_id', 2)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'cluster_id')
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'state_idx')
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'lane_idx')
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'enable', 2)
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'uncore_uetm')
-        self.parse_qdss_field(drvdata, 'struct uetm_drvdata', 'config', 2, HEX=True)
-        print("}", file = self.f)
-        self.parse_csdev(csdev)
+        # Print uetm_drvdata once (it is shared across all csdevs in v2).
+        if not hasattr(self, '_uetm_seen'):
+            self._uetm_seen = set()
+        if drvdata not in self._uetm_seen:
+            self._uetm_seen.add(drvdata)
+            struct_name = 'struct uetm_drvdata'
+            print("struct uetm_drvdata {} :".format(hex(drvdata)), file=self.f)
+            self.parse_dynamic_struct(drvdata, struct_name)
+            self._follow_struct_pointers(drvdata, struct_name)
+
+        # v2: each csdev stores its own uetm_instance in csdev->dev.driver_data.
+        # v1: csdev->dev.driver_data == drvdata (same pointer) — skip instance block.
+        inst_ptr = self.ramdump.read_structure_field(device, 'struct device', 'driver_data')
+        if inst_ptr and inst_ptr != drvdata:
+            inst_type = self._uetm_instance_type()
+            print("{} @ {} :".format(inst_type, hex(inst_ptr)), file=self.f)
+            self.parse_dynamic_struct(inst_ptr, inst_type)
+            self._follow_struct_pointers(inst_ptr, inst_type)
 
     def parse_qmi_component(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct qmi_drvdata', 'csdev')
-        s_addr = drvdata + self.ramdump.field_offset('struct qmi_drvdata', 's_addr')
-        print("struct qmi_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct qmi_drvdata', 'inst_id', 2, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct qmi_drvdata', 'service_connected')
-        self.parse_qdss_field(drvdata, 'struct qmi_drvdata', 'security')
-        print("\ts_addr\t\t= {", file =self.f)
-        self.parse_qdss_field(s_addr, 'struct sockaddr_qrtr', 'sq_family', indent=2)
-        self.parse_qdss_field(s_addr, 'struct sockaddr_qrtr', 'sq_node', 2, indent=2)
-        self.parse_qdss_field(s_addr, 'struct sockaddr_qrtr', 'sq_port', 2, indent=2)
-        print("\t}", file = self.f)
-        print("}", file = self.f)
-        self.parse_csdev(csdev)
+        struct_name = 'struct qmi_drvdata'
+        print("struct qmi_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_trace_noc_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct trace_noc_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct trace_noc_drvdata', 'base')
-        base_phy = self.ramdump.virt_to_phys(base)
-        print("struct trace_noc_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'version', 2)
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'enable', 2)
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'flushReq')
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'freqTsReq')
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'atid', 2)
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'freq_req_val')
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'flushStatus')
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'freqType')
-        self.parse_qdss_field(drvdata, 'struct trace_noc_drvdata', 'flagType')
-        print("}", file = self.f)
-        self.parse_clk(clk)
-        self.parse_csdev(csdev)
+        struct_name = 'struct trace_noc_drvdata'
+        print("struct trace_noc_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
-    def parse_replicator_drvdata(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct replicator_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct replicator_drvdata', 'base')
-        if base == 0:
-            base_phy = 0
-        else:
-            base_phy = self.ramdump.virt_to_phys(base)
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct replicator_drvdata', 'atclk')
-        print("struct replicator_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tatclk\t\t= {},".format(hex(atclk)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct replicator_drvdata', 'check_idfilter_val')
-        self.parse_qdss_field(drvdata, 'struct replicator_drvdata', 'delayed', 2)
-        print("}", file = self.f)
-        self.parse_clk(atclk)
-        self.parse_csdev(csdev)
-
-    def parse_static_replicator_component(self, drvdata, device):
-        self.parse_replicator_drvdata(drvdata, device)
-
-    def parse_dynamic_replicator_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        self.parse_replicator_drvdata(drvdata, device)
-        self.parse_clk(clk)
+    def parse_replicator_component(self, drvdata, device):
+        struct_name = 'struct replicator_drvdata'
+        print("struct replicator_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_csr_component(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct csr_drvdata', 'csdev')
-        clk = self.ramdump.read_structure_field(drvdata, 'struct csr_drvdata', 'clk')
+        struct_name = 'struct csr_drvdata'
+        print("struct csr_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
-        print("struct csr_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'base', 2, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'pbase', 2, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'msr_start', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'msr_end', 2, HEX=True)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'msr', 3, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'msr_refcnt', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'blksize', 2)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'flushperiod')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'hbeat_val0')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'hbeat_val1')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'hbeat_mask0')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'hbeat_mask1')
-        print("\tclk\t\t= {},".format(hex(clk)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'usb_bam_support')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'perflsheot_set_support')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'hwctrl_set_support')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'set_byte_cntr_support')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'timestamp_support')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'enable_flush')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'msr_support')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'aodbg_csr_support')
-        self.parse_qdss_field(drvdata, 'struct csr_drvdata', 'atid_offset')
-        print("}", file = self.f)
-        self.parse_clk(clk)
-        self.parse_csdev(csdev)
+    def _read_member(self, addr, size, is_pointer):
+        """Read a scalar/pointer field at addr given its size in bytes."""
+        if size == 1:
+            val = self.ramdump.read_byte(addr)
+        elif size == 2:
+            val = self.ramdump.read_u16(addr)
+        elif size == 4:
+            val = self.ramdump.read_u32(addr)
+        elif size == 8:
+            val = self.ramdump.read_u64(addr)
+        else:
+            return None
+        if val is not None and is_pointer:
+            return hex(val)
+        return val
+
+    def _print_struct_members(self, struct_addr, struct_name, nesting_level):
+        """Recursively prints all members of struct_name at struct_addr.
+        Uses offset/size extracted from ptype /o to avoid separate GDB queries.
+        """
+        if nesting_level > 8:
+            print("{}/* max nesting depth */".format('\t' * nesting_level), file=self.f)
+            return
+        try:
+            members = self.ramdump.get_structure_members(struct_name)
+            if not members:
+                print("{}/* no symbol info for {} */".format('\t' * nesting_level, struct_name), file=self.f)
+                return
+
+            # Pre-scan: collect byte ranges covered by embedded struct/union members.
+            # GDB sometimes promotes anonymous-union or named-union members to the
+            # parent struct level, producing scalar "ghost" fields whose offsets
+            # fall inside an already-present struct/union field.  We suppress them.
+            struct_ranges = []
+            for minfo in members.values():
+                if minfo.get('array_size', 0) > 0 or minfo.get('is_pointer', False):
+                    continue
+                moff = minfo.get('offset')
+                msz  = minfo.get('size')
+                if moff is None or msz is None or msz == 0:
+                    continue
+                if minfo.get('is_struct', False) or msz > 8:
+                    struct_ranges.append((moff, moff + msz))
+
+            for member_name, member_info in members.items():
+                field_type = member_info.get('type', '')
+                array_size = member_info.get('array_size', 0)
+                is_pointer = member_info.get('is_pointer', False)
+                is_struct = member_info.get('is_struct', False)
+                offset = member_info.get('offset')
+                size = member_info.get('size')
+
+                if offset is None or size is None:
+                    print("{}{}\t= [no layout info],".format('\t' * nesting_level, member_name), file=self.f)
+                    continue
+
+                # Suppress ghost scalar/pointer fields promoted from nested
+                # unions/structs: skip if their byte range is fully covered by
+                # an embedded struct/union field at the same or enclosing offset.
+                if array_size == 0 and not (is_struct or (not is_pointer and size > 8)):
+                    end = offset + size
+                    if any(s <= offset and end <= e for s, e in struct_ranges):
+                        continue
+
+                field_addr = struct_addr + offset
+
+                if array_size > 0:
+                    # Array: total size / count = element size
+                    elem_size = size // array_size if array_size else 0
+                    dt = None
+                    if elem_size == 1:
+                        dt = 'u8'
+                    elif elem_size == 4:
+                        dt = 'u32'
+                    elif elem_size == 8:
+                        dt = 'u64'
+                    if dt:
+                        try:
+                            arr = self.read_array(field_addr, array_size, dt)
+                            print("{}{}\t= {},".format('\t' * nesting_level, member_name, arr), file=self.f)
+                        except Exception:
+                            print("{}{}\t= [array read error],".format('\t' * nesting_level, member_name), file=self.f)
+                    else:
+                        print(
+                            "{}{}\t= [array elem size {} unsupported],".format(
+                                '\t' * nesting_level, member_name, elem_size),
+                            file=self.f)
+
+                elif is_struct or (not is_pointer and size > 8):
+                    # Embedded struct or typedef (spinlock_t, atomic_t, …).
+                    # Priority: custom handler > blacklist (placeholder) > recursive expand.
+                    # The nesting depth cap (level > 8) prevents runaway recursion.
+                    handler = self._EMBEDDED_STRUCT_HANDLERS.get((struct_name, member_name))
+                    if handler:
+                        print("{}{}\t= {{".format('\t' * nesting_level, member_name), file=self.f)
+                        getattr(self, handler)(field_addr, nesting_level + 1)
+                        print("{}}},".format('\t' * nesting_level), file=self.f)
+                    elif field_type in self._POINTER_FOLLOW_BLACKLIST:
+                        print("{}{}\t= {{ /* {} ({} bytes) */ }},".format(
+                            '\t' * nesting_level, member_name, field_type, size), file=self.f)
+                    else:
+                        print("{}{}\t= {{".format('\t' * nesting_level, member_name), file=self.f)
+                        nested_members = self.ramdump.get_structure_members(field_type)
+                        if nested_members:
+                            self._print_struct_members(field_addr, field_type, nesting_level + 1)
+                        else:
+                            print("{}/* {} ({} bytes) */".format(
+                                '\t' * (nesting_level + 1), field_type, size), file=self.f)
+                        print("{}}},".format('\t' * nesting_level), file=self.f)
+
+                else:
+                    # Scalar or pointer: read directly using offset/size from ptype
+                    val = self._read_member(field_addr, size, is_pointer)
+                    if val is not None:
+                        enum_map = self._ENUM_MAPS.get((struct_name, member_name))
+                        if enum_map and val in enum_map:
+                            display = '{} /* {} */'.format(val, enum_map[val])
+                        else:
+                            display = val
+                        print("{}{}\t= {},".format('\t' * nesting_level, member_name, display), file=self.f)
+                    else:
+                        print("{}{}\t= Not available,".format('\t' * nesting_level, member_name), file=self.f)
+        except Exception as e:
+            print("{}/* error parsing {}: {} */".format('\t' * nesting_level, struct_name, str(e)), file=self.f)
+
+    def parse_dynamic_struct(self, struct_addr, struct_name, nesting_level=1):
+        """Dynamically discovers and prints all members of a structure."""
+        print("{}{{".format('\t' * (nesting_level - 1)), file=self.f)
+        self._print_struct_members(struct_addr, struct_name, nesting_level)
+        print("{}}}".format('\t' * (nesting_level - 1)), file=self.f)
 
     def parse_tgu_component(self, drvdata, device):
-        pclk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'base')
-        base_phy = self.ramdump.virt_to_phys(base)
-        clk = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'clk')
-        max_steps = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'max_steps')
-        max_conditions = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'max_conditions')
-        max_regs = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'max_regs')
-        max_timer_counter = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'max_timer_counter')
-        grp_data = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'grp_data')
-        condition_data = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'condition_data')
-        select_data = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'select_data')
-        timer_data = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'timer_data')
-        counter_data = self.ramdump.read_structure_field(drvdata, 'struct tgu_drvdata', 'counter_data')
-
-        print("struct tgu_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        print("\tclk\t\t\t= {},".format(hex(clk)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'max_steps')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'max_conditions')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'max_regs')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'max_timer_counter')
-        print("\tgrp_data\t= {} :".format(hex(grp_data)), file =self.f)
-        print("\t{", file = self.f)
-        self.parse_qdss_field(grp_data, 'struct Trigger_group_data', 'grpaddr', 2, HEX=True, indent=2)
-        self.parse_qdss_field(grp_data, 'struct Trigger_group_data', 'value', 2, indent=2)
-        print("\t},", file = self.f)
-        print("\tcondition_data\t= {} :".format(hex(condition_data)), file =self.f)
-        print("\t{", file = self.f)
-        self.parse_qdss_field(condition_data, 'struct Trigger_condition_data', 'condaddr', HEX=True, indent=2)
-        self.parse_qdss_field(condition_data, 'struct Trigger_condition_data', 'value', 2, indent=2)
-        print("\t},", file = self.f)
-        print("\tselect_data\t= {} :".format(hex(select_data)), file =self.f)
-        print("\t{", file = self.f)
-        self.parse_qdss_field(select_data, 'struct Trigger_select_data', 'selectaddr', HEX=True, indent=2)
-        self.parse_qdss_field(select_data, 'struct Trigger_select_data', 'value', 2, indent=2)
-        print("\t},", file = self.f)
-        print("\ttimer_data\t= {} :".format(hex(timer_data)), file =self.f)
-        print("\t{", file = self.f)
-        self.parse_qdss_field(timer_data, 'struct Trigger_timer_data', 'timeraddr', HEX=True, indent=2)
-        self.parse_qdss_field(timer_data, 'struct Trigger_timer_data', 'value', 2, indent=2)
-        print("\t},", file = self.f)
-        print("\tcounter_data\t= {} :".format(hex(counter_data)), file =self.f)
-        print("\t{", file = self.f)
-        self.parse_qdss_field(counter_data, 'struct Trigger_counter_data', 'counteraddr', HEX=True, indent=2)
-        self.parse_qdss_field(counter_data, 'struct Trigger_counter_data', 'value', 2, indent=2)
-        print("\t},", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'grp_refcnt')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'cond_refcnt')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'select_refcnt')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'timer_refcnt')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'counter_refcnt')
-        self.parse_qdss_field(drvdata, 'struct tgu_drvdata', 'enable', 2)
-        print("}", file = self.f)
-        self.parse_clk(pclk)
-        self.parse_csdev(csdev)
+        struct_name = 'struct tgu_drvdata'
+        print("struct tgu_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_cti_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct cti_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct cti_drvdata', 'base')
-        base_phy = self.ramdump.virt_to_phys(base)
-        ctidev = drvdata + self.ramdump.field_offset('struct cti_drvdata', 'ctidev')
-        config = drvdata + self.ramdump.field_offset('struct cti_drvdata', 'config')
-        trig_in_use = self.read_array(config + self.ramdump.field_offset('struct cti_config','trig_in_use'), 2, 'u64')
-        trig_out_use = self.read_array(config + self.ramdump.field_offset('struct cti_config','trig_out_use'), 2, 'u64')
-        trig_out_filter = self.read_array(config + self.ramdump.field_offset('struct cti_config','trig_out_filter'), 2, 'u64')
-        ctiinen = self.read_array(config + self.ramdump.field_offset('struct cti_config','ctiinen'), 128, 'u32')
-        ctiouten = self.read_array(config + self.ramdump.field_offset('struct cti_config','ctiouten'), 128, 'u32')
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct cti_drvdata', 'atclk')
-
-        print("struct cti_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct cti_drvdata', 'extended_cti')
-        print("\tctidev\t\t= {", file =self.f)
-        self.parse_qdss_field(ctidev, 'struct cti_device', 'nr_trig_con', indent=2)
-        self.parse_qdss_field(ctidev, 'struct cti_device', 'ctm_id', indent=2)
-        self.parse_qdss_field(ctidev, 'struct cti_device', 'cpu', 2, HEX=True, indent=2)
-        print("\t}", file = self.f)
-        print("\tconfig\t\t= {", file =self.f)
-        self.parse_qdss_field(config, 'struct cti_config', 'nr_ctm_channels', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'nr_trig_max', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'enable_req_count', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'hw_enabled', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'hw_powered', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'hw_enabled_store', indent=2)
-        print("\t\ttrig_in_use\t\t= {},".format(trig_in_use), file =self.f)
-        print("\t\ttrig_out_use\t= {},".format(trig_out_use), file =self.f)
-        print("\t\ttrig_out_filter\t= {},".format(trig_out_filter), file =self.f)
-        self.parse_qdss_field(config, 'struct cti_config', 'trig_filter_enable', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'xtrig_rchan_sel', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'ctiappset', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'ctiinout_sel', indent=2)
-        print("\t\tctiinen\t\t= {},".format(ctiinen), file =self.f)
-        print("\t\tctiouten\t= {},".format(ctiouten), file =self.f)
-        self.parse_qdss_field(config, 'struct cti_config', 'ctigate', indent=2)
-        self.parse_qdss_field(config, 'struct cti_config', 'asicctl', indent=2)
-        print("\t}", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct cti_drvdata', 'gpio_trigin', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct cti_drvdata', 'gpio_trigout', HEX=True)
-        print("\tatclk\t\t= {}".format(hex(atclk)), file =self.f)
-        print("}", file = self.f)
-        self.parse_clk(clk)
-        self.parse_clk(atclk)
-        self.parse_csdev(csdev)
+        struct_name = 'struct cti_drvdata'
+        print("struct cti_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_secure_etr_component(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct secure_etr_drvdata', 'csdev')
-        clk = self.ramdump.read_structure_field(drvdata, 'struct secure_etr_drvdata', 'clk')
+        struct_name = 'struct secure_etr_drvdata'
+        print("struct secure_etr_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
-        print("struct secure_etr_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'dev', 3, HEX=True)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'sram_node', str=True)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'sram_class', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'real_name', str=True)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'real_sink', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'etm_inst_id')
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'reading', 2)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'mode', 2)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'etr_buf', 2, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'csr', 3, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'csr_name', str=True)
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'atid_offset')
-        self.parse_qdss_field(drvdata, 'struct secure_etr_drvdata', 'mem_size')
-        print("\tclk\t\t\t= {}".format(hex(clk)), file =self.f)
-        print("}", file = self.f)
-        self.parse_clk(clk)
-        self.parse_csdev(csdev)
-
-    def parse_funnel_drvdata(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct funnel_drvdata', 'csdev')
-        base = self.ramdump.read_structure_field(drvdata, 'struct funnel_drvdata', 'base')
-        if base == 0:
-            base_phy = 0
-        else:
-            base_phy = self.ramdump.virt_to_phys(base)
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct funnel_drvdata', 'atclk')
-
-        print("struct funnel_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tatclk\t\t= {},".format(hex(atclk)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct funnel_drvdata', 'priority')
-        print("}", file = self.f)
-        self.parse_clk(atclk)
-        self.parse_csdev(csdev)
-
-    def parse_static_funnel_component(self, drvdata, device):
-        self.parse_funnel_drvdata(drvdata, device)
-
-    def parse_dynamic_funnel_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        self.parse_funnel_drvdata(drvdata, device)
-        self.parse_clk(clk)
+    def parse_funnel_component(self, drvdata, device):
+        struct_name = 'struct funnel_drvdata'
+        print("struct funnel_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_dummy_component(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct dummy_drvdata', 'csdev')
-
-        print("struct dummy_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct dummy_drvdata', 'dev', 3, HEX=True)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct dummy_drvdata', 'traceid', 2)
-        self.parse_qdss_field(drvdata, 'struct dummy_drvdata', 'static_atid')
-        print("}", file = self.f)
-        self.parse_csdev(csdev)
+        struct_name = 'struct dummy_drvdata'
+        print("struct dummy_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_remote_etm_component(self, drvdata, device):
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'csdev')
-        traceids = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'traceids')
-        num_trcid = self.ramdump.read_structure_field(drvdata, 'struct remote_etm_drvdata', 'num_trcid')
-        traceid = self.read_array(traceids, num_trcid, 'u8')
+        import io
+        struct_name = 'struct remote_etm_drvdata'
+        print("struct remote_etm_drvdata {} :".format(hex(drvdata)), file=self.f)
 
-        print("struct remote_etm_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct remote_etm_drvdata', 'dev', 3, HEX=True)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct remote_etm_drvdata', 'enable', 2)
-        print("\ttraceids\t= {} : {},".format(hex(traceids), traceid), file =self.f)
-        print("\tnum_trcid\t= {},".format(num_trcid), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct remote_etm_drvdata', 'static_atid')
-        print("}", file = self.f)
-        self.parse_csdev(csdev)
+        # Read traceids array before capturing struct output so we can inline it.
+        ids_str = None
+        members = self.ramdump.get_structure_members(struct_name)
+        if members and 'traceids' in members and 'num_trcid' in members:
+            num_trcid = self._read_member(
+                drvdata + members['num_trcid']['offset'],
+                members['num_trcid']['size'], False)
+            traceids_ptr = self.ramdump.read_u64(drvdata + members['traceids']['offset'])
+            if traceids_ptr and num_trcid and num_trcid <= 64:
+                ids = []
+                for i in range(num_trcid):
+                    b = self.ramdump.read_byte(traceids_ptr + i)
+                    ids.append('0x{:02x}'.format(b) if b is not None else '??')
+                ids_str = '[{}]'.format(', '.join(ids))
+
+        # Capture parse_dynamic_struct output and replace the raw pointer line inline.
+        real_f = self.f
+        self.f = io.StringIO()
+        try:
+            self.parse_dynamic_struct(drvdata, struct_name)
+            struct_out = self.f.getvalue()
+        finally:
+            self.f = real_f
+        if ids_str:
+            struct_out = re.sub(
+                r'(\btraceids\s*=\s*)0x[0-9a-fA-F]+',
+                r'\g<1>' + ids_str,
+                struct_out)
+        self.f.write(struct_out)
+
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_tmc_component(self, drvdata, device):
-        clk = self.ramdump.read_structure_field(device - self.amba_dev_offset, 'struct amba_device', 'pclk')
-        base = self.ramdump.read_structure_field(drvdata, 'struct tmc_drvdata', 'base')
-        base_phy = self.ramdump.virt_to_phys(base)
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct tmc_drvdata', 'csdev')
-        config_type = self.ramdump.read_structure_field(drvdata, 'struct tmc_drvdata', 'config_type')
-        config_type = self.ramdump.enum_lookup('enum tmc_config_type', config_type)
-        memwidth = self.ramdump.read_structure_field(drvdata, 'struct tmc_drvdata', 'memwidth')
-        memwidth = self.ramdump.enum_lookup('enum tmc_mem_intf_width', memwidth)
-        out_mode = self.ramdump.read_structure_field(drvdata, 'struct tmc_drvdata', 'out_mode')
-        out_mode = self.ramdump.enum_lookup('enum tmc_etr_out_mode', out_mode)
-        atclk = self.ramdump.read_structure_field(drvdata, 'struct tmc_drvdata', 'atclk')
-
-        print("struct tmc_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tbase\t\t= {} (phys:{}),".format(hex(base),hex(base_phy)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'pid', 3, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'reading', 2)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'busy', 2)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'buf', 3, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'len', 3)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'size', 2)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'max_burst_size')
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'mode', 2)
-        print("\tconfig_type\t= {},".format(config_type), file =self.f)
-        print("\tmemwidth\t= {},".format(memwidth), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'trigger_cntr')
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'etr_caps')
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'sysfs_buf', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'perf_buf', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'byte_cntr', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'csr', 3, HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'csr_name', str=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'atid_offset')
-        print("\tout_mode\t= {},".format(out_mode), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'usb_data', HEX=True)
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'stop_on_flush')
-        self.parse_qdss_field(drvdata, 'struct tmc_drvdata', 'delayed', 2, HEX=True)
-        print("\tatclk\t\t= {}".format(hex(atclk)), file =self.f)
-        print("}", file = self.f)
-        self.parse_clk(atclk)
-        self.parse_clk(clk)
-        self.parse_csdev(csdev)
+        struct_name = 'struct tmc_drvdata'
+        print("tmc_drvdata @ {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
     def parse_etm4_platform_component(self, drvdata, device):
-        pclk = self.ramdump.read_structure_field(drvdata, 'struct etmv4_drvdata', 'pclk')
-        base = self.ramdump.read_structure_field(drvdata, 'struct etmv4_drvdata', 'base')
-        csdev = self.ramdump.read_structure_field(drvdata, 'struct etmv4_drvdata', 'csdev')
-        config = drvdata + self.ramdump.field_offset('struct etmv4_drvdata', 'config')
-        seq_ctrl = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'seq_ctrl'), 4 , 'u32')
-        cntrldvr = self.read_array(config + self.ramdump.field_offset( 'struct etmv4_config', 'cntrldvr'), 4, 'u32')
-        cntr_ctrl = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'cntr_ctrl'), 4, 'u32')
-        cntr_val = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'cntr_val'), 4, 'u32')
-        res_ctrl = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'res_ctrl'), 32, 'u32')
-        ss_ctrl = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'ss_ctrl'), 8, 'u32')
-        ss_status = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'ss_status'), 8, 'u32')
-        ss_pe_cmp = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'ss_pe_cmp'), 8, 'u32')
-        addr_val = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'addr_val'), 16, 'u64')
-        addr_acc = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'addr_acc'), 16, 'u64')
-        addr_type = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'addr_type'), 16, 'u8')
-        ctxid_pid = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'ctxid_pid'), 8, 'u64')
-        vmid_val = self.read_array(config + self.ramdump.field_offset('struct etmv4_config', 'vmid_val'), 8, 'u64')
+        struct_name = 'struct etmv4_drvdata'
+        print("struct etmv4_drvdata {} :".format(hex(drvdata)), file=self.f)
+        self.parse_dynamic_struct(drvdata, struct_name)
+        self._follow_struct_pointers(drvdata, struct_name)
 
-        print("struct etmv4_drvdata {} :".format(hex(drvdata)), file = self.f)
-        print("{", file = self.f)
-        print("\tpclk\t\t= {},".format(hex(pclk)), file =self.f)
-        print("\tbase\t\t= {},".format(hex(base)), file =self.f)
-        print("\tcsdev\t\t= {},".format(hex(csdev)), file =self.f)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'mode', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'cpu', 3)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'arch', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_pe', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_pe_cmp')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_addr_cmp')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_cntr', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'ext_inp_sel')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_ext_inp')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'numcidc', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'numvmidc')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nrseqstate')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_event')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_resource')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nr_ss_cmp')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'trcid', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'trcid_size')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'ts_size', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'ctxid_size')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'vmid_size')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'ccsize', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'ccitmin', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 's_ex_level')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'ns_ex_level')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'q_support')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'os_lock_model')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'sticky_enable')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'boot_enable')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'os_unlock')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'instrp0', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'q_filt', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'trcbb', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'trccond', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'retstack')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'trccci', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'trc_error')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'syncpr', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'stallctl')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'sysstall')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'nooverflow')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'atbtrig', 2)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'lpoverride')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'trfcr', 2)
-        print("\tconfig\t= {", file = self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'mode', 2, HEX=True, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'pe_sel', 2, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'cfg', 3, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'eventctrl0', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'eventctrl1', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'stall_ctrl', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'ts_ctrl', 2, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'syncfreq', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'ccctlr', 2, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'bb_ctrl', 2, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'vinst_ctrl', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'viiectlr', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'vissctlr', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'vipcssctlr', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'seq_idx', 2, indent=2)
-        print("\t\tseq_ctrl\t= {},".format(seq_ctrl), file =self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'seq_rst', 2, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'seq_state', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'cntr_idx', indent=2)
+    def _resolve_handler(self, drvname):
+        """Return the parse-function name for drvname, or None.
 
-        print("\t\tcntrldvr\t= {},".format(cntrldvr), file =self.f)
-        print("\t\tcntr_ctrl\t= {},".format(cntr_ctrl), file =self.f)
-        print("\t\tcntr_val\t= {},".format(cntr_val), file =self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'res_idx', 2, indent=2)
-        print("\t\tres_ctrl\t= {},".format(res_ctrl), file =self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'ss_idx', 2, indent=2)
-        print("\t\tss_ctrl\t\t= {},".format(ss_ctrl), file =self.f)
-        print("\t\tss_status\t= {},".format(ss_status), file =self.f)
-        print("\t\tss_pe_cmp\t= {},".format(ss_pe_cmp), file =self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'addr_idx', indent=2)
-        print("\t\taddr_val\t= {},".format(addr_val), file =self.f)
-        print("\t\taddr_acc\t= {},".format(addr_acc), file =self.f)
-        print("\t\taddr_type\t= {},".format(addr_type), file =self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'ctxid_idx', indent=2)
-        print("\t\tctxid_pid\t= {},".format(ctxid_pid), file =self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'ctxid_mask0', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'ctxid_mask1', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'vmid_idx', indent=2)
-        print("\t\tvmid_val\t= {},".format(vmid_val), file =self.f)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'vmid_mask0', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'vmid_mask1', indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 'ext_inp', 2, indent=2)
-        self.parse_qdss_field(config, 'struct etmv4_config', 's_ex_level', indent=2)
-        print("\t}", file = self.f)
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'save_trfcr')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'save_state')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'state_needs_restore')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'skip_power_up')
-        self.parse_qdss_field(drvdata, 'struct etmv4_drvdata', 'arch_features')
-        print("}", file = self.f)
-        self.parse_clk(pclk)
-        self.parse_csdev(csdev)
+        Lookup order:
+          1. Exact match in qdss_components.
+          2. Strip a trailing '-platform' suffix (platform-variant naming
+             convention: 'coresight-X-platform' -> 'coresight-X').
+             This handles any future -platform variant without needing
+             an explicit entry in qdss_component_func.
+        """
+        handler = self.qdss_components.get(drvname)
+        if handler is None and drvname.endswith('-platform'):
+            handler = self.qdss_components.get(drvname[:-len('-platform')])
+        return handler
 
     def list_qdss_component(self, device):
         bus_type = self.ramdump.read_structure_field(device, 'struct device', 'bus')
-        if bus_type == self.coresight_bus :
-            dev_name = self.ramdump.read_cstring(self.ramdump.read_word(device + self.kobj_offset + self.name_offset))
-            parent = self.ramdump.read_structure_field(device, 'struct device', 'parent')
-            parent_name = self.ramdump.read_cstring(self.ramdump.read_word(parent + self.kobj_offset + self.name_offset))
-            parent_drv = self.ramdump.read_structure_field(parent, 'struct device', 'driver')
-            drvdata = self.ramdump.read_structure_field(parent, 'struct device', 'driver_data')
-            drvname = self.ramdump.read_cstring(self.ramdump.read_word(parent_drv + self.drvname_offset))
+        if bus_type != self.coresight_bus:
+            return
 
-            if drvname in self.qdss_components :
-                print("{}   {}".format(dev_name,hex(device)), file = self.f)
-                print("parent: {}   {}".format(parent_name, hex(parent)), file =self.f)
-                print("{}".format(drvname), file = self.f)
-                getattr(QDSSDump, self.qdss_components[drvname])(self, drvdata, parent)
-                print("{}".format("=" * 60), file = self.f)
-                print("", file = self.f)
+        # Try to get driver data from the parent device first, then fall back to the current device.
+        target_device = self.ramdump.read_structure_field(device, 'struct device', 'parent')
+        if not target_device:
+            target_device = device # Fallback to self
+
+        drv = self.ramdump.read_structure_field(target_device, 'struct device', 'driver')
+        drvdata = self.ramdump.read_structure_field(target_device, 'struct device', 'driver_data')
+
+        # If parent didn't have driver data, fall back to the device itself.
+        if not drv or not drvdata:
+            target_device = device
+            drv = self.ramdump.read_structure_field(target_device, 'struct device', 'driver')
+            drvdata = self.ramdump.read_structure_field(target_device, 'struct device', 'driver_data')
+
+        dev_name = self.ramdump.read_cstring(
+            self.ramdump.read_word(device + self.kobj_offset + self.name_offset))
+        if not drv or not drvdata:
+            print(
+                "[Debug] {} at {}: Found Coresight device but no driver data.".format(
+                    dev_name, hex(device)),
+                file=self.f)
+            return
+
+        try:
+            drvname = self.ramdump.read_cstring(self.ramdump.read_word(drv + self.drvname_offset))
+        except Exception:
+            print("[Debug] {} at {}: Failed to read driver name.".format(dev_name, hex(device)), file=self.f)
+            return
+
+        handler = self._resolve_handler(drvname)
+        if handler:
+            target_dev_name = self.ramdump.read_cstring(
+                self.ramdump.read_word(
+                    target_device + self.kobj_offset + self.name_offset))
+
+            print("{}   {}".format(dev_name, hex(device)), file=self.f)
+            print("target_dev: {}   {}".format(target_dev_name, hex(target_device)), file=self.f)
+            print("driver: {}".format(drvname), file=self.f)
+            try:
+                getattr(QDSSDump, handler)(self, drvdata, device)
+            except Exception as e:
+                print("[Debug] {} at {}: Error parsing {} component: {}".format(
+                    dev_name, hex(device), drvname, e), file=self.f)
+            print("{}".format("=" * 60), file=self.f)
+            print("", file=self.f)
+        else:
+            print(
+                "[Debug] {} at {}: Found device with driver '{}', but it is not a "
+                "QDSS component.".format(dev_name, hex(device), drvname),
+                file=self.f)
+
+    # ── HTML report helpers ──────────────────────────────────────────────────
+
+    # Pointer types with dedicated parse functions.  _follow_struct_pointers
+    # calls these instead of the generic auto-follow path, so field renames
+    # (e.g. 'csdev' -> 'dev') are handled transparently by type matching.
+    _POINTER_SPECIAL_HANDLERS = {
+        'struct coresight_device': 'parse_csdev',
+        'struct clk':              'parse_clk',
+    }
+
+    # Embedded (non-pointer) struct fields too large to auto-expand (>512 bytes).
+    # Keyed by (parent_struct_name, field_name) → method name.
+    # The method receives (field_addr, nesting_level).
+    _EMBEDDED_STRUCT_HANDLERS = {
+        ('struct coresight_device', 'dev'): '_print_csdev_dev_info',
+    }
+
+    # Kernel infrastructure types: skip entirely (too large, recursive, or
+    # carry no useful driver-private state).
+    _POINTER_FOLLOW_BLACKLIST = frozenset({
+        'struct device', 'struct platform_device', 'struct amba_device',
+        'struct miscdevice', 'struct dentry', 'struct task_struct',
+        'struct mm_struct', 'struct file', 'struct inode', 'struct kobject',
+        'struct module', 'struct bus_type', 'struct device_driver', 'struct class',
+        'struct work_struct', 'struct delayed_work', 'struct workqueue_struct',
+        'struct timer_list', 'struct completion', 'struct notifier_block',
+        'struct regulator', 'struct iommu_domain', 'struct page',
+    })
+
+    def _follow_struct_pointers(self, struct_addr, struct_name, visited=None, depth=0):
+        """Scan struct_name's pointer-to-struct members and follow each one.
+
+        Per-field dispatch:
+          _POINTER_SPECIAL_HANDLERS → call the registered method
+          _POINTER_FOLLOW_BLACKLIST → skip silently
+          otherwise (driver-private) → auto-follow via parse_dynamic_struct
+
+        Matching is on the POINTEE TYPE, not the field name, so field
+        renames between kernel versions are handled transparently.
+        """
+        if depth > 8:
+            return
+        if visited is None:
+            visited = set()
+        if struct_addr in visited:
+            return
+        visited.add(struct_addr)
+
+        members = self.ramdump.get_structure_members(struct_name)
+        if not members:
+            return
+
+        for field_name, info in members.items():
+            if not info.get('is_pointer') or info.get('array_size', 0) > 0:
+                continue
+
+            field_type = info.get('type', '').strip()
+            m = re.match(r'^((?:struct|union)\s+\w+)\s*\*$', field_type)
+            if not m:
+                continue
+
+            pointee_type = m.group(1)
+            if pointee_type in self._POINTER_FOLLOW_BLACKLIST:
+                continue
+
+            field_addr = struct_addr + info['offset']
+            size = info['size']
+            if size == 8:
+                ptr_val = self.ramdump.read_u64(field_addr)
+            elif size == 4:
+                ptr_val = self.ramdump.read_u32(field_addr)
+            else:
+                continue
+
+            if not ptr_val or ptr_val in visited:
+                continue
+
+            visited.add(ptr_val)
+
+            special = self._POINTER_SPECIAL_HANDLERS.get(pointee_type)
+            if special:
+                getattr(self, special)(ptr_val)
+                continue
+
+            print("{} @ {} ({}.{}) :".format(
+                pointee_type, hex(ptr_val), struct_name, field_name), file=self.f)
+            self.parse_dynamic_struct(ptr_val, pointee_type)
+            self._follow_struct_pointers(ptr_val, pointee_type, visited, depth + 1)
+
+    _PM_STATUS = {0: ('ACTIVE',    '#f44747'), 1: ('RESUMING',   '#ffd700'),
+                  2: ('SUSPENDED', '#6dbf67'), 3: ('SUSPENDING', '#ffd700')}
+
+    _DRIVER_ORDER = [
+        'coresight-etm4x', 'coresight-remote-etm',
+        'coresight-cti', 'coresight-tmc',
+        'coresight-funnel', 'coresight-dynamic-replicator',
+        'coresight-tpda', 'coresight-tpdm',
+        'coresight-stm', 'coresight-csr',
+        'coresight-qmi', 'coresight-tgu', 'coresight-trace-noc',
+    ]
+    _DRIVER_LABEL = {
+        'coresight-etm4x':              'ETM — Embedded Trace Macrocell',
+        'coresight-remote-etm':         'Remote ETM',
+        'coresight-cti':                'CTI — Cross-Trigger Interface',
+        'coresight-tmc':                'TMC — Trace Memory Controller',
+        'coresight-funnel':             'Funnel',
+        'coresight-dynamic-replicator': 'Dynamic Replicator',
+        'coresight-tpda':               'TPDA — Trace Port Data Aggregator',
+        'coresight-tpdm':               'TPDM — Trace Port Data Monitor',
+        'coresight-stm':                'STM — System Trace Macrocell',
+        'coresight-csr':                'CSR — Control & Status Register',
+        'coresight-qmi':                'QMI Remote',
+        'coresight-tgu':                'TGU — Trigger Generator',
+        'coresight-trace-noc':          'Trace NOC',
+    }
+    _STRUCT_HDR_RE = re.compile(
+        r'^(struct\s+\S+\s+(?:@\s+)?0x[0-9a-fA-F]+|\w[\w_]*\s+@\s+0x[0-9a-fA-F]+)'
+        r'(\s+\([^)]+\))?\s*:', re.I)
+
+    _ENUM_MAPS = {
+        ('struct tmc_drvdata', 'config_type'): {
+            0: 'TMC_CONFIG_TYPE_ETB',
+            1: 'TMC_CONFIG_TYPE_ETR',
+            2: 'TMC_CONFIG_TYPE_ETF',
+        },
+        ('struct tmc_drvdata', 'etr_mode'): {
+            0: 'ETR_MODE_FLAT',
+            1: 'ETR_MODE_ETR_SG',
+            2: 'ETR_MODE_CATU',
+            3: 'ETR_MODE_AUTO',
+        },
+        ('struct tmc_drvdata', 'out_mode'): {
+            0: 'TMC_ETR_OUT_MODE_NONE',
+            1: 'TMC_ETR_OUT_MODE_MEM',
+            2: 'TMC_ETR_OUT_MODE_USB',
+        },
+        ('struct etr_buf', 'mode'): {
+            0: 'ETR_MODE_FLAT',
+            1: 'ETR_MODE_ETR_SG',
+            2: 'ETR_MODE_CATU',
+            3: 'ETR_MODE_AUTO',
+        },
+    }
+
+    def _hl_line(self, text):
+        t = _html.escape(text)
+        t = re.sub(r'(/\*.*?\*/)', r'<span class="cm">\1</span>', t)
+        t = re.sub(r'\b(0x[0-9a-fA-F]+)\b',
+                   lambda m: '<span class="nl">0x0</span>' if m.group(1) == '0x0'
+                             else '<span class="ad">' + m.group(1) + '</span>', t)
+        t = re.sub(r'(&quot;[^&]*&quot;)', r'<span class="st">\1</span>', t)
+        t = re.sub(r'^(\s+)([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)(\s*=)',
+                   r'\1<span class="fn">\2</span>\3', t)
+        t = re.sub(r'\b(struct|union)\b', r'<span class="kw">\1</span>', t)
+        return t
+
+    def _read_body(self, lines, start):
+        """Read lines from `start` (after opening '{') to matching '}'.
+        Returns (body_lines, index_after_closing_brace)."""
+        body, depth, i = [], 1, start
+        while i < len(lines) and depth > 0:
+            s = lines[i].strip()
+            if s.endswith('{') and '= {' in s and not re.search(r'/\*.*?\*/', s):
+                depth += 1
+            elif s.startswith('}'):
+                depth -= 1
+                if depth == 0:
+                    return body, i + 1
+            body.append(lines[i])
+            i += 1
+        return body, i
+
+    def _render_fields(self, lines):
+        """Render field lines as HTML; nested 'field = {' → collapsible <details>."""
+        parts, i = [], 0
+        while i < len(lines):
+            raw = lines[i]
+            s = raw.strip()
+            if not s:
+                i += 1
+                continue
+            if s.endswith('{') and '= {' in s and not re.search(r'/\*.*?\*/', s):
+                inner, next_i = self._read_body(lines, i + 1)
+                close_raw = lines[next_i - 1] if 0 < next_i <= len(lines) else '},'
+                parts.append(
+                    '<details class="ns">'
+                    '<summary class="ns-s">{}</summary>'
+                    '<div class="nb">{}</div>'
+                    '<div class="fl">{}</div>'
+                    '</details>'.format(
+                        self._hl_line(raw),
+                        self._render_fields(inner),
+                        self._hl_line(close_raw)))
+                i = next_i
+            elif '--- dev (key fields) ---' in s:
+                parts.append('<div class="fl devhdr">{}</div>'.format(
+                    _html.escape(s.strip())))
+                i += 1
+            else:
+                parts.append('<div class="fl">{}</div>'.format(self._hl_line(raw)))
+                i += 1
+        return ''.join(parts)
+
+    def _parse_section_blocks(self, lines):
+        """Split a device section into (kind, header, body_lines) tuples."""
+        blocks, i, meta, first = [], 0, [], True
+        while i < len(lines):
+            s = lines[i].strip()
+            nxt = lines[i + 1].strip() if i + 1 < len(lines) else ''
+            if self._STRUCT_HDR_RE.match(s) and nxt == '{':
+                break
+            meta.append(lines[i])
+            i += 1
+        if meta:
+            blocks.append(('meta', '', meta))
+        while i < len(lines):
+            s = lines[i].strip()
+            nxt = lines[i + 1].strip() if i + 1 < len(lines) else ''
+            if not s:
+                i += 1
+                continue
+            if self._STRUCT_HDR_RE.match(s) and nxt == '{':
+                is_csdev = bool(re.match(r'coresight_device @', s, re.I))
+                body, next_i = self._read_body(lines, i + 2)
+                if is_csdev:
+                    j = next_i
+                    while j < len(lines):
+                        ls = lines[j].strip()
+                        if ls.startswith('dev.') or '--- dev (key fields) ---' in ls:
+                            body.append(lines[j])
+                            j += 1
+                        else:
+                            break
+                    next_i = j
+                kind = 'csdev' if is_csdev else ('main' if first else 'struct')
+                first = False
+                blocks.append((kind, s, body))
+                i = next_i
+            else:
+                i += 1
+        return blocks
+
+    def _render_device(self, d, dev_idx):
+        display = d['kobj_name'] or d['dev_name']
+        bound = d['driver_ptr']
+        if bound is None:
+            bound_html = ''
+        elif bound == '0x0':
+            bound_html = '<span class="badge b-ub">&#x2718; unbound</span>'
+        else:
+            bound_html = '<span class="badge b-bd">&#x2714; bound</span>'
+        rs = d['runtime_status']
+        plabel, clr = (self._PM_STATUS.get(rs, ('?', '#808080'))
+                       if rs is not None else ('?', '#808080'))
+        pm_html = ('<span class="badge" style="background:#222;color:{}">'
+                   '{}</span>').format(clr, plabel)
+
+        blocks = self._parse_section_blocks(d['raw'].splitlines())
+        body_parts = []
+        for kind, header, body_lines in blocks:
+            if kind == 'meta':
+                for ln in body_lines:
+                    s = ln.strip()
+                    if s.startswith('target_dev:') or s.startswith('driver:'):
+                        body_parts.append(
+                            '<div class="meta-ln">{}</div>'.format(_html.escape(s)))
+            else:
+                open_attr = ' open' if kind in ('main', 'csdev') else ''
+                body_parts.append(
+                    '<details class="sb"{}>'
+                    '<summary class="sb-s">{}</summary>'
+                    '<div class="sb-b">{}</div>'
+                    '</details>'.format(
+                        open_attr,
+                        _html.escape(header),
+                        self._render_fields(body_lines)))
+        return (
+            '<details class="dev-card" id="dev{}">'
+            '<summary class="dev-s">'
+            '<b>{}</b>'
+            '<span class="b-drv">{}</span>'
+            '{}{}'
+            '<span class="b-addr">{}</span>'
+            '</summary>'
+            '<div class="dev-b">{}</div>'
+            '</details>'
+        ).format(dev_idx,
+                 _html.escape(display),
+                 _html.escape(d['driver']),
+                 bound_html, pm_html,
+                 _html.escape(d['dev_addr']),
+                 ''.join(body_parts))
+
+    def _parse_section(self, raw):
+        """Extract summary metadata from a raw device section string."""
+        info = dict(dev_name='', dev_addr='', target_dev='', target_addr='',
+                    driver='', kobj_name='', driver_ptr=None,
+                    runtime_status=None, mode=None, refcnt=None, raw=raw)
+        lines = raw.splitlines()
+        if not lines:
+            return info
+
+        m = re.match(r'^(\S+)\s+(0x[0-9a-fA-F]+)', lines[0])
+        if m:
+            info['dev_name'], info['dev_addr'] = m.group(1), m.group(2)
+
+        for line in lines[1:5]:
+            m = re.match(r'target_dev:\s+(\S+)\s+(0x[0-9a-fA-F]+)', line)
+            if m:
+                info['target_dev'], info['target_addr'] = m.group(1), m.group(2)
+            m = re.match(r'driver:\s+(\S+)', line)
+            if m:
+                info['driver'] = m.group(1)
+
+        after_csdev = False
+        in_key = False
+        for line in lines:
+            if re.search(r'coresight_device @', line):
+                after_csdev = True
+            if '--- dev (key fields) ---' in line:
+                in_key = True
+                continue
+            if in_key:
+                m = re.search(r'dev\.kobj\.name\s*=\s*"([^"]*)"', line)
+                if m:
+                    info['kobj_name'] = m.group(1)
+                m = re.search(r'dev\.driver\s*=\s*(0x[0-9a-fA-F]+)', line)
+                if m:
+                    info['driver_ptr'] = m.group(1)
+                m = re.search(r'dev\.power\.runtime_status\s*=\s*(\d+)', line)
+                if m:
+                    info['runtime_status'] = int(m.group(1))
+            if after_csdev and info['mode'] is None:
+                m = re.match(r'\s+mode\s*=\s*(\d+),', line)
+                if m:
+                    info['mode'] = int(m.group(1))
+            if after_csdev and info['refcnt'] is None:
+                m = re.match(r'\s+refcnt\s*=\s*(\d+),', line)
+                if m:
+                    info['refcnt'] = int(m.group(1))
+        return info
+
+    def _generate_html_report(self):
+        txt_path = os.path.join(self.ramdump.outdir, 'coresight.txt')
+        html_path = os.path.join(self.ramdump.outdir, 'coresight.html')
+        try:
+            with open(txt_path, 'r', encoding='utf-8', errors='replace') as fh:
+                raw = fh.read()
+        except Exception:
+            return
+
+        SEP = '=' * 60
+        raw_sections = [s.strip() for s in raw.split(SEP + '\n')]
+        devices = [self._parse_section(s) for s in raw_sections
+                   if s and not s.startswith('[Debug]') and re.match(r'^\S+\s+0x', s)]
+        for i, d in enumerate(devices):
+            d['idx'] = i
+
+        # Group by driver, preserve preferred order
+        groups = {}
+        for d in devices:
+            groups.setdefault(d['driver'], []).append(d)
+        ordered_drivers = ([k for k in self._DRIVER_ORDER if k in groups] +
+                           sorted(k for k in groups if k not in self._DRIVER_ORDER))
+
+        # ── Summary table ─────────────────────────────────────────────────────
+        tbl_rows = []
+        for drv in ordered_drivers:
+            label = self._DRIVER_LABEL.get(drv, drv)
+            tbl_rows.append(
+                '<tr class="grp-hdr"><td colspan="5">{} '
+                '<span style="color:#808080;font-size:.85em">({} devices)</span>'
+                '</td></tr>'.format(_html.escape(label), len(groups[drv])))
+            for d in groups[drv]:
+                display = d['kobj_name'] or d['dev_name']
+                bound = d['driver_ptr']
+                if bound is None:
+                    bound_html = '<span style="color:#808080">?</span>'
+                elif bound == '0x0':
+                    bound_html = '<span style="color:#f44747">&#x2718;</span>'
+                else:
+                    bound_html = '<span style="color:#6dbf67">&#x2714;</span>'
+                rs = d['runtime_status']
+                plabel, clr = (self._PM_STATUS.get(rs, ('?', '#808080'))
+                               if rs is not None else ('?', '#808080'))
+                mode = d['mode']
+                mode_html = ('<span style="color:#f44747">{}</span>'.format(mode)
+                             if mode else '<span style="color:#6dbf67">0</span>')
+                tbl_rows.append(
+                    '<tr>'
+                    '<td><a href="#dev{}">{}</a></td>'
+                    '<td>{}</td>'
+                    '<td><span style="color:{}">{}</span></td>'
+                    '<td>{}</td>'
+                    '<td>{}</td>'
+                    '</tr>'.format(
+                        d['idx'], _html.escape(display),
+                        bound_html, clr, plabel,
+                        mode_html,
+                        d['refcnt'] if d['refcnt'] is not None else '?'))
+
+        # ── Device detail sections ─────────────────────────────────────────────
+        detail_sections = []
+        for drv in ordered_drivers:
+            label = self._DRIVER_LABEL.get(drv, drv)
+            detail_sections.append('<h3>{}</h3>'.format(_html.escape(label)))
+            for d in groups[drv]:
+                detail_sections.append(self._render_device(d, d['idx']))
+
+        CSS = (
+            'body{font-family:monospace;background:#1e1e1e;color:#d4d4d4;margin:2em;line-height:1.5}'
+            'h1{color:#fff;border-bottom:2px solid #555;padding-bottom:.3em}'
+            'h2{color:#9cdcfe;margin-top:2em;border-left:4px solid #9cdcfe;padding-left:.5em}'
+            'h3{color:#ce9178;margin-top:1.5em;margin-bottom:.3em}'
+            'table{border-collapse:collapse;width:100%;margin:1em 0}'
+            'th{background:#2d2d2d;color:#9cdcfe;text-align:left;padding:6px 10px;border:1px solid #444}'
+            'td{padding:5px 10px;border:1px solid #444;vertical-align:top}'
+            'tr:nth-child(even){background:#252525}'
+            'tr.grp-hdr td{background:#1a2a3a;color:#9cdcfe;font-weight:bold;'
+            'padding:4px 10px;border-top:2px solid #9cdcfe}'
+            'a{color:#4ec9b0;text-decoration:none} a:hover{text-decoration:underline}'
+            '.badge{display:inline-block;padding:1px 7px;border-radius:4px;'
+            'font-size:.85em;margin-left:.3em}'
+            '.b-ub{background:#3a0000;color:#f44747}'
+            '.b-bd{background:#003a00;color:#6dbf67}'
+            '.b-drv{background:#2d2d2d;color:#9cdcfe;padding:1px 7px;border-radius:4px;'
+            'font-size:.85em;margin-left:.4em}'
+            '.b-addr{color:#808080;font-size:.85em;margin-left:.5em}'
+            '.dev-card{border:1px solid #444;border-radius:4px;margin:.35em 0}'
+            '.dev-card[open]{background:#1a1a1a}'
+            '.dev-s{cursor:pointer;padding:.4em .5em;color:#dcdcaa;font-size:1.05em;'
+            'list-style:none;display:block}'
+            '.dev-s:hover{background:#2a2a2a}'
+            '.dev-b{padding:.3em .8em .6em}'
+            '.meta-ln{color:#808080;font-size:.9em;padding:.1em 0}'
+            '.sb{border:1px solid #333;border-radius:3px;margin:.3em 0}'
+            '.sb-s{cursor:pointer;padding:.25em .5em;color:#c586c0;font-weight:bold;'
+            'background:#252525;list-style:none;display:block}'
+            '.sb-s:hover{background:#2d2d2d}'
+            '.sb-b{padding:.3em .6em;background:#1e1e1e}'
+            '.ns{border-left:2px solid #2a2a2a;margin-left:2em;margin:.03em 0}'
+            '.ns-s{cursor:pointer;padding:.05em .3em;color:#9cdcfe;list-style:none;'
+            'display:block;background:transparent}'
+            '.ns-s:hover{background:#252525}'
+            '.nb{padding-left:1.5em}'
+            '.fl{white-space:pre;font-family:monospace;line-height:1.35;padding:0}'
+            '.devhdr{color:#dcdcaa;font-weight:bold;margin-top:.4em;'
+            'border-top:1px solid #333;padding-top:.3em}'
+            '.ad{color:#4ec9b0}.nl{color:#555}.st{color:#ce9178}'
+            '.fn{color:#9cdcfe}.kw{color:#c586c0}.cm{color:#6a9955}'
+            'hr{border:none;border-top:1px solid #444;margin:2em 0}'
+        )
+        html = (
+            '<!DOCTYPE html><html lang="en"><head>'
+            '<meta charset="UTF-8">'
+            '<title>CoreSight Device Dump</title>'
+            '<style>{}</style></head><body>'
+            '<h1>CoreSight Device Dump</h1>'
+            '<p style="color:#808080">{} devices</p>'
+            '<h2>Device Summary</h2>'
+            '<table>'
+            '<tr><th>Device</th><th>Bound</th><th>PM Status</th>'
+            '<th>Mode</th><th>RefCnt</th></tr>'
+            '{}'
+            '</table><hr>'
+            '<h2>Device Details</h2>'
+            '{}'
+            '</body></html>'
+        ).format(CSS, len(devices), '\n'.join(tbl_rows), '\n'.join(detail_sections))
+
+        with open(html_path, 'w', encoding='utf-8') as fh:
+            fh.write(html)
 
     def parse_qdss_component(self, ramdump):
         self.ramdump = ramdump
+        self._follow_visited = set()
         self.qdss_components = dict(qdss_component_func)
         self.entry_offset = self.ramdump.field_offset('struct kobject', 'entry')
         self.name_offset = self.ramdump.field_offset('struct kobject', 'name')
@@ -1586,23 +1804,37 @@ class QDSSDump():
         self.drvname_offset = self.ramdump.field_offset('struct device_driver', 'name')
         self.amba_dev_offset = self.ramdump.field_offset('struct amba_device', 'dev')
         self.coresight_bus = self.ramdump.address_of('coresight_bustype')
-        devices_kset = self.ramdump.address_of('devices_kset')
+        devices_kset = self.ramdump.read_pointer('devices_kset')
         self.clk_core_set = set()
         self.f = self.ramdump.open_file("coresight.txt")
 
+        if devices_kset is None:
+            print_out_str('!!! devices_kset symbol not found, skipping coresight component parse')
+            self.f.close()
+            return
         list_head = devices_kset + self.ramdump.field_offset('struct kset', 'list')
         list_offset = self.kobj_offset + self.entry_offset
         list_walker = llist.ListWalker(self.ramdump, list_head, list_offset)
-        list_walker.walk(self.list_qdss_component)
-        for core in self.clk_core_set:
-            self.parse_clk_core(core)
-        self.f.close()
+        try:
+            list_walker.walk(self.list_qdss_component)
+            for core in self.clk_core_set:
+                self.parse_clk_core(core)
+        finally:
+            self.f.close()
+        self._generate_html_report()
 
     def dump_standard(self, ram_dump):
-        self.print_tmc_etf(ram_dump)
-        self.print_tmc_etf_swao(ram_dump)
-        self.print_tmc_etr(ram_dump)
-        self.print_dbgui_registers(ram_dump)
-        self.print_all_etm_register(ram_dump)
-        self.parse_qdss_component_atid(ram_dump)
-        #self.parse_qdss_component(ram_dump)
+        steps = [
+            ('print_tmc_etf',             self.print_tmc_etf),
+            ('print_tmc_etf_swao',        self.print_tmc_etf_swao),
+            ('print_tmc_etr',             self.print_tmc_etr),
+            ('print_dbgui_registers',     self.print_dbgui_registers),
+            ('print_all_etm_register',    self.print_all_etm_register),
+            ('parse_qdss_component_atid', self.parse_qdss_component_atid),
+            ('parse_qdss_component',      self.parse_qdss_component),
+        ]
+        for step_name, step_func in steps:
+            try:
+                step_func(ram_dump)
+            except Exception as e:
+                print_out_str('!!! QDSS {}: {}'.format(step_name, e))

@@ -1,7 +1,7 @@
-# Copyright (c) 2022-2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
 # Copyright (c) 2016, 2018, 2020-2021 The Linux Foundation. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
-# This program is free software; you can redistribute it and/or modify
+#This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
 #
@@ -2553,7 +2553,145 @@ class MDPinfo(RamParser):
         except:
             pass
 
+
+    def extract_hfi_pal_trace_data(self):
+        print_out_str("Starting extract_hfi_pal_trace_data function")
+        try:
+            mdss_dbg = self.ramdump.read_datatype('fw_trace_mem', 'struct hfi_memory_alloc_info')
+            # Validate cpu_va pointer before using it
+            if not mdss_dbg.cpu_va or mdss_dbg.cpu_va == 0:
+                print_out_str("Error: cpu_va is null or zero, cannot proceed with memory operations")
+                return
+
+            print_out_str(f"Successfully initialized HFI memory allocation info with cpu_va=0x{mdss_dbg.cpu_va:x}")
+        except Exception as e:
+            print_out_str(f"Error: Unable to initialize HFI memory allocation info - {e}")
+            return
+
+        try:
+            HFI_CORE_TRACE_EVENT_SIZE = self.ramdump.sizeof('struct hfi_core_trace_event')
+            print_out_str(f"HFI_CORE_TRACE_EVENT_SIZE = {HFI_CORE_TRACE_EVENT_SIZE}")
+
+            self.outfile = self.ramdump.open_file('hfi_core_dump_events.txt', 'w')
+            print_out_str("Opened output file successfully")
+
+            # Calculate the actual number of events based on allocated memory size
+            if mdss_dbg.size_allocated > 0 and HFI_CORE_TRACE_EVENT_SIZE > 0:
+                max_events = mdss_dbg.size_allocated // HFI_CORE_TRACE_EVENT_SIZE
+                print_out_str(f"Allocated size: {mdss_dbg.size_allocated}, Max events: {max_events}")
+            else:
+                print_out_str("Invalid size_allocated or HFI_CORE_TRACE_EVENT_SIZE, using default")
+                max_events = 4000
+
+            valid_events = 0
+            for i in range(max_events):
+                try:
+                    addr = mdss_dbg.cpu_va + i * HFI_CORE_TRACE_EVENT_SIZE
+                    event = self.ramdump.read_datatype(addr, 'struct hfi_core_trace_event')
+
+                    # Skip invalid events (time = 0 usually indicates uninitialized)
+                    if event.time == 0:
+                        continue
+
+                    # Sanity check for data_cnt
+                    if event.data_cnt > 100:
+                        print_out_str(f"Event {i}: data_cnt too large ({event.data_cnt}), skipping")
+                        continue
+
+                    # offset of 12 bytes is calculated as - time (8 bytes) + data_cnt (4 bytes)
+                    data = [self.ramdump.read_u32(addr + 12 + j * 4) for j in range(event.data_cnt)]
+                    data_str = ' '.join(f"0x{val:x}" for val in data)
+
+                    self.outfile.write(f"[{i}][t:{event.time}][evt:0x{data[0] if data else 0:x}] data[{event.data_cnt}]:{data_str}\n")
+                    valid_events += 1
+
+                except Exception as e:
+                    print_out_str(f"Exception processing event {i}: {e}")
+                    break
+
+            print_out_str(f"Processed {valid_events} valid events out of {max_events} total events")
+
+            self.outfile.close()
+            print_out_str("HFI pal dump done!")
+
+        except Exception as e:
+            print_out_str(f"HFI pal dump failed with exception: {e}")
+            if hasattr(self, 'outfile') and self.outfile:
+                try:
+                    self.outfile.close()
+                except:
+                    pass
+
+    def dump_hfi_dbg(self):
+        hfi_dbg_addr = self.ramdump.address_of('hfi_dbg')
+        if not hfi_dbg_addr:
+            print_out_str("hfi_dbg not found")
+            return
+
+        hfi_dbg_ptr = self.ramdump.read_pointer(hfi_dbg_addr)
+        if not hfi_dbg_ptr:
+            print_out_str("Pointer to 'hfi_dbg' is NULL")
+            return
+
+        hfi_dbg = self.ramdump.read_datatype(hfi_dbg_ptr, 'struct hfi_dbg')
+
+        # base_buf_addr is already a hfi_shared_addr_map object (auto-dereferenced by Struct class)
+        # We can use it directly
+        base_buf_addr = hfi_dbg.base_buf_addr
+
+        if not base_buf_addr:
+            print_out_str("base_buf_addr object is None")
+            return
+
+        local_addr = base_buf_addr.local_addr
+        size = base_buf_addr.size
+
+        print_out_str(f"HFI debug info: local_addr=0x{local_addr:x}, size={size}")
+
+        if not local_addr or size == 0:
+            print_out_str("Invalid hfi_dbg dump_addr or size")
+            return
+
+        # Check if the address is valid before attempting to read
+        if local_addr < 0x1000:  # Basic sanity check for very low addresses
+            print_out_str(f"Invalid local_addr: 0x{local_addr:x} (too low)")
+            return
+
+        # Apply PAC ignore for MTE + KASAN HW TAG builds
+        local_addr = self.ramdump.pac_ignore(local_addr)
+
+        # local_addr is a vmapped kernel virtual address (scatter pages since
+        # mm-drivers commit 276979d0dec6dc417069a1286ef0b27f15b0d610 replaced
+        # alloc_pages_exact() with per-page scatter allocation + vmap()).
+        # The pages are physically non-contiguous, so we must NOT convert the
+        # virtual address to physical once and then call read_physical() for the
+        # whole buffer — that would only read the first page correctly and return
+        # garbage for every subsequent page.
+        #
+        # get_bin_data() walks the page tables page-by-page (calling
+        # virt_to_phys() per page) and assembles the result, which is exactly
+        # what we need for vmapped scatter memory.
+        try:
+            memory_data = self.ramdump.get_bin_data(local_addr, size)
+            if not memory_data:
+                print_out_str(f"Failed to read memory from local_addr 0x{local_addr:x}, size {size}")
+                return
+
+            self.outfile = self.ramdump.open_file('hfi_dump.txt', 'wb')
+            self.outfile.write(memory_data)
+            self.outfile.close()
+
+            print_out_str(f"Successfully dumped {len(memory_data)} bytes to 'hfi_dump.txt'")
+
+        except Exception as e:
+            print_out_str(f"Exception while reading/writing HFI debug data: {e}")
+            return
+
+
     def parse(self):
+        # Extract HFI PAL trace data
+        self.extract_hfi_pal_trace_data()
+        self.dump_hfi_dbg()
 
         mdss_dbg = MdssDbgXlog(self.ramdump, 'mdss_dbg_xlog')
 
