@@ -423,8 +423,12 @@ class RamDump():
             ret_lookup = self.ramdump.unwind_lookup(frame.pc)
             if ret_lookup:
                 symname, offset = ret_lookup
-                # Extend tuple for additional handlers
-                if symname and symname.startswith(("ret_to_kernel",)):
+                # ret_to_kernel uses startswith; el1h_64_* are exact matches to
+                # avoid matching el1h_64_irq_handler (C wrapper) which has no pt_regs.
+                el1h_asm_stubs = {"el1h_64_irq", "el1h_64_fiq",
+                                  "el1h_64_sync", "el1h_64_error"}
+                if symname and (symname.startswith("ret_to_kernel")
+                                or symname in el1h_asm_stubs):
                     pt_regs_addr = frame.sp
                     ptregs["sp"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'sp')
                     ptregs["pc"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'pc')
@@ -3177,7 +3181,7 @@ class RamDump():
             if val is not None and val > 0:
                 return val
 
-        # Method 2: Try new kernel's init_pid_ns.pid_max
+       # Method 2: Try new kernel's init_pid_ns.pid_max
         init_pid_ns_addr = self.address_of('init_pid_ns')
         if init_pid_ns_addr is not None:
             pid_max_offset = self.field_offset('struct pid_namespace', 'pid_max')
@@ -3276,6 +3280,23 @@ class RamDump():
             return self.gdbmi.type_of(symbol)
         except gdbmi.GdbMIException:
             pass
+
+    def get_structure_members(self, struct_name):
+        """
+        Returns a dict of member info for a given structure.
+        """
+        try:
+            result = self.gdbmi.get_structure_members(struct_name)
+            if result:
+                return result
+        except gdbmi.GdbMIException:
+            pass
+        if self.hyp:
+            try:
+                return self.gdbmi_hyp.get_structure_members(struct_name)
+            except gdbmi.GdbMIException:
+                pass
+        return {}
 
     def set_priority_namespace(self, filename):
         """
