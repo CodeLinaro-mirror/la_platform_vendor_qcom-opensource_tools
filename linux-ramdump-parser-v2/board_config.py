@@ -196,6 +196,21 @@ class BoardGlymur(Board):
         self.imem_offset_memdump_table = 0x10
         self.imem_file_name = 'OCIMEM.BIN'
 
+class BoardShikra(Board):
+    def __init__(self, socid):
+        super(BoardShikra, self).__init__()
+        self.socid = socid
+        self.board_num = "shikra"
+        self.cpu = 'ARMv8.2-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x6000000
+        self.smem_addr_buildinfo = 0x6007210
+        self.phys_offset = 0xB5000000
+        self.imem_start = 0x0C100000
+        self.kaslr_addr = 0x0C11E6D0
+        self.imem_offset_memdump_table = 0x10
+        self.imem_file_name = 'OCIMEM.BIN'
+
 BoardQCM6490(socid=475)
 BoardQCM6490SVM(socid=475)
 BoardQCM6490(socid=499)
@@ -243,3 +258,6 @@ BoardSM8750SVM(socid=706)
 BoardGlymur(socid=662)
 BoardGlymur(socid=698)
 BoardGlymur(socid=699)
+BoardShikra(socid=756)
+BoardShikra(socid=758)
+BoardShikra(socid=759)
