@@ -145,7 +145,7 @@ class ReservedMem(RamParser):
             reserved_mem_addr = ramdump.read_pointer('reserved_mem')
         else:
             reserved_mem_addr = ramdump.address_of('reserved_mem')
-        reserved_mem_count_addr = ramdump.address_of('reserved_mem_count')
+        reserved_mem_count_addr = ramdump.address_of_symbol_from_file('reserved_mem_count', 'of_reserved_mem.c')
         reserved_mem_count = ramdump.read_int(reserved_mem_count_addr)
         base_offset = ramdump.field_offset('struct reserved_mem', 'base')
         size_offset = ramdump.field_offset('struct reserved_mem', 'size')
