@@ -423,8 +423,12 @@ class RamDump():
             ret_lookup = self.ramdump.unwind_lookup(frame.pc)
             if ret_lookup:
                 symname, offset = ret_lookup
-                # Extend tuple for additional handlers
-                if symname and symname.startswith(("ret_to_kernel",)):
+                # ret_to_kernel uses startswith; el1h_64_* are exact matches to
+                # avoid matching el1h_64_irq_handler (C wrapper) which has no pt_regs.
+                el1h_asm_stubs = {"el1h_64_irq", "el1h_64_fiq",
+                                  "el1h_64_sync", "el1h_64_error"}
+                if symname and (symname.startswith("ret_to_kernel")
+                                or symname in el1h_asm_stubs):
                     pt_regs_addr = frame.sp
                     ptregs["sp"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'sp')
                     ptregs["pc"] = self.ramdump.read_structure_field(pt_regs_addr, 'struct pt_regs', 'pc')
@@ -1801,7 +1805,7 @@ class RamDump():
                 startup_script.write('r.s m 0x13\n')
             for ram in self.ebi_files:
                 ebi_path = os.path.abspath(ram[3])
-                startup_script.write('data.load.binary {0} 0x{1:x}\n'.format(
+                startup_script.write('data.load.binary {0} 0x{1:x} /LOADONDEMAND\n'.format(
                     ebi_path, ram[1]))
             # Check to include Reduced dump elf's
             if self.elf_addr:
@@ -1888,9 +1892,9 @@ class RamDump():
             elif kaslr_offset != 0:
                 where += ' {}'.format(hex(kaslr_offset))
             if not self.minidump:
-                dloadelf = 'data.load.elf {} /nocode\n'.format(where)
+                dloadelf = 'data.load.elf {} /nocode /LOADONDEMAND\n'.format(where)
             else:
-                dloadelf = 'data.load.elf {}\n'.format(where)
+                dloadelf = 'data.load.elf {} /LOADONDEMAND\n'.format(where)
             startup_script.write(dloadelf)
             if self.minidump:
                 dload_ram_elf = 'data.load.elf {} /LOGLOAD /nosymbol\n'.format(os.path.abspath(self.ram_elf_file))
@@ -2015,10 +2019,18 @@ class RamDump():
                         startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm/kernel/linux/etc/gdb/gdb_autoload.cmm"' + '\n')
                         startup_script.write(')\n')
                 if self.module_table.sym_path_list:
-                    startup_script.write("y.spath =  " +'"{0}"'.format(self.module_table.sym_path_list[0])+ '\n')
-                    if len(self.module_table.sym_path_list) > 1 :
-                        for path in self.module_table.sym_path_list[1:]:
-                            startup_script.write("y.spath +=  " +'"{0}"'.format(path)+ '\n')
+                    # Recursively find all subdirectories containing .ko files and add to y.spath
+                    ko_dirs = set()
+                    for path in self.module_table.sym_path_list:
+                        if not os.path.exists(path):
+                            continue
+                        for root, dirs, files in os.walk(path):
+                            for f in files:
+                                if f.endswith(".ko"):
+                                    ko_dirs.add(root)
+                                    break
+                    for ko_dir in sorted(ko_dirs):
+                        startup_script.write("y.spath +=  " +'"{0}"'.format(ko_dir)+ '\n')
                 else:
                     startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
                 startup_script.write('TASK.sYmbol.Option AutoLoad Module\n')
