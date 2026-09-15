@@ -64,10 +64,11 @@ class Modules_table(RamParser):
             mod_tbl_ent.name = self.ramdump.read_cstring(name_ptr)
             state = self.ramdump.read_u32(state_offset + module)
 
-            svmversion_addr = self.ramdump.read_pointer(scmversion_offset + module)
             svmversion = ""
-            if svmversion_addr:
-                svmversion = self.ramdump.read_cstring(svmversion_addr)
+            if scmversion_offset is not None:
+                svmversion_addr = self.ramdump.read_pointer(scmversion_offset + module)
+                if svmversion_addr:
+                    svmversion = self.ramdump.read_cstring(svmversion_addr)
 
             mod_tbl_ent.module_offset = self.ramdump.read_pointer(module + module_core_offset) or 0
             mod_tbl_ent.kallsyms_addr = self.ramdump.read_pointer(module + kallsyms_offset)
