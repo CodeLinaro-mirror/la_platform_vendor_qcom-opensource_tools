@@ -174,7 +174,7 @@ class HwFenceInfo(RamParser):
             return
 
         entry_size = self.ramdump.sizeof('struct msm_hw_fence')
-        outfile = self.ramdump.open_file('hw_fence_table.txt', 'w')
+        outfile = self.ramdump.open_file('display_info/hw_fence_table.txt', 'w')
         written = 0
         try:
             for i in range(cnt):
@@ -213,7 +213,7 @@ class HwFenceInfo(RamParser):
             return
 
         entry_size = self.ramdump.sizeof('struct msm_hw_fence_event')
-        outfile = self.ramdump.open_file('hw_fence_events.txt', 'w')
+        outfile = self.ramdump.open_file('display_info/hw_fence_events.txt', 'w')
         written = 0
         try:
             for i in range(total_events):
@@ -238,7 +238,7 @@ class HwFenceInfo(RamParser):
             print_out_str("hw_fence_locks: locks table empty")
             return
 
-        outfile = self.ramdump.open_file('hw_fence_locks.txt', 'w')
+        outfile = self.ramdump.open_file('display_info/hw_fence_locks.txt', 'w')
         try:
             for i in range(cnt):
                 val = self.ramdump.read_u64(lock_ptr + i * 8)
@@ -304,7 +304,7 @@ class HwFenceInfo(RamParser):
 
     def dump_ctrl_queues(self, drv_data):
         base_addr = drv_data.get_address('ctrl_queues')
-        outfile = self.ramdump.open_file('hw_fence_ctrl_queues.txt', 'w')
+        outfile = self.ramdump.open_file('display_info/hw_fence_ctrl_queues.txt', 'w')
         try:
             self.dump_queue_array(outfile, base_addr, 2, drv_data.has_soccp)
         finally:
@@ -329,7 +329,7 @@ class HwFenceInfo(RamParser):
             client = HwFenceClient(self.ramdump, client_ptr)
             queues_base_addr = client.get_address('queues')
 
-            outfile = self.ramdump.open_file('hw_fence_client_%d.txt' % client.client_id, 'w')
+            outfile = self.ramdump.open_file('display_info/hw_fence_client_%d.txt' % client.client_id, 'w')
             try:
                 self.dump_queue_array(outfile, queues_base_addr, client.queues_num,
                                        drv_data.has_soccp)
