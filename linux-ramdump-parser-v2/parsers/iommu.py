@@ -14,9 +14,10 @@ import math
 from print_out import print_out_str
 from parser_util import register_parser, RamParser
 from sizes import SZ_4K, SZ_64K, SZ_1M, SZ_16M, get_order, order_size_strings
-from iommulib import IommuLib, MSM_SMMU_DOMAIN, MSM_SMMU_AARCH64_DOMAIN, ARM_SMMU_DOMAIN
+from iommulib import IommuLib, MSM_SMMU_DOMAIN, MSM_SMMU_AARCH64_DOMAIN, ARM_SMMU_DOMAIN, DPD_SMMU_DOMAIN
 from lpaeiommulib import parse_long_form_tables
 from aarch64iommulib import parse_aarch64_tables
+from dpd_proxy_iommulib import parse_dpd_proxy_tables
 
 
 @register_parser('--print-iommu-pg-tables', 'Print IOMMU page tables')
@@ -350,3 +351,5 @@ class IOMMU(RamParser):
             elif ((d.domain_type == ARM_SMMU_DOMAIN) or
                     (d.domain_type == MSM_SMMU_AARCH64_DOMAIN)):
                 parse_aarch64_tables(self.ramdump, d, domain_num)
+            elif d.domain_type == DPD_SMMU_DOMAIN:
+                parse_dpd_proxy_tables(self.ramdump, d, domain_num)

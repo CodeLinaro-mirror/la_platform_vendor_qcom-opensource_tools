@@ -1,5 +1,4 @@
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
-#
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -8,8 +7,22 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-
+import traceback
 from parser_util import register_parser, RamParser
+
+# struct zone {
+#     /* Read-mostly fields */
+#
+#     /* zone watermarks, access with *_wmark_pages(zone) macros */
+#     unsigned long _watermark[NR_WMARK];
+#     unsigned long watermark_boost;
+#
+#     unsigned long nr_reserved_highatomic;
+#     unsigned long nr_free_highatomic;
+#     ...
+#     unsigned long zone_start_pfn;
+#     ...
+# }
 
 zone_wmark_names = {"WMARK_MIN" : "min",
                     "WMARK_LOW" : "low",
@@ -154,6 +167,25 @@ class ProcZoneinfo(RamParser):
         #         boost    0
         print("        boost    {}".format(boost_pages), file=zoneinfo_file)
 
+        # Read nr_reserved_highatomic
+        nr_reserved_highatomic_offset = self.ramdump.field_offset('struct zone', 'nr_reserved_highatomic')
+        nr_reserved_highatomic = 0
+        if nr_reserved_highatomic_offset != None:
+            nr_reserved_highatomic_addr = zone + nr_reserved_highatomic_offset
+            nr_reserved_highatomic = self.ramdump.read_word(nr_reserved_highatomic_addr)
+        print("        nr_reserved_highatomic {}".format(nr_reserved_highatomic), file=zoneinfo_file)
+
+        # Read nr_reserved_highatomic
+        nr_reserved_highatomic_offset = self.ramdump.field_offset('struct zone', 'nr_reserved_highatomic')
+        nr_reserved_highatomic = 0
+        if nr_reserved_highatomic_offset != None:
+            try:
+                nr_reserved_highatomic_addr = zone + nr_reserved_highatomic_offset
+                nr_reserved_highatomic = self.ramdump.read_word(nr_reserved_highatomic_addr)
+            except Exception:
+                nr_reserved_highatomic = 0
+        print("        nr_reserved_highatomic {}".format(nr_reserved_highatomic), file=zoneinfo_file)
+
         spanned_pages_addr = zone + self.ramdump.field_offset('struct zone', 'spanned_pages')
         spanned_pages = self.ramdump.read_word(spanned_pages_addr)
 
@@ -244,9 +276,15 @@ class ProcZoneinfo(RamParser):
         sizeofzone = self.ramdump.sizeof('struct zone')
         zone = contig_page_data + node_zones_offset
 
+        zone_count = 0
+        max_iterations = max_nr_zones  # Safety limit
         try:
-            while zone < (contig_page_data + node_zones_offset + max_nr_zones * sizeofzone):
+            while zone < (contig_page_data + node_zones_offset + max_nr_zones * sizeofzone) and zone_count < max_iterations:
                 present_pages = self.get_present_pages(zone)
+
+                # Add separator line between zones for better readability
+                if zone_count > 0:
+                    print("\n" + "="*70 + "\n", file=zoneinfo_file)
 
                 self.print_zone_name(zone, zoneinfo_file)
                 if present_pages > 0:
@@ -258,8 +296,9 @@ class ProcZoneinfo(RamParser):
                     self.print_vm_zone_stats(zone, zoneinfo_file)
 
                 zone = zone + sizeofzone
+                zone_count += 1
 
         except Exception as e:
-            print(e)
+            print("Error parsing zone information: {}".format(e))
+            traceback.print_exc()
         zoneinfo_file.close()
-

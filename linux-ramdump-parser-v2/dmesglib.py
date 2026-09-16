@@ -136,6 +136,8 @@ class DmesgLib(object):
                 caller_id_data = tid_info + str(caller_id_data)
             text_len = self.ramdump.read_u16(curr_idx + text_len_offset)
             text_str = self.ramdump.read_cstring(curr_idx + log_size, text_len)
+            if text_str is None and text_len == 0:
+                text_str = ""
             if text_str is not None:
                 for partial in text_str.split('\n'):
                     if self.ramdump.is_config_defined('CONFIG_PRINTK_CALLER'):

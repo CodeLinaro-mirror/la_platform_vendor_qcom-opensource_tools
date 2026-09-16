@@ -34,6 +34,8 @@ class FtraceParser(RamParser):
         self.whitelisted_trace_names = []
         self.ftrace_buffer_size_kb = None
         self.per_cpu_buffer_pages = None
+        self.pid_max = self.ramdump.read_pid_max()
+        print_out_str("pid_max={0}".format(self.pid_max))
         if not self.ramdump.minidump:
             self.savedcmd = self.ramdump.read_pdatatype('savedcmd')
         if len(self.ramdump.ftrace_args):
@@ -61,8 +63,8 @@ class FtraceParser(RamParser):
             str_error =  'v.v (struct ftrace_event_field)0x{0:x} type_str or field_name is None'.format(common_list)
             print_out_str(str_error)
             return
-        if re.match('(.*)\[(.*)', type_str) and not (re.match('__data_loc', type_str)):
-            s = re.split('\[', type_str)
+        if re.match(r'(.*)\[(.*)', type_str) and not (re.match(r'__data_loc', type_str)):
+            s = re.split(r'\[', type_str)
             s[1] = '[' + s[1]
             self.formats_out.write(
                 "\tfield:{0} {1}{2};\toffset:{3};\tsize:{4};\tsigned:{5};\n".format(s[0], field_name, s[1], offset,
@@ -222,7 +224,7 @@ class FtraceParser(RamParser):
                     continue
                 if self.per_cpu_buffer_pages and self.per_cpu_buffer_pages < nr_pages:
                     nr_pages = self.per_cpu_buffer_pages
-                nr_total_buffer_pages = nr_total_buffer_pages +  nr_pages
+                nr_total_buffer_pages = nr_total_buffer_pages + nr_pages
                 trace_buffer_info['nr_pages_per_buffer'][cpu_idx] = nr_pages
                 trace_buffer_info['rb_per_cpu'][cpu_idx] = b
             trace_buffer_info['nr_total_buffer_pages'] = nr_total_buffer_pages
@@ -249,7 +251,7 @@ class FtraceParser(RamParser):
             per_cpu_buffer = trace_buffer_info['rb_per_cpu'][cpu_idx]
             if per_cpu_buffer is not None:
                 evt = FtraceParser_Event(self.ramdump,ftrace_out,cpu_idx,fevent_list.ftrace_event_type,
-                        fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd)
+                        fevent_list.ftrace_raw_struct_type,ftrace_time_data,self.format_event_map,self.savedcmd,self.pid_max)
                 evt.ring_buffer_per_cpu_parsing(per_cpu_buffer, nrpages_limit)
         return ftrace_time_data
 
@@ -319,7 +321,7 @@ class FtraceParser(RamParser):
                         name_ptr = rd.read_u32(tp_ptr + tp_name_off)
 
                     # Event name is already known via fevent_list.event_name_by_type
-                    event_name = fevent_list.event_name_by_type.get(etype)
+                    event_name = fevent_list.event_name_by_type.get(etype_str)
                     if not event_name:
                         event_name = rd.read_cstring(name_ptr) or "<unknown>"
 

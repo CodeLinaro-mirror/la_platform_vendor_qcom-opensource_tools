@@ -21,7 +21,19 @@ from collections import defaultdict
 class StackDepot(object):
     def __init__(self, ramdump):
         self.ramdump = ramdump
+        self.max_frames = 16
+        if self.ramdump.kernel_version >= (6, 18, 0):
+            self.max_frames = self.get_max_frames()
         self.get_handle_offsets()
+
+    def get_max_frames(self):
+        try:
+            val = self.ramdump.get_config_val('CONFIG_STACKDEPOT_MAX_FRAMES')
+            if val is not None:
+                return int(val)
+        except Exception:
+            pass
+        return 64
 
     def get_handle_offsets(self):
         depot_stack_bits = self.ramdump.sizeof('depot_stack_handle_t') * 8
@@ -34,7 +46,10 @@ class StackDepot(object):
         self.depot_index_offset = 0
 
         if self.ramdump.field_offset('union handle_parts', 'pool_index_plus_1') is not None:
-            self.stack_slabs = self.ramdump.address_of('stack_pools')
+            if self.ramdump.kernel_version >= (6, 18, 0):
+                self.stack_slabs = self.ramdump.read_word('stack_pools')
+            else:
+                self.stack_slabs = self.ramdump.address_of('stack_pools')
             self.stack_alloc_index_bits = depot_stack_bits - self.stack_alloc_offset_bits - depot_extra_bits
             self.depot_index_offset = 1
         elif self.ramdump.field_offset('union handle_parts', 'pool_index') is not None:
@@ -73,7 +88,7 @@ class StackDepot(object):
 
         if stack_nr_entries is None:
             return -1, None, None
-        if stack_nr_entries <= 0 or stack_nr_entries > 16:
+        if stack_nr_entries <= 0 or stack_nr_entries > self.max_frames:
             return -1, None, None
 
         stack_addr = []
@@ -101,6 +116,7 @@ class StackDepot(object):
 class PageTrace(object):
     def __init__(self, ramdump):
         self.ramdump = ramdump
+        self.max_trace_entries = 16
         self.trace_entry_size = self.ramdump.sizeof('unsigned long')
         self.trace_offset = 0
         self.nr_entries_offset = 0
@@ -118,6 +134,7 @@ class PageTrace(object):
                             'struct page_ext', 'trace')
             if self.ramdump.is_config_defined('CONFIG_STACKDEPOT'):
                 self.stackdepot = StackDepot(self.ramdump)
+                self.max_trace_entries = self.stackdepot.max_frames
             else:
                 self.trace_entries_offset = self.ramdump.field_offset(
                             'struct page_ext', 'trace_entries')
@@ -245,7 +262,7 @@ class PageTrace(object):
                 struct_holding_trace_entries = temp_page_ext
 
                 if nr_trace_entries is not None:
-                    if  nr_trace_entries > 0 and nr_trace_entries <= 16:
+                    if  nr_trace_entries > 0 and nr_trace_entries <= self.max_trace_entries:
                         for i in range(0, nr_trace_entries):
                             addr = self.ramdump.read_word(
                                     struct_holding_trace_entries + self.trace_entries_offset + i *
@@ -278,7 +295,7 @@ class PageTrace(object):
 
         if nr_trace_entries is None:
             return -1, -1, -1, -1, -1, -1, -1
-        if nr_trace_entries <= 0 or nr_trace_entries > 16:
+        if nr_trace_entries <= 0 or nr_trace_entries > self.max_trace_entries:
             return -1, -1, -1, -1, -1, -1, -1
         if order >= self.max_order:
             return -1, -1, -1, -1, -1, -1, -1

@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2014, 2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -10,7 +10,9 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 import sys
+import os
 import traceback
+import inspect
 from contextlib import contextmanager
 
 out_file = sys.stdout
@@ -61,11 +63,25 @@ def __print_out(_class, level, *msg):
     elif level >= LEVEL_WARN:
         print_out_str(_class.__class__.__name__+": " + message)
 
-def print_out_str(string):
-    if out_file is None:
-        print (string)
+def print_out_str(message: str, show_line_file = False):
+    if show_line_file == False:
+        line = message
     else:
-        out_file.write(string + '\n')
+        # Get the *caller* of this function
+        caller_frame = inspect.currentframe().f_back
+        info = inspect.getframeinfo(caller_frame)
+
+        filename = os.path.basename(info.filename)
+        lineno   = info.lineno
+        funcname = info.function
+
+        prefix = f"{filename}:{lineno} in {funcname}()"
+        line = f"{prefix} | {message}"
+    if out_file is None:
+        print(line)
+    else:
+        out_file.write(line + "\n")
+        out_file.flush()
 
 def print_out_exception():
     if out_file is None:
