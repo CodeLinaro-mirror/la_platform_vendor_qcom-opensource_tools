@@ -84,8 +84,9 @@ def verify_active_cpus(ramdump):
         online = ramdump.read_int(runqueues_addr + online_offset, cpu=i)
         cpu_online_bits |= (online << i)
 
-    if (cluster_id_off is None):
-        print_out_str("\n Invalid cluster topology detected\n")
+    if cluster_id_off is None:
+        print_out_str("\n Invalid cluster topology detected, skipping cluster analysis\n")
+        return
 
     cpu_isolated_bits = cpu_isolation_mask(ramdump)
 
@@ -204,7 +205,7 @@ def dump_rq_lock_information(ramdump):
         lock_owner_cpu_offset = ramdump.field_offset('struct rq', '__lock.owner_cpu')
     else:
         lock_owner_cpu_offset = ramdump.field_offset('struct rq', 'lock.owner_cpu')
-    if lock_owner_cpu_offset:
+    if lock_owner_cpu_offset is not None:
         for i in ramdump.iter_cpus():
             lock_owner_cpu = ramdump.read_int(runqueues_addr + lock_owner_cpu_offset, cpu=i)
             print_out_str("\n cpu {0} ->rq_lock owner cpu {1}".format(i, hex(lock_owner_cpu)))
@@ -374,19 +375,36 @@ def dump_cpufreq_data(ramdump):
         min_freq = ramdump.read_structure_field(cpu_data_addr, 'struct cpufreq_policy', 'min')
         max_freq = ramdump.read_structure_field(cpu_data_addr, 'struct cpufreq_policy', 'max')
         freq_table = ramdump.read_structure_field(cpu_data_addr, 'struct cpufreq_policy', 'freq_table')
-        cpuinfo_min_freq = ramdump.read_int(cpu_data_addr + cpuinfo_off + ramdump.field_offset('struct cpufreq_cpuinfo', 'min_freq'))
-        cpuinfo_max_freq = ramdump.read_int(cpu_data_addr + cpuinfo_off + ramdump.field_offset('struct cpufreq_cpuinfo', 'max_freq'))
+        # struct cpufreq_policy::cpuinfo and struct cpufreq_cpuinfo fields
+        # (min_freq/max_freq) are stable across all kernel versions.
+        # None guard below is a safety net for stripped/incomplete vmlinux only.
+        cpuinfo_min_freq_off = ramdump.field_offset('struct cpufreq_cpuinfo', 'min_freq')
+        cpuinfo_max_freq_off = ramdump.field_offset('struct cpufreq_cpuinfo', 'max_freq')
+        cpuinfo_min_freq = ramdump.read_int(cpu_data_addr + cpuinfo_off + cpuinfo_min_freq_off) \
+            if (cpuinfo_off is not None and cpuinfo_min_freq_off is not None) else None
+        cpuinfo_max_freq = ramdump.read_int(cpu_data_addr + cpuinfo_off + cpuinfo_max_freq_off) \
+            if (cpuinfo_off is not None and cpuinfo_max_freq_off is not None) else None
 
         gov = ramdump.read_structure_field(cpu_data_addr, 'struct cpufreq_policy', 'governor')
-        gov_name = ramdump.read_cstring(gov + ramdump.field_offset('struct cpufreq_governor', 'name'))
+        # struct cpufreq_governor::name is stable across all kernel versions.
+        # None guard below is a safety net for stripped/incomplete vmlinux only.
+        gov_name_off = ramdump.field_offset('struct cpufreq_governor', 'name')
+        gov_name = ramdump.read_cstring(gov + gov_name_off) if (gov and gov_name_off is not None) else 'unknown'
 
         curr_cap = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity')
         # thermal_pressure is architecture(ARM/ARM64) and kconfig(CONFIG_ARM_CPU_TOPOLOGY) related
         if (ramdump.kernel_version >= (5, 10, 0)):
             try:
                 max_thermal_cap = (1 << SCHED_CAPACITY_SHIFT)
-                thermal_pressure = ramdump.read_u64(ramdump.address_of('thermal_pressure') + ramdump.per_cpu_offset(i))
-                thermal_cap = max_thermal_cap - thermal_pressure
+                # thermal_pressure per-cpu var introduced in kernel 5.10;
+                # already gated by outer kernel_version >= (5, 10, 0) check.
+                thermal_pressure_addr = ramdump.address_of('thermal_pressure')
+                if thermal_pressure_addr is not None:
+                    thermal_pressure = ramdump.read_u64(thermal_pressure_addr + ramdump.per_cpu_offset(i))
+                    thermal_cap = max_thermal_cap - thermal_pressure
+                else:
+                    thermal_pressure = None
+                    thermal_cap = None
             except Exception as err:
                 print(err)
         else:
@@ -419,7 +437,12 @@ def dump_cpufreq_data(ramdump):
                 .format(i, min_freq, cpuinfo_min_freq)
             anomaly.addWarning("HLOS", "dmesg_TZ.txt", anomaly_str)
         try:
-            arch_scale = ramdump.read_int(ramdump.address_of('cpu_scale') + ramdump.per_cpu_offset(i))
+            # cpu_scale per-cpu var (arch_topology) introduced in kernel 5.9.
+            # Use explicit version check; fall back to None on older kernels.
+            if ramdump.kernel_version >= (5, 9, 0):
+                arch_scale = ramdump.read_int(ramdump.address_of('cpu_scale') + ramdump.per_cpu_offset(i))
+            else:
+                arch_scale = None
             cap_orig = ramdump.read_structure_field(rq_addr, 'struct rq', 'cpu_capacity_orig')
             # INFO: Since kernel v6.7 merged the upstream kernel commit 7bc263840bc3 ("sched/topology: Consolidate
             #       and clean up access to a CPU's max compute capacity"), cpu_capacity_orig has been removed from
@@ -573,6 +596,12 @@ class Schedinfo(RamParser):
         rd_offset = self.ramdump.field_offset('struct rq', 'rd')
         sd_offset = self.ramdump.field_offset('struct rq', 'sd')
         def_rd_addr = self.ramdump.address_of('def_root_domain')
+        # struct rq::rd and struct rq::sd are stable across all kernel versions.
+        # None here means vmlinux DWARF is stripped/incomplete.
+        if rd_offset is None or sd_offset is None:
+            print_out_str("rd/sd offset not found in struct rq (stripped vmlinux?), skipping root domain check")
+            rd_offset = rd_offset if rd_offset is not None else 0
+            sd_offset = sd_offset if sd_offset is not None else 0
 
         try:
             for cpu in (mask_bitset_pos(cpu_online_bits)):
