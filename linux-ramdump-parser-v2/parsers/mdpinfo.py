@@ -2660,24 +2660,19 @@ class MDPinfo(RamParser):
         # Apply PAC ignore for MTE + KASAN HW TAG builds
         local_addr = self.ramdump.pac_ignore(local_addr)
 
-        # Try to convert virtual address to physical if needed
+        # local_addr is a vmapped kernel virtual address (scatter pages since
+        # mm-drivers commit 276979d0dec6dc417069a1286ef0b27f15b0d610 replaced
+        # alloc_pages_exact() with per-page scatter allocation + vmap()).
+        # The pages are physically non-contiguous, so we must NOT convert the
+        # virtual address to physical once and then call read_physical() for the
+        # whole buffer — that would only read the first page correctly and return
+        # garbage for every subsequent page.
+        #
+        # get_bin_data() walks the page tables page-by-page (calling
+        # virt_to_phys() per page) and assembles the result, which is exactly
+        # what we need for vmapped scatter memory.
         try:
-            # Check if this is a virtual address that needs conversion
-            # Create mask based on vabits_actual (refer to pac_ignore() in ramdump.py)
-            kernel_va_mask = self.ramdump.createMask(self.ramdump.vabits_actual, 63)
-            if (local_addr & kernel_va_mask) == kernel_va_mask:  # Likely a virtual address on ARM64
-                phys_addr = self.ramdump.virt_to_phys(local_addr)
-                if phys_addr is None:
-                    print_out_str(f"Failed to convert virtual address 0x{local_addr:x} to physical")
-                    return
-                print_out_str(f"Converted virtual address 0x{local_addr:x} to physical 0x{phys_addr:x}")
-                local_addr = phys_addr
-        except Exception as e:
-            print_out_str(f"Error during address conversion: {e}")
-
-
-        try:
-            memory_data = self.ramdump.read_physical(local_addr, size)
+            memory_data = self.ramdump.get_bin_data(local_addr, size)
             if not memory_data:
                 print_out_str(f"Failed to read memory from local_addr 0x{local_addr:x}, size {size}")
                 return
