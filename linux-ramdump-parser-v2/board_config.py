@@ -196,6 +196,37 @@ class BoardGlymur(Board):
         self.imem_offset_memdump_table = 0x10
         self.imem_file_name = 'OCIMEM.BIN'
 
+class BoardNord(Board):
+    def __init__(self, socid):
+        super(BoardNord, self).__init__()
+        self.socid = socid
+        self.board_num = "nord"
+        self.cpu = 'ARMV9-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x900000
+        self.smem_addr_buildinfo = 0x9071e0
+        self.phys_offset = 0xB0000000
+        self.imem_start = 0x14680000
+        self.imem_file_name = 'OCIMEM.BIN'
+        self.kaslr_addr = 0x146806d0
+        self.imem_offset_memdump_table = 0x10
+        self.hyp_diag_addr = 0x14680B30
+
+class BoardShikra(Board):
+    def __init__(self, socid):
+        super(BoardShikra, self).__init__()
+        self.socid = socid
+        self.board_num = "shikra"
+        self.cpu = 'ARMv8.2-A'
+        self.ram_start = 0x80000000
+        self.smem_addr = 0x6000000
+        self.smem_addr_buildinfo = 0x6007210
+        self.phys_offset = 0xB5000000
+        self.imem_start = 0x0C100000
+        self.kaslr_addr = 0x0C11E6D0
+        self.imem_offset_memdump_table = 0x10
+        self.imem_file_name = 'OCIMEM.BIN'
+
 BoardQCM6490(socid=475)
 BoardQCM6490SVM(socid=475)
 BoardQCM6490(socid=499)
@@ -243,3 +274,8 @@ BoardSM8750SVM(socid=706)
 BoardGlymur(socid=662)
 BoardGlymur(socid=698)
 BoardGlymur(socid=699)
+BoardShikra(socid=756)
+BoardShikra(socid=758)
+BoardShikra(socid=759)
+BoardNord(socid=690)
+BoardNord(socid=798)
