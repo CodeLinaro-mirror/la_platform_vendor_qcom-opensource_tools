@@ -2714,21 +2714,14 @@ class MDPinfo(RamParser):
 
                 SDE_EVTLOG_ENTRY = int(self.ramdump.field_offset('struct sde_dbg_evtlog', 'first') / self.ramdump.sizeof('struct sde_dbg_evtlog_log'))
                 self.outfile.write('%-60.50s%-20.5s%-8.5s%-8.5s%s\n' % ("FUNC", "TIME", "PID", "CPU", "DATA"))
-                sde_evtlog_start = 0
-                sde_evtlog_repeat = 0
+                # curr/last are now incremented together on every log call,
+                # so the old curr!=last check no longer detects a wrapped
+                # buffer. Always walk the full ring buffer once instead.
                 sde_evtlog_curr = abs(evt_log.curr % SDE_EVTLOG_ENTRY)
-                if (evt_log.curr != evt_log.last):
-                        sde_evtlog_start = sde_evtlog_curr + 1
-                else:
-                        sde_evtlog_repeat = 1
+                sde_evtlog_start = sde_evtlog_curr + 1
                 sde_evtlog_count = 0
                 while(sde_evtlog_count < SDE_EVTLOG_ENTRY):
                         i = sde_evtlog_start % SDE_EVTLOG_ENTRY
-                        if (i == sde_evtlog_curr):
-                                if (sde_evtlog_repeat):
-                                        break
-                                else:
-                                        sde_evtlog_repeat = 1
                         addr = evt_log.logs + self.ramdump.sizeof('struct sde_dbg_evtlog_log') * i
                         log_log = addr
                         sde_evtlog_start = sde_evtlog_start + 1
