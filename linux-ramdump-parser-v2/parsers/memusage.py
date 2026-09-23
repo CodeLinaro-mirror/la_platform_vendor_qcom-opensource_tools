@@ -1,5 +1,6 @@
 # Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+#
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
 # only version 2 as published by the Free Software Foundation.
@@ -14,6 +15,7 @@ from parser_util import register_parser, RamParser, cleanupString
 from linux_list import ListWalker
 from parsers.filetracking import FileTracking
 from .memstat import MemStats
+import minidump_util
 
 # This will be reset again later by set_page_shift
 
@@ -324,8 +326,116 @@ def get_rss(ramdump, task_struct):
     total_rss = anon_rss + file_rss + shmem_rss
     return total_rss * 4 , swap_rss * 4 , anon_rss * 4 , file_rss * 4,  shmem_rss * 4
 
+def do_dump_process_memory_minidump(ramdump):
+    """
+    Process minidump memory usage information and convert new format to old format.
+
+    This function extracts memory statistics from the TASK_MEMSTAT section of a minidump
+    and converts the data format to match the legacy output format for compatibility.
+    """
+    with ramdump.open_file('memory.txt') as memory_file:
+        # Read TASK_MEMSTAT section from minidump
+        memstat_text = minidump_util.minidump_extract_section_context(
+            ramdump.ebi_files_minidump,
+            ramdump.ebi_files,
+            ramdump.elffile,
+            "TASK_MEMSTAT"
+        )
+
+        if memstat_text:
+            # Convert new format to old format
+            lines = memstat_text.strip().split('\n')
+            converted_lines = []
+            total_ram = 0
+
+            # Get total_ram from MEMINFO section
+            meminfo_text = minidump_util.minidump_extract_section_context(
+                ramdump.ebi_files_minidump,
+                ramdump.ebi_files,
+                ramdump.elffile,
+                "MEMINFO"
+            )
+            if meminfo_text:
+                for meminfo_line in meminfo_text.split('\n'):
+                    if 'MemTotal' in meminfo_line and ':' in meminfo_line:
+                        try:
+                            # Handles both:
+                            #   "MemTotal:        : 11533328 KB"
+                            #   "MemTotal: 11533328 KB"
+                            _, value = meminfo_line.split(':', 1)
+                            value_parts = value.strip().split()
+                            if value_parts[0] == ':':
+                                total_ram = int(value_parts[1])
+                            else:
+                                total_ram = int(value_parts[0])
+                        except (ValueError, IndexError):
+                            total_ram = 0
+                        break
+
+            # Write Total RAM line from MEMINFO into output
+            if total_ram > 0:
+                converted_lines.append('Total RAM        : {:>10,} kB'.format(total_ram))
+
+            # Second pass: convert all lines using the resolved total_ram
+            for line in lines:
+                # Skip any Total RAM line from TASK_MEMSTAT (already written from MEMINFO above)
+                if line.strip().startswith('Total RAM'):
+                    continue
+
+                # Detect and convert table header
+                if 'PID' in line and 'RSS(KB)' in line and 'TaskName' in line:
+                    # Convert to old format header
+                    converted_lines.append('{0:<17s}{1:>8s}{2:>19s}{3:>19s}{4:>6}{5:>16}{6:>16}{7:>16}'.format(
+                        'Task name', 'PID', 'RSS in kB', 'SWAP in kB', 'ADJ',
+                        'anon_rss in kB', 'file_rss in kB', 'shmem_rss in kB'))
+                    continue
+
+                # Convert data rows
+                # New format: PID  RSS(KB)  SWAP(KB)  ADJ  anon_rss(KB)  file_rss(KB)  shmem_rss(KB)  TaskName
+                parts = line.strip().split()
+                if len(parts) >= 8:
+                    try:
+                        pid = int(parts[0])
+                        rss = int(parts[1])
+                        swap = int(parts[2])
+                        adj = parts[3]
+                        anon_rss = int(parts[4])
+                        file_rss = int(parts[5])
+                        shmem_rss = int(parts[6])
+                        taskname = parts[7]
+
+                        # Calculate percentages
+                        rss_pct = (100.0 * rss) / total_ram if total_ram > 0 else 0.0
+                        swap_pct = (100.0 * swap) / total_ram if total_ram > 0 else 0.0
+
+                        # Convert to old format
+                        # Old format: Task name  PID  RSS in kB(%)  SWAP in kB(%)  ADJ  anon_rss  file_rss  shmem_rss
+                        converted_line = '{taskname:<17s}{pid:8d}{rss:13,d}({rss_pct:4.1f}%){swap:13,d}({swap_pct:2.1f}%){adj:>6} {anon_rss:>16,d} {file_rss:>16,d} {shmem_rss:>10,d}'.format(
+                            taskname=taskname, pid=pid,
+                            rss=rss, rss_pct=rss_pct,
+                            swap=swap, swap_pct=swap_pct,
+                            adj=adj, anon_rss=anon_rss, file_rss=file_rss, shmem_rss=shmem_rss)
+                        converted_lines.append(converted_line)
+                    except (ValueError, IndexError):
+                        # If parsing fails, keep the original line
+                        converted_lines.append(line)
+                else:
+                    # Keep other lines (such as empty lines, comments, etc.) as-is
+                    converted_lines.append(line)
+
+            # Write converted content to file
+            memory_file.write('\n'.join(converted_lines))
+            if not converted_lines[-1].endswith('\n'):
+                memory_file.write('\n')
+            print_out_str('---wrote meminfo from minidump to memory.txt (converted to old format)')
+        else:
+            memory_file.write("TASK_MEMSTAT section not found in minidump\n")
+            print_out_str("TASK_MEMSTAT section not found in minidump")
 
 @register_parser('--print-memory-info', 'Print memory usage info')
 class DumpProcessMemory(RamParser):
     def parse(self):
-        do_dump_process_memory(self.ramdump)
+        if self.ramdump.minidump:
+            do_dump_process_memory_minidump(self.ramdump)
+        else:
+            do_dump_process_memory(self.ramdump)
