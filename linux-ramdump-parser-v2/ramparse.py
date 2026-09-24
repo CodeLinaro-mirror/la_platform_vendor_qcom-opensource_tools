@@ -214,9 +214,10 @@ if __name__ == '__main__':
     parser.add_option('', '--wlan', dest='wlan', help='wlan.ko path')
     parser.add_option('', '--minidump', action='store_true', dest='minidump',
                       help='Parse minidump')
-    # Adding option for reduced dump
     parser.add_option('', '--reduceddump', action='store_true', dest='reduceddump',
                   help='Parse reduceddump')
+    parser.add_option('', '--vmcoredump', dest='vmcoredump',
+                      help='Path to vmcore file for parsing')
     parser.add_option('', '--svm', default='', dest='svm',action='store',type="string",
                       help='Parse svm')
     parser.add_option('', '--ram-elf', dest='ram_elf_addr',
@@ -308,6 +309,7 @@ if __name__ == '__main__':
         default_list.append("DumpTasks")
         default_list.append("FtraceParser")
         default_list.append("MemStats")
+        default_list.append("DumpProcessMemory")
 
     if options.everything:
         everything_exclusion_list.append("ROData")
@@ -374,13 +376,18 @@ if __name__ == '__main__':
 
     print_out_str('using vmlinux file {0}'.format(options.vmlinux))
 
-    if options.ram_addr is None and options.autodump is None and not options.minidump and not options.reduceddump:
+    if options.ram_addr is None and options.autodump is None and not options.minidump and not options.reduceddump and not options.vmcoredump:
         print_out_str('Need one of --auto-dump or at least one --ram-file')
         sys.exit(1)
 
     if options.reduceddump and not options.autodump:
         print_out_str('Need autodump with --reduceddump option')
         sys.exit(1)
+
+    if options.vmcoredump:
+        if not os.path.exists(options.vmcoredump):
+            print_out_str('!!! vmcore file {0} does not exist. Exiting...'.format(options.vmcoredump))
+            sys.exit(1)
 
     if options.ram_addr is not None:
         for a in options.ram_addr:
