@@ -16,6 +16,7 @@ from linux_list import ListWalker
 from ramdump import Struct
 from parsers.mdp.dcp_hfi import DcpHfiParser
 from parsers.mdp.drm_commit_state import DrmCommitStateParser
+from parsers.mdp.dma_buf import DmaBufParser
 import sys
 import re
 import string
@@ -2665,6 +2666,7 @@ class MDPinfo(RamParser):
         if hfi_mode or display_mode == 'UNKNOWN':
             DcpHfiParser(self.ramdump).parse()
         DrmCommitStateParser(self.ramdump).parse()
+        DmaBufParser(self.ramdump).parse()
 
         mdss_dbg = (SdeDbgBase(self.ramdump, 'sde_dbg_base') if hfi_mode
                     else MdssDbgXlog(self.ramdump, 'mdss_dbg_xlog'))
