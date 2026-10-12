@@ -137,6 +137,67 @@ def verify_active_cpus(ramdump):
     if cpu_logical_map: print_out_str(f"\tcpu_logical_map = {get_cpu_logical_map(ramdump)}")
     print_out_str("")
 
+def dump_dl_server_info(ramdump):
+    """Print dl_defer_armed, dl_defer_running, dl_runtime, dl_deadline for
+    fair_server and ext_server embedded in each CPU's runqueue.
+
+    dl_defer_armed and dl_defer_running are C bitfields; read_datatype() is
+    used so that LRDP decodes them from vmlinux DWARF metadata rather than
+    returning the raw storage-unit value.
+    """
+    runqueues_addr = ramdump.address_of('runqueues')
+    if not runqueues_addr:
+        print_out_str("runqueues symbol not found, skipping DL server info")
+        return
+
+    fair_server_off = ramdump.field_offset('struct rq', 'fair_server')
+    ext_server_off  = ramdump.field_offset('struct rq', 'ext_server')
+
+    if fair_server_off is None and ext_server_off is None:
+        print_out_str("fair_server/ext_server not found in struct rq "
+                      "(kernel may not support DL servers)")
+        return
+
+    # Attributes we want from struct sched_dl_entity.
+    # read_datatype() uses vmlinux DWARF info to correctly extract bitfields.
+    _DL_ATTRS = ['dl_defer_armed', 'dl_defer_running']
+
+    print_out_str("\nDL Server Information (fair_server / ext_server):\n" + "-" * 60)
+
+    for cpu in ramdump.iter_cpus():
+        per_cpu_off = ramdump.per_cpu_offset(cpu)
+        if per_cpu_off is None:
+            print_out_str("CPU {}: per_cpu_offset unavailable, skipping".format(cpu))
+            continue
+
+        rq_addr = runqueues_addr + per_cpu_off
+        print_out_str("CPU {}:".format(cpu))
+
+        for server_name, server_off in [('fair_server', fair_server_off),
+                                        ('ext_server',  ext_server_off)]:
+            if server_off is None:
+                print_out_str("  {}: not present in this kernel".format(server_name))
+                continue
+
+            dl_se_addr = rq_addr + server_off
+
+            try:
+                # read_datatype decodes bitfields via vmlinux DWARF metadata,
+                # so dl_defer_armed / dl_defer_running will be 0 or 1.
+                dl_se = ramdump.read_datatype(
+                    dl_se_addr,
+                    'struct sched_dl_entity',
+                    _DL_ATTRS)
+
+                print_out_str("  {}: dl_defer_armed={} dl_defer_running={}".format(
+                    server_name, dl_se.dl_defer_armed, dl_se.dl_defer_running))
+            except Exception as err:
+                print_out_str("  {}: error reading fields: {}".format(
+                    server_name, str(err)))
+
+    print_out_str("")
+
+
 def dump_rq_lock_information(ramdump):
     runqueues_addr = ramdump.address_of('runqueues')
     if (ramdump.kernel_version >= (5, 15, 0)):
@@ -149,6 +210,115 @@ def dump_rq_lock_information(ramdump):
             print_out_str("\n cpu {0} ->rq_lock owner cpu {1}".format(i, hex(lock_owner_cpu)))
         print_out_str("\n ")
 
+# ---------------------------------------------------------------------------
+# Votable-based halt isolation helpers (kernel >= 6.18)
+# ---------------------------------------------------------------------------
+
+# Halt type value -> human-readable name
+_HALT_TYPE_NAMES = {0: 'UNHALT', 1: 'PARTIAL', 2: 'HALT'}
+
+
+def _halt_type_name(val):
+    """Return a human-readable name for a halt-type integer value."""
+    return _HALT_TYPE_NAMES.get(val, 'UNKNOWN({})'.format(val))
+
+
+def _get_enum_client_names(ramdump, enum_name_list):
+    """
+    Build {int_value: name_str} for each name in *enum_name_list* by querying
+    the debug-info via gdbmi.  Returns an empty dict if gdbmi is unavailable
+    or the symbols are not present.
+    """
+    names = {}
+    for name in enum_name_list:
+        try:
+            val = ramdump.gdbmi.get_value_of(name)
+            names[val] = name
+        except Exception:
+            pass
+    return names
+
+
+def _dump_one_votable(ramdump, votable_ptr, client_names, label):
+    """Print the contents of a single struct votable at *votable_ptr*."""
+    if not votable_ptr:
+        print_out_str("\t\t{}: <null pointer>".format(label))
+        return
+
+    num_clients = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'num_clients')
+    effective_client_id = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'effective_client_id')
+    effective_result = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'effective_result')
+    voted_on = ramdump.read_structure_field(
+        votable_ptr, 'struct votable', 'voted_on')
+
+    eff_client_name = client_names.get(effective_client_id,
+                                       str(effective_client_id))
+    eff_result_name = _halt_type_name(effective_result)
+
+    print_out_str(
+        "\t\t{}: effective_result={} effective_client={} num_clients={}".format(
+            label, eff_result_name, eff_client_name, num_clients))
+
+    if num_clients is None or num_clients <= 0:
+        return
+
+    votes_offset = ramdump.field_offset('struct votable', 'votes')
+    votes_base = votable_ptr + votes_offset
+
+    for i in range(min(num_clients, 8)):   # NUM_MAX_CLIENTS = 8
+        client_name = client_names.get(i)
+        if client_name is None:
+            continue  # skip slots not in _HALT_CLIENT_ENUM
+        vote_addr = ramdump.array_index(
+            votes_base, 'struct client_vote', i)
+        enabled = ramdump.read_structure_field(
+            vote_addr, 'struct client_vote', 'enabled')
+        value = ramdump.read_structure_field(
+            vote_addr, 'struct client_vote', 'value')
+        value_name = _halt_type_name(value)
+        print_out_str(
+            "\t\t\t{}: {} enabled={}".format(
+                client_name, value_name, bool(enabled)))
+
+
+def _dump_votable_isolation_data(ramdump):
+    """Dump halt_votable client votes for kernel >= 6.18."""
+    ramdump.set_priority_namespace('voter.h')
+    halt_votable_addr = ramdump.address_of('halt_votable')
+
+    if halt_votable_addr is None:
+        print_out_str("\nhalt_votable: symbol not found in dump")
+        return
+
+    # halt_votable clients come from enum pause_client
+    _HALT_CLIENT_ENUM = [
+        'PAUSE_INDIRECT', 'PAUSE_CORE_CTL', 'PAUSE_THERMAL',
+        'PAUSE_HYP', 'PAUSE_SBT',
+    ]
+
+    halt_client_names = _get_enum_client_names(ramdump, _HALT_CLIENT_ENUM)
+    if not halt_client_names:
+        # Minimal fallback: only PAUSE_INDIRECT=0 is guaranteed
+        halt_client_names = {0: 'PAUSE_INDIRECT'}
+
+    print_out_str("\nvotable isolation data:")
+
+    for cpu in ramdump.iter_cpus():
+        print_out_str("\tcpu{}:".format(cpu))
+
+        try:
+            halt_vot_ptr = ramdump.read_pointer(
+                ramdump.array_index(halt_votable_addr, 'struct votable *', cpu))
+            _dump_one_votable(ramdump, halt_vot_ptr,
+                              halt_client_names, 'halt_votable')
+        except Exception as e:
+            print_out_str(
+                "\t\thalt_votable: error reading: {}".format(str(e)))
+
+
 def dump_isolation_data(ramdump):
     try:
         if ramdump.address_of('cluster_state') is not None:
@@ -158,13 +328,16 @@ def dump_isolation_data(ramdump):
                 print_out_str("\tcluster{}: min_cpus = {} max_cpus = {} enable = {}".format(
                     idx, cluster_state[idx].min_cpus, cluster_state[idx].max_cpus,
                     cluster_state[idx].enable))
-        halt_state_ptr = ramdump.address_of('halt_state')
-        if halt_state_ptr is not None:
-            print_out_str("\nhalt_state:")
-            for cpu in ramdump.iter_cpus():
-                halt_state = ramdump.read_u16(halt_state_ptr, cpu=cpu)
-                print_out_str("\tcpu{}: client_vote_mask = ({}, {})".format(
-                    cpu, halt_state & 0xFF, (halt_state>>8) & 0xFF))
+        if ramdump.kernel_version >= (6, 18, 0):
+            _dump_votable_isolation_data(ramdump)
+        else:
+            halt_state_ptr = ramdump.address_of('halt_state')
+            if halt_state_ptr is not None:
+                print_out_str("\nhalt_state:")
+                for cpu in ramdump.iter_cpus():
+                    halt_state = ramdump.read_u16(halt_state_ptr, cpu=cpu)
+                    print_out_str("\tcpu{}: client_vote_mask = ({}, {})".format(
+                        cpu, halt_state & 0xFF, (halt_state>>8) & 0xFF))
     except Exception as err:
         print_out_str("{}\n".format(str(err)))
         pass
@@ -422,6 +595,7 @@ class Schedinfo(RamParser):
             print_out_str("*" * 5 + " WARNING:" + "\n")
             print_out_str("\t\t sysctl_sched_uclamp_util_min Default:{0} and Value in dump:{1}\n".format(SCHED_CAPACITY_SCALE, sched_uclamp_util_min))
             print_out_str("\t\t sysctl_sched_uclamp_util_max Default:{0} and Value in dump:{1}\n".format(SCHED_CAPACITY_SCALE, sched_uclamp_util_max))
+        dump_dl_server_info(self.ramdump)
         dump_rq_lock_information(self.ramdump)
         dump_isolation_data(self.ramdump)
         print_out.out_file.flush()
