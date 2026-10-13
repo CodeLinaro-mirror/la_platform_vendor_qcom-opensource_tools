@@ -1517,7 +1517,7 @@ class MDPinfo(RamParser):
     def split_dic(self, output2):
         f_out=self.ramdump.open_file(output2,"r")
         n=f_out.readline()
-        output3="sde_evtlog_parsed.txt"
+        output3="display_info/sde_evtlog_parsed.txt"
         self.outfile = self.ramdump.open_file(output3, "w")
         sde_dbg_evtlog_log = [dict() for x in range( len(f_out.readlines(  )))]
         f_out.seek(0,0)
@@ -1582,7 +1582,7 @@ class MDPinfo(RamParser):
         while {} in contents_for_analysis:
             contents_for_analysis.remove({})
 
-        self.outfile = self.ramdump.open_file('reg_stage_3.txt', 'w')
+        self.outfile = self.ramdump.open_file('display_info/reg_stage_3.txt', 'w')
         for  i in range(len(contents_for_analysis)):
             if "0x5000" in contents_for_analysis[i]["offset"].strip():
                 self.outfile.write("VIG_0 ")
@@ -2459,7 +2459,7 @@ class MDPinfo(RamParser):
 
     def check_rc_hang(self):
         try:
-            dbgbus = self.ramdump.open_file('sde_dbgbus.txt', 'r')
+            dbgbus = self.ramdump.open_file('display_info/sde_dbgbus.txt', 'r')
             lines = dbgbus.readlines()
             rc0_debugbus_point = '00000348 00000034 00000002'
             rc1_debugbus_point = '00000348 00000035 00000002'
@@ -2475,7 +2475,7 @@ class MDPinfo(RamParser):
 
     def check_LTM_status(self):
         try:
-            reg_dump = self.ramdump.open_file('sde_regdump.txt', 'r')
+            reg_dump = self.ramdump.open_file('display_info/sde_regdump.txt', 'r')
             lines = reg_dump.readlines()
             ltm0_status_reg = '0x6a360'
             ltm1_status_reg = '0x6b360'
@@ -2493,7 +2493,7 @@ class MDPinfo(RamParser):
 
     def check_LUTDMA_hang(self):
         try:
-            reg_dump = self.ramdump.open_file('sde_regdump_parsed.txt', 'r')
+            reg_dump = self.ramdump.open_file('display_info/sde_regdump_parsed.txt', 'r')
             lines = reg_dump.readlines()
             LUT_regsister_dump = 'reg_dma'
             reg_dma0_status = '--NA--'
@@ -2531,7 +2531,7 @@ class MDPinfo(RamParser):
         LTM_busy = self.check_LTM_status()
         LUTDMA_hang = self.check_LUTDMA_hang()
         try:
-            self.file = self.ramdump.open_file('sde_evtlog_parsed.txt', 'r+')
+            self.file = self.ramdump.open_file('display_info/sde_evtlog_parsed.txt', 'r+')
             content = self.file.read()
             self.file.seek(0, 0)
             self.file.write('%s \n' % ("---------------------------------------  SDE INITIAL ANALYSIS  ---------------------------------------"))
@@ -2572,7 +2572,7 @@ class MDPinfo(RamParser):
             HFI_CORE_TRACE_EVENT_SIZE = self.ramdump.sizeof('struct hfi_core_trace_event')
             print_out_str(f"HFI_CORE_TRACE_EVENT_SIZE = {HFI_CORE_TRACE_EVENT_SIZE}")
 
-            self.outfile = self.ramdump.open_file('hfi_core_dump_events.txt', 'w')
+            self.outfile = self.ramdump.open_file('display_info/hfi_core_dump_events.txt', 'w')
             print_out_str("Opened output file successfully")
 
             # Calculate the actual number of events based on allocated memory size
@@ -2660,33 +2660,28 @@ class MDPinfo(RamParser):
         # Apply PAC ignore for MTE + KASAN HW TAG builds
         local_addr = self.ramdump.pac_ignore(local_addr)
 
-        # Try to convert virtual address to physical if needed
+        # local_addr is a vmapped kernel virtual address (scatter pages since
+        # mm-drivers commit 276979d0dec6dc417069a1286ef0b27f15b0d610 replaced
+        # alloc_pages_exact() with per-page scatter allocation + vmap()).
+        # The pages are physically non-contiguous, so we must NOT convert the
+        # virtual address to physical once and then call read_physical() for the
+        # whole buffer — that would only read the first page correctly and return
+        # garbage for every subsequent page.
+        #
+        # get_bin_data() walks the page tables page-by-page (calling
+        # virt_to_phys() per page) and assembles the result, which is exactly
+        # what we need for vmapped scatter memory.
         try:
-            # Check if this is a virtual address that needs conversion
-            # Create mask based on vabits_actual (refer to pac_ignore() in ramdump.py)
-            kernel_va_mask = self.ramdump.createMask(self.ramdump.vabits_actual, 63)
-            if (local_addr & kernel_va_mask) == kernel_va_mask:  # Likely a virtual address on ARM64
-                phys_addr = self.ramdump.virt_to_phys(local_addr)
-                if phys_addr is None:
-                    print_out_str(f"Failed to convert virtual address 0x{local_addr:x} to physical")
-                    return
-                print_out_str(f"Converted virtual address 0x{local_addr:x} to physical 0x{phys_addr:x}")
-                local_addr = phys_addr
-        except Exception as e:
-            print_out_str(f"Error during address conversion: {e}")
-
-
-        try:
-            memory_data = self.ramdump.read_physical(local_addr, size)
+            memory_data = self.ramdump.get_bin_data(local_addr, size)
             if not memory_data:
                 print_out_str(f"Failed to read memory from local_addr 0x{local_addr:x}, size {size}")
                 return
 
-            self.outfile = self.ramdump.open_file('hfi_dump.txt', 'wb')
+            self.outfile = self.ramdump.open_file('display_info/hfi_dump.txt', 'wb')
             self.outfile.write(memory_data)
             self.outfile.close()
 
-            print_out_str(f"Successfully dumped {len(memory_data)} bytes to 'hfi_dump.txt'")
+            print_out_str(f"Successfully dumped {len(memory_data)} bytes to 'display_info/hfi_dump.txt'")
 
         except Exception as e:
             print_out_str(f"Exception while reading/writing HFI debug data: {e}")
@@ -2706,7 +2701,7 @@ class MDPinfo(RamParser):
                 return
             # EVENT LOGS
             try:
-                self.outfile = self.ramdump.open_file('sde_evtlog.txt')
+                self.outfile = self.ramdump.open_file('display_info/sde_evtlog.txt')
 
                 evt_log = Struct(self.ramdump, mdss_dbg.evtlog,
                           struct_name="struct sde_dbg_evtlog",
@@ -2719,21 +2714,14 @@ class MDPinfo(RamParser):
 
                 SDE_EVTLOG_ENTRY = int(self.ramdump.field_offset('struct sde_dbg_evtlog', 'first') / self.ramdump.sizeof('struct sde_dbg_evtlog_log'))
                 self.outfile.write('%-60.50s%-20.5s%-8.5s%-8.5s%s\n' % ("FUNC", "TIME", "PID", "CPU", "DATA"))
-                sde_evtlog_start = 0
-                sde_evtlog_repeat = 0
+                # curr/last are now incremented together on every log call,
+                # so the old curr!=last check no longer detects a wrapped
+                # buffer. Always walk the full ring buffer once instead.
                 sde_evtlog_curr = abs(evt_log.curr % SDE_EVTLOG_ENTRY)
-                if (evt_log.curr != evt_log.last):
-                        sde_evtlog_start = sde_evtlog_curr + 1
-                else:
-                        sde_evtlog_repeat = 1
+                sde_evtlog_start = sde_evtlog_curr + 1
                 sde_evtlog_count = 0
                 while(sde_evtlog_count < SDE_EVTLOG_ENTRY):
                         i = sde_evtlog_start % SDE_EVTLOG_ENTRY
-                        if (i == sde_evtlog_curr):
-                                if (sde_evtlog_repeat):
-                                        break
-                                else:
-                                        sde_evtlog_repeat = 1
                         addr = evt_log.logs + self.ramdump.sizeof('struct sde_dbg_evtlog_log') * i
                         log_log = addr
                         sde_evtlog_start = sde_evtlog_start + 1
@@ -2764,8 +2752,8 @@ class MDPinfo(RamParser):
                 self.outfile.close()
 
                 #Event log Parser
-                tmp_outfile = self.ramdump.open_file('sde_evtlog.txt', 'r')
-                self.outfile = self.ramdump.open_file('evtlog_stage_1.txt')
+                tmp_outfile = self.ramdump.open_file('display_info/sde_evtlog.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/evtlog_stage_1.txt')
                 lines = tmp_outfile.readlines()
 
                 for eachLine in lines:
@@ -2782,8 +2770,8 @@ class MDPinfo(RamParser):
                 self.outfile.close()
 
                 #Event log Verbose
-                tmp_outfile = self.ramdump.open_file('evtlog_stage_1.txt', 'r')
-                self.outfile = self.ramdump.open_file('evtlog_stage_2.txt')
+                tmp_outfile = self.ramdump.open_file('display_info/evtlog_stage_1.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/evtlog_stage_2.txt')
                 title = '{:<50}  {:<10}  {:<15}  {:<15}  {:<15}  {:<100}'.format('FUNCTION_NAME', "LINE_NO", "TIMESTAMP", "PID", "CPU", "DATA"  )
                 self.outfile.write(title)
                 self.outfile.write("\n")
@@ -2793,7 +2781,7 @@ class MDPinfo(RamParser):
                 self.outfile.close()
                 tmp_outfile.close()
 
-                self.outfile = self.ramdump.open_file('evtlog_stage_2.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/evtlog_stage_2.txt', 'r')
                 self.outfile.readline()
                 contents_list = []
                 for line in self.outfile:
@@ -2869,7 +2857,7 @@ class MDPinfo(RamParser):
                         continue
 
                 contents_list.reverse()
-                self.outfile=self.ramdump.open_file('evtlog_stage_2.txt',"w")
+                self.outfile=self.ramdump.open_file('display_info/evtlog_stage_2.txt',"w")
                 for i in range(len(contents_list)) :
                     for j in range(len(contents_list[i])):
                         self.outfile.write(contents_list[i][j])
@@ -2878,15 +2866,15 @@ class MDPinfo(RamParser):
                 self.outfile.write("\n")
                 self.outfile.close()
 
-                self.split_dic('evtlog_stage_2.txt')
+                self.split_dic('display_info/evtlog_stage_2.txt')
             except:
                 pass
-            self.ramdump.remove_file('evtlog_stage_1.txt')
-            self.ramdump.remove_file('evtlog_stage_2.txt')
+            self.ramdump.remove_file('display_info/evtlog_stage_1.txt')
+            self.ramdump.remove_file('display_info/evtlog_stage_2.txt')
 
             #Dumps
             try:
-                self.outfile = self.ramdump.open_file('sde_regdump.txt')
+                self.outfile = self.ramdump.open_file('display_info/sde_regdump.txt')
                 dump_list = ListWalker(self.ramdump, mdss_dbg.reg_base_list, 0)
                 if dump_list.is_empty():
                     self.outfile.write('%s \n' % ("BLK DUMPLIST IS EMPTY!!!"))
@@ -2913,16 +2901,16 @@ class MDPinfo(RamParser):
                                 self.print_sderange(node)
                 #Dumps Parse
                 self.outfile.close()
-                f_in = self.ramdump.open_file('sde_regdump.txt', 'r')
-                self.outfile = self.ramdump.open_file('reg_stage_1.txt', 'w')
+                f_in = self.ramdump.open_file('display_info/sde_regdump.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/reg_stage_1.txt', 'w')
                 for eachLine in f_in:
                     if not eachLine.isspace() and "-----" not in eachLine and "======" not in eachLine and '["' not in eachLine :
                         self.outfile.write(eachLine)
                 f_in.close()
                 self.outfile.close()
 
-                f_in = self.ramdump.open_file("reg_stage_1.txt", 'r')
-                self.outfile = self.ramdump.open_file('reg_stage_2.txt','w')
+                f_in = self.ramdump.open_file("display_info/reg_stage_1.txt", 'r')
+                self.outfile = self.ramdump.open_file('display_info/reg_stage_2.txt','w')
                 for eachLine in f_in:
                     if '[' in eachLine:
                         break
@@ -2931,18 +2919,18 @@ class MDPinfo(RamParser):
                     self.outfile.write(eachLine)
                 f_in.close()
                 self.outfile.close()
-                contents_for_analysis=self.reg_parser("reg_stage_2.txt")
+                contents_for_analysis=self.reg_parser("display_info/reg_stage_2.txt")
 
                 #Regdump Verbose
                 contents_for_analysis=self.reg_verbose(contents_for_analysis)
-                self.file_write(contents_for_analysis, "sde_regdump_parsed.txt")
+                self.file_write(contents_for_analysis, "display_info/sde_regdump_parsed.txt")
             except:
                 pass
-            self.ramdump.remove_file('reg_stage_1.txt')
-            self.ramdump.remove_file('reg_stage_2.txt')
-            self.ramdump.remove_file('reg_stage_3.txt')
+            self.ramdump.remove_file('display_info/reg_stage_1.txt')
+            self.ramdump.remove_file('display_info/reg_stage_2.txt')
+            self.ramdump.remove_file('display_info/reg_stage_3.txt')
             try:
-                self.outfile = self.ramdump.open_file('sde_reglog.txt')
+                self.outfile = self.ramdump.open_file('display_info/sde_reglog.txt')
                 reg_log = Struct(self.ramdump, mdss_dbg.reglog,
                           struct_name="struct sde_dbg_reglog",
                           fields={'enable': Struct.get_u32,
@@ -2991,9 +2979,9 @@ class MDPinfo(RamParser):
                 pass
 
             #Combining reglog with eventlog
-            f_evtlog = self.ramdump.open_file('sde_evtlog_parsed.txt', 'r')
-            f_reglog = self.ramdump.open_file('sde_reglog.txt', 'r')
-            self.outfile = self.ramdump.open_file('sde_evtlog_reglog_merged.txt', 'w')
+            f_evtlog = self.ramdump.open_file('display_info/sde_evtlog_parsed.txt', 'r')
+            f_reglog = self.ramdump.open_file('display_info/sde_reglog.txt', 'r')
+            self.outfile = self.ramdump.open_file('display_info/sde_evtlog_reglog_merged.txt', 'w')
             evtlog = f_evtlog.readline()
             reglog = f_reglog.readline()
             curr_timestamp = 0
@@ -3041,7 +3029,7 @@ class MDPinfo(RamParser):
             f_evtlog.close()
             f_reglog.close()
             self.outfile.close()
-            self.ramdump.remove_file('sde_reglog.txt')
+            self.ramdump.remove_file('display_info/sde_reglog.txt')
 
             dbgbus_sde = Struct(self.ramdump, mdss_dbg.dbgbus_sde,
                             struct_name="struct sde_dbg_sde_debug_bus",
@@ -3091,7 +3079,7 @@ class MDPinfo(RamParser):
                             fields={'dumped_content': Struct.get_pointer,
                                     'content_size': Struct.get_u32})
 
-            self.outfile = self.ramdump.open_file('sde_dbgbus.txt', 'w')
+            self.outfile = self.ramdump.open_file('display_info/sde_dbgbus.txt', 'w')
 
             i = 0
             self.outfile.write('---------------------------------\n[dbgbus_sde]\n---------------------------------\n')
@@ -3167,7 +3155,7 @@ class MDPinfo(RamParser):
 
                 # Delays file creation until we have found a non-null array element
                 if not self.outfile:
-                    self.outfile = self.ramdump.open_file('mdpinfo_out.txt')
+                    self.outfile = self.ramdump.open_file('display_info/mdpinfo_out.txt')
 
                 self.outfile.write('mdss_dump_reg_by_ranges:'
                                '=========%s DUMP=========\n' % blk.name)
