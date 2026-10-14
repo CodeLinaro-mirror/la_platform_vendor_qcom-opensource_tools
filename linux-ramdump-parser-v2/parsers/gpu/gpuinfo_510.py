@@ -1172,6 +1172,21 @@ class GpuParser_510(RamParser):
             str_convert_to_kb(dmabuf_mem), str(ctxt_count),
             hex(state), str(cmdline_string)))
 
+    def get_global_ttbr1(self, dump):
+        # The global (default) pagetable is built from the SMMU's TTBR1 cfg,
+        # so its 'ttbr0' field actually holds the TTBR1 register value shared
+        # by the GPU and GMU. Mirrors the T32 expression
+        # v.v (*(kgsl_driver.devp[0])).mmu.defaultpagetable
+        smmu = dump.struct_field_addr(self.devp, 'struct kgsl_device', 'mmu')
+        default_pt = dump.read_structure_field(smmu, 'struct kgsl_mmu',
+                                               'defaultpagetable')
+        if not default_pt:
+            return None
+        # struct kgsl_pagetable is the first member of struct kgsl_iommu_pt,
+        # so the pointer doubles as the kgsl_iommu_pt address.
+        return dump.read_structure_field(default_pt, 'struct kgsl_iommu_pt',
+                                         'ttbr0')
+
     def parse_pagetables(self, dump):
         format_str = '{0:14} {1:16} {2:20}'
         self.writeln(format_str.format("PID", "pt_base", "ttbr0"))
@@ -1183,6 +1198,10 @@ class GpuParser_510(RamParser):
                                     dump, node_addr, list_elem_offset)
         pagetable_list_walker.walk(self.walk_pagetable,
                                    dump, format_str)
+
+        ttbr1 = self.get_global_ttbr1(dump)
+        self.writeln('\nGlobal GPU pagetable TTBR1: ' +
+                     (strhex(ttbr1) if ttbr1 is not None else 'N/A'))
 
     def walk_pagetable(self, pt_base_addr, dump, format_str):
         pid = dump.read_structure_field(
@@ -1342,10 +1361,12 @@ class GpuParser_510(RamParser):
         if pgtbl_ops is not None:
             pgtbl_cfg = dump.sibling_field_addr(pgtbl_ops,
                                             'struct io_pgtable', 'ops', 'cfg')
-            ttbr1_val = dump.read_structure_field(pgtbl_cfg,
+            gmu_ttbr0 = dump.read_structure_field(pgtbl_cfg,
                                               'struct io_pgtable_cfg',
                                               'arm_lpae_s1_cfg.ttbr')
-            self.writeln('ttbr1: ' + strhex(ttbr1_val))
+            self.writeln('ttbr0: ' + strhex(gmu_ttbr0))
+        else:
+            self.writeln('ttbr0: N/A')
 
         num_clks = dump.read_structure_field(gmu_dev_addr, gmu_device,
                                              'num_clks')
