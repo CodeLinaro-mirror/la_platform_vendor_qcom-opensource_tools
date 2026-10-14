@@ -256,8 +256,7 @@ class TimerList(RamParser) :
         if hrtimer_base == None:
             print(" %s " % ("\n rbtree corrupted \n"), file=self.output_file)
             return
-        node = self.ramdump.struct_field_addr(hrtimer_base , 'struct hrtimer', 'node')
-        expires = self.ramdump.read_structure_field(node, 'struct timerqueue_node', 'expires')
+        expires = self.ramdump.read_structure_field(hrtimer_base, 'struct hrtimer', 'node.expires')
         function = self.ramdump.read_structure_field(hrtimer_base, 'struct hrtimer', 'function')
         function_name = None
         if function:
@@ -280,8 +279,8 @@ class TimerList(RamParser) :
             clock_base = (hrtimer_bases + clock_base_offset)
             print(" CPU %d hrtimer_bases  v.v (struct hrtimer_cpu_base)0x%x  " % (i, hrtimer_bases), file = self.output_file)
             num_of_HRTIMER_MAX_CLOCK_BASES = self.ramdump.gdbmi.get_value_of('HRTIMER_MAX_CLOCK_BASES')
-            self.hrtimer_list = []
             for j in range(0, num_of_HRTIMER_MAX_CLOCK_BASES):
+                self.hrtimer_list = []
                 hrtimer_cpu_base_index  = self.ramdump.array_index(clock_base, 'struct  hrtimer_clock_base', j)
                 if hrtimer_cpu_base_index != None and hrtimer_cpu_base_index != 0:
                     print("     hrtimer_cpu_base 0x%x " %(hrtimer_cpu_base_index), file = self.output_file)

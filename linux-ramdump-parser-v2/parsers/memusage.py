@@ -56,6 +56,7 @@ def get_shmem_swap_usage(ramdump):
     i = 0
     string = "TOP 3 swapped SHMEM files are:\n"
     pathtracking = FileTracking(ramdump)
+    d_alias_field = 'd_u' if ramdump.field_offset('struct dentry', 'd_u') is not None else 'd_alias'
     for k,v in sortlist:
         #k is struct address_space
         if i < 3:
@@ -69,7 +70,7 @@ def get_shmem_swap_usage(ramdump):
                         'i_dentry')
             if dentry_list is not None:
                 dentry = ramdump.container_of(dentry_list, 'struct dentry',
-                        'd_u')
+                        d_alias_field)
             if dentry is not None:
                 d_name_ptr = (dentry + ramdump.field_offset('struct dentry ',
                     'd_name')) + ramdump.field_offset('struct qstr', 'name')
