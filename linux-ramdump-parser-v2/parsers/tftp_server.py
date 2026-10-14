@@ -1,5 +1,5 @@
 # Copyright (c) 2013-2018,2021, The Linux Foundation. All rights reserved.
-#
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -22,6 +22,7 @@ from print_out import print_out_str
 from linux_list import ListWalker
 from ramdump import Struct
 from struct_print import struct_print_class
+from utasklib import UTaskLib
 
 class tftp_hash_defines:
     dbg_evt_array_size = 100
@@ -320,10 +321,20 @@ class tftp_server_class(RamParser):
         self.tftp_debug.out_fd = self.output_file
         print_out_str("tftp-server-parser:start")
         s1 = self.ramdump.get_kernel_version()
-        s2 = 'Kernel version : [{0:d}.{0:d}.{0:d}]\n'.format(s1[0], s1[1], s1[2])
+        s2 = 'Kernel version : [{0:d}.{1:d}.{2:d}]\n'.format(s1[0], s1[1], s1[2])
         self.output(s2)
         self.locate_tftp_server_mmap()
+        if not self.bss_start:
+            self.output('tftp_server process or bss section not found\n')
+            print_out_str("tftp-server-parser:end")
+            self.output_file.close()
+            return
         self.read_tftp_bss_region()
+        if len(self.tftp_bss_region) < ctypes.sizeof(tftp_connection_info):
+            self.output('tftp_server bss region not readable (0x{0:x}, {1:d} bytes)\n'.format(self.bss_start, len(self.tftp_bss_region)))
+            print_out_str("tftp-server-parser:end")
+            self.output_file.close()
+            return
         self.tftp_debug.open_buf(self.tftp_bss_region)
         #self.dump_tftp_bss_region('tftp_bss_region.bin')
         print_out_str("tftp-server-parser:end")
@@ -339,17 +350,23 @@ class tftp_server_class(RamParser):
             task_name = cleanupString(self.ramdump.read_cstring(task_name, 16))
             if task_name == 'tftp_server':
                 mm_addr    = self.ramdump.read_word(task + mm_offset)
-                mmap       = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'mmap')
+                vmas = []
+                if self.ramdump.field_offset('struct mm_struct', 'mmap') is not None:
+                    vma = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'mmap')
+                    while vma:
+                        vmas.append((self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_start'),
+                                     self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_end')))
+                        vma = self.ramdump.read_structure_field(vma, 'struct vm_area_struct', 'vm_next')
+                else:
+                    for vma in UTaskLib(self.ramdump).for_each_vma_list(mm_addr):
+                        vmas.append((vma.vm_start, vma.vm_end))
                 pgd        = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'pgd')
                 self.pgdp  = self.ramdump.virt_to_phys(pgd)
                 start_data = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'start_data')
                 end_data   = self.ramdump.read_structure_field(mm_addr, 'struct mm_struct', 'end_data')
-                mmap_next    = mmap
                 # bss section is after data section
                 map_count = 0
-                while mmap_next != 0:
-                    tmpstartVm = self.ramdump.read_structure_field(mmap_next, 'struct vm_area_struct', 'vm_start')
-                    tmpendVm   = self.ramdump.read_structure_field(mmap_next, 'struct vm_area_struct', 'vm_end')
+                for idx, (tmpstartVm, tmpendVm) in enumerate(vmas):
                     map_count = map_count + 1
                     if (end_data > tmpstartVm) and (end_data < tmpendVm):
                         # android P and older : 3 logd vma, bss section is just after end_data
@@ -359,19 +376,19 @@ class tftp_server_class(RamParser):
                         else:
                             # android Q: 2 code vma + 2 data vma + 1bss, bss section is individual vma after end_data
                             if (start_data < tmpstartVm):
-                                mmap_next   = self.ramdump.read_structure_field(mmap_next, 'struct vm_area_struct', 'vm_next')
-                                bss_start = self.ramdump.read_structure_field(mmap_next, 'struct vm_area_struct', 'vm_start')
+                                if idx + 1 < len(vmas):
+                                    bss_start = vmas[idx + 1][0]
                             else:
                                 # android R: 3 code vma and 1 data+bss vma, bss section is just after end_data, data section is addr_length align and bss section is 8 bytes align
                                 if self.ramdump.arm64:
                                     bss_start = end_data
                                 else:
                                     bss_start = (end_data + 7) & 0xfffffff8
-                        print_out_str("bss_start:2 0x%x\n" %(bss_start))
                         break
-                    mmap_next = self.ramdump.read_structure_field(mmap_next, 'struct vm_area_struct', 'vm_next')
                 break
         self.bss_start = bss_start
+        if not bss_start:
+            return
         if self.ramdump.arm64:
             self.tftp_mmu = Armv8MMU(self.ramdump, self.pgdp)
         else:

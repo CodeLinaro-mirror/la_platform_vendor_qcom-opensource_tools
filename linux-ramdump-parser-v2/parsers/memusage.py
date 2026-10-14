@@ -107,7 +107,8 @@ def do_dump_process_memory(ramdump):
 
     #######################   File Cache   #######################
     total_shmem_kB = memstat.pages_to_kb(ramdump.read_word('vm_node_stat[NR_SHMEM]'))
-    file_cache_kB =  memstat.pages_to_kb(memstat.calculate_cached_pages())
+    swapcached_kB = memstat.pages_to_kb(memstat.calculate_swapcache_pages())
+    file_cache_kB =  memstat.pages_to_kb(memstat.calculate_cached_pages()) - swapcached_kB
     active_kB = memstat.pages_to_kb(ramdump.read_word('vm_node_stat[NR_ACTIVE_FILE]'))
     inactive_kB = memstat.pages_to_kb(ramdump.read_word('vm_node_stat[NR_INACTIVE_FILE]'))
 
@@ -227,12 +228,9 @@ def do_dump_process_memory(ramdump):
         unaccounted -= z_used_kB
 
     #######################    Swapcached   #######################
-    swapcached_kB = 0
-    swapcached_pages = ramdump.read_word('vm_stat[NR_SWAPCACHE]')
-    swapcached_kB = memstat.pages_to_kb(swapcached_pages)
     memory_file.write('Swapcached       : {:>10,} kB ({:>5.1f}%)\n'.format(
             swapcached_kB, (swapcached_kB * 100 / total_mem_kB)))
-    unaccounted += swapcached_kB
+    # /proc/meminfo Cached = NR_FILE_PAGES - total_swapcache_pages()
 
     #######################   Unaccounted   #######################
     memory_file.write('Unaccounted      : {:>10,} kB ({:>5.1f}%)\n'.format(
