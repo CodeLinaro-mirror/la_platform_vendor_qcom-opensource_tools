@@ -15,6 +15,7 @@ from print_out import print_out_str
 from linux_list import ListWalker
 from ramdump import Struct
 from parsers.mdp.dcp_hfi import DcpHfiParser
+from parsers.mdp.dcp_hlos_evtlog import DcpHlosEvtlogParser
 from parsers.mdp.drm_commit_state import DrmCommitStateParser
 from parsers.mdp.dma_buf import DmaBufParser
 import sys
@@ -2848,6 +2849,15 @@ class MDPinfo(RamParser):
                 pass
             self.ramdump.remove_file('display_info/evtlog_stage_1.txt')
             self.ramdump.remove_file('display_info/evtlog_stage_2.txt')
+
+            # DCP PAL events and the decoded SDE event log have both been
+            # produced at this point.  Merge them before HFI mode returns
+            # early from the HWIO-only parsing below.
+            if hfi_mode or display_mode == 'UNKNOWN':
+                try:
+                    DcpHlosEvtlogParser(self.ramdump).parse()
+                except Exception as err:
+                    print_out_str('MDPinfo: failed to merge DCP/HLOS events: {}'.format(err))
 
             if hfi_mode:
                 print_out_str("MDPinfo: skipping HWIO register, reglog, and debug-bus parsing in HFI mode")
