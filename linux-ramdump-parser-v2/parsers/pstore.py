@@ -1,5 +1,5 @@
 # Copyright (c) 2018, 2020-2021 The Linux Foundation. All rights reserved.
-# Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -13,10 +13,12 @@
 from parser_util import cleanupString
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
+import minidump_util
 import struct
 import datetime
 import re
 import collections
+import zlib
 
 #PERSISTENT_RAM_SIG /* DBGC */
 PERSISTENT_RAM_SIG_SIZE = 4
@@ -125,7 +127,8 @@ class PStore(RamParser):
         start_addr, console_size = self.calculate_console_size(base_addr)
         if start_addr is None:
             return
-        pstore_out = self.ramdump.open_file('console_logs.txt')
+        pstore_out = self.ramdump.open_file('pstore_console_logs.txt',
+                                            encoding='utf-8')
         self.print_console_logs(pstore_out, start_addr, console_size)
         pstore_out.close()
 
@@ -172,7 +175,7 @@ class PStore(RamParser):
                             "5:stats", "6:security", "7:kernel"]
         priority_list = ["0:UNKNOWN", "1:DEFAULT", "2:VERBOSE", "3:DEBUG", "4:INFO",
                             "5:WARNING", "6:ERROR", "7:FATAL", "8:SILENT"]
-        pmsg_out = self.ramdump.open_file('pmsg_logs.txt')
+        pmsg_out = self.ramdump.open_file('pmsg_logs.txt', encoding='utf-8')
         pmsg_out.write("timestamp".ljust(26))
         pmsg_out.write("uid".rjust(6))
         pmsg_out.write("pid".rjust(6))
@@ -222,7 +225,7 @@ class PStore(RamParser):
                     pmsg_out.write(str(priority_list[priority]).ljust(12))
                     msg = pmsg[next_addr + 19:next_addr + len].replace(b'\x0a', b'\x20')
                     msg = msg.replace(b'\x00', b'\x20')
-                    pmsg_out.write(msg.decode("ascii","ignore"))
+                    pmsg_out.write(msg.decode("utf-8", "replace"))
                 pmsg_out.write("\n")
                 content_err = False
                 next_addr += len
@@ -268,8 +271,8 @@ class PStore(RamParser):
             return -1, -1, -1
         evt_type = struct.unpack('<B', data_array[pos : pos + 1])[0]
         length = 0
-        msg=""
-        if evt_type == self.EVENT_TYPE_INT :
+        msg = ""
+        if evt_type == self.EVENT_TYPE_INT:
             if (pos + self.SIZEOF_EVT_INT_T) > len(data_array):
                 return -1, -1, -1
             msg = str(struct.unpack('<I', data_array[pos+1 : pos + self.SIZEOF_EVT_INT_T])[0])
@@ -292,8 +295,9 @@ class PStore(RamParser):
             # last msg_len-1 bytes
             tmpmsg = data_array[pos + self.SIZEOF_EVT_STRING_T : pos+self.SIZEOF_EVT_STRING_T+msg_len]
             length = self.SIZEOF_EVT_STRING_T + msg_len
-            msg = tmpmsg.decode('ascii', 'ignore').strip()
+            msg = tmpmsg.decode('utf-8', 'replace').strip()
         return evt_type, msg, length
+
     def extract_pmsg_logs_fd(self, base_addr):
         size = self.ramdump.read_u64(base_addr +
                             self.ramdump.field_offset('struct ramoops_context', 'pmsg_size'))
@@ -322,6 +326,210 @@ class PStore(RamParser):
             pmsg = self.ramdump.read_physical(start_addr, buffer_size)
         self.extract_pmsg_logs(pmsg, buffer_size)
 
+    def read_minidump_pstore_regions(self):
+        """Read the ramoops regions registered as minidump ELF sections."""
+        regions = {}
+        if self.ramdump.elffile is None:
+            print_out_str(
+                'pstore: no ELF file available; skipping minidump pstore extraction')
+            return regions
+
+        for section_name in ('KDMESG', 'KCONSOLE', 'KFTRACE', 'KPMSG'):
+            section = self.ramdump.elffile.get_section_by_name(section_name)
+            if section is None:
+                continue
+
+            section_addr = int(section.header['sh_addr'])
+            section_size = int(section.header['sh_size'])
+            region = minidump_util.read_binarystring_minidump(
+                self.ramdump.ebi_files_minidump,
+                self.ramdump.ebi_files,
+                self.ramdump.elffile,
+                section_addr,
+                section_size)
+            if region is None:
+                print_out_str('Unable to read minidump pstore section {}'.format(
+                    section_name))
+                continue
+
+            regions[section_name] = region
+        return regions
+
+    @staticmethod
+    def _persistent_ram_payload(zone, expected_sig=0x43474244):
+        """Return the valid bytes from one persistent RAM zone."""
+        if len(zone) < 12:
+            return b''
+
+        sig, start, size = struct.unpack_from('<III', zone)
+        if sig != expected_sig:
+            return b''
+        capacity = len(zone) - 12
+        if start > capacity or size > capacity:
+            return b''
+        data = zone[12:12 + capacity]
+        if size == 0:
+            return b''
+        if start > size:
+            return b''
+        if start == 0 or start == size:
+            return data[:size]
+        return data[start:size] + data[:start]
+
+    def _ftrace_payload(self, region):
+        """Decode ramoops ftrace or return the dedicated raw trace buffer."""
+        if len(region) >= 12:
+            sig = struct.unpack_from('<I', region)[0]
+            try:
+                major, minor, patch = self.ramdump.kernel_version
+                linux_version_code = ((major << 16) | (minor << 8) | patch)
+                ftrace_sig = 0x43474244 ^ linux_version_code
+            except (AttributeError, TypeError, ValueError):
+                ftrace_sig = None
+
+            if ftrace_sig is not None and sig == ftrace_sig:
+                return self._persistent_ram_payload(region, ftrace_sig)
+
+        # CONFIG_QCOM_MINIDUMP_FTRACE registers a separately allocated trace
+        # buffer, which has no persistent_ram_buffer header.
+        return region.rstrip(b'\0')
+
+    @staticmethod
+    def _decode_pstore_text(data):
+        """Decode log text without silently discarding non-ASCII bytes."""
+        text = data.decode('utf-8', 'replace')
+        return ''.join(char for char in text
+                       if char.isprintable() or char in '\n\r\t')
+
+    @classmethod
+    def _split_dmesg_zones(cls, region):
+        """Split KDMESG into ramoops zones using their persistent headers."""
+        if not region:
+            return []
+
+        candidates = []
+        # ramoops record counts are small; cap the search to avoid iterating
+        # over every byte for a large reserved region.
+        max_zone_count = min(len(region) // 12, 1024)
+        for zone_count in range(1, max_zone_count + 1):
+            if len(region) % zone_count:
+                continue
+            zone_size = len(region) // zone_count
+            if zone_size < 12:
+                continue
+            valid = 0
+            headers = 0
+            capacity = zone_size - 12
+            for offset in range(0, len(region), zone_size):
+                sig, start, size = struct.unpack_from('<III', region, offset)
+                if (sig != 0x43474244 or start > capacity or
+                        start > size or size == 0 or size > capacity):
+                    continue
+                valid += 1
+                payload_offset = offset + 12
+                if start == 0 or start == size:
+                    marker = region[payload_offset:payload_offset + 4]
+                else:
+                    first = region[payload_offset + start:
+                                    min(payload_offset + capacity,
+                                        payload_offset + start + 4)]
+                    second = region[payload_offset:
+                                     payload_offset + max(0, 4 - len(first))]
+                    marker = first + second
+                if marker[:4] == b'====':
+                    headers += 1
+            if valid and headers:
+                candidates.append((headers, valid, zone_count))
+
+        if not candidates:
+            payload = cls._persistent_ram_payload(region)
+            if payload:
+                print_out_str(
+                    'KDMESG: no structured kmsg zones found; '
+                    'falling back to single-zone decode')
+            return [payload] if payload else []
+
+        # Prefer the layout exposing the most kmsg records, then the one with
+        # the most valid persistent buffers.
+        _, _, best_zone_count = max(candidates, key=lambda item:
+                                    (item[0], item[1], -item[2]))
+        zone_size = len(region) // best_zone_count
+        return [cls._persistent_ram_payload(region[offset:offset + zone_size])
+                for offset in range(0, len(region), zone_size)]
+
+    @staticmethod
+    def _decompress_kmsg_payload(payload):
+        """Try raw-deflate, zlib, and gzip streams."""
+        for window_bits in (-zlib.MAX_WBITS, zlib.MAX_WBITS,
+                            zlib.MAX_WBITS | 16):
+            decompressor = zlib.decompressobj(window_bits)
+            try:
+                output = decompressor.decompress(payload)
+                output += decompressor.flush()
+            except zlib.error:
+                continue
+            if output:
+                return output
+        return b''
+
+    @staticmethod
+    def _decode_kmsg_payload(payload):
+        if not payload.startswith(b'===='):
+            return payload
+        newline = payload.find(b'\n')
+        if newline < 0:
+            return b''
+        body = payload[newline + 1:]
+        if payload[:newline].endswith(b'-C'):
+            decompressed = PStore._decompress_kmsg_payload(body)
+            if decompressed:
+                return decompressed
+            return b'[ERROR: corrupt or unrecoverable compressed pstore stream]\n'
+        return body
+
+    def decode_minidump_pstore_regions(self, regions):
+        """Decode ramoops data from minidump sections."""
+        if 'KCONSOLE' in regions:
+            console = self._persistent_ram_payload(regions['KCONSOLE'])
+            if console:
+                with self.ramdump.open_file(
+                        'pstore_console_logs.txt', 'w', encoding='utf-8') as output:
+                    output.write(self._decode_pstore_text(console))
+                    output.write('\n')
+
+        if 'KDMESG' in regions:
+            payloads = [payload for payload in
+                        self._split_dmesg_zones(regions['KDMESG']) if payload]
+            if not payloads:
+                print_out_str('No valid dmesg zones found in KDMESG')
+            else:
+                lines = []
+                for payload in payloads:
+                    message = self._decode_kmsg_payload(payload)
+                    if message:
+                        lines.append(self._decode_pstore_text(message))
+                if lines:
+                    with self.ramdump.open_file(
+                            'pstore_dmesg_logs.txt', 'w', encoding='utf-8') as output:
+                        for line in lines:
+                            output.write(line)
+                            output.write('\n')
+                else:
+                    print_out_str('KDMESG region contained no decodable content')
+
+        if 'KFTRACE' in regions:
+            ftrace = self._ftrace_payload(regions['KFTRACE'])
+            if ftrace:
+                with self.ramdump.open_file(
+                        'pstore_ftrace_logs.txt', 'w', encoding='utf-8') as output:
+                    output.write(self._decode_pstore_text(ftrace))
+                    output.write('\n')
+
+        if 'KPMSG' in regions:
+            pmsg = self._persistent_ram_payload(regions['KPMSG'])
+            if pmsg:
+                self.extract_pmsg_logs(pmsg, len(pmsg))
+
     def parse(self):
         if not self.ramdump.minidump:
             if not self.ramdump.is_config_defined('CONFIG_PSTORE'):
@@ -333,11 +541,5 @@ class PStore(RamParser):
             self.print_clockdata_info()
             self.extract_pmsg_logs_fd(base_addr)
         else:
-            pmsg_addr = list(self.ramdump.ebi_pa_name_map.keys())[
-                list(self.ramdump.ebi_pa_name_map.values()).index("KPMSG")]
-            if pmsg_addr is not None:
-                for idx, pa, end, va, size in self.ramdump.ebi_files_minidump:
-                    if pa == pmsg_addr:
-                        break
-                pmsg_cxt = self.ramdump.read_physical(pmsg_addr, size)
-                self.extract_pmsg_logs(pmsg_cxt, size)
+            regions = self.read_minidump_pstore_regions()
+            self.decode_minidump_pstore_regions(regions)
