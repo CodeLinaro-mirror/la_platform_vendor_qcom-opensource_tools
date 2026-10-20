@@ -10,6 +10,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
+import os
 import sys
 import re
 import subprocess
@@ -600,9 +601,14 @@ class GdbMI(object):
 
     def read_memory(self, start, end):
         """Reads memory from within elf (e.g. const data). start and end should be kaslr-offset values"""
-        tmpfile = NamedTemporaryFile(mode='rb')
-        self._run("dump binary memory {} {}-{} {}-{}".format(tmpfile.name, start, self.kaslr_offset, end, self.kaslr_offset))
-        return tmpfile.read()
+        tmpfile = NamedTemporaryFile(mode='rb', delete=False)
+        tmpfile.close()
+        try:
+            self._run("dump binary memory {} {}-{} {}-{}".format(tmpfile.name, start, self.kaslr_offset, end, self.kaslr_offset))
+            with open(tmpfile.name, 'rb') as f:
+                return f.read()
+        finally:
+            os.remove(tmpfile.name)
 
     def read_elf_memory(self, start, end, temp_file):
         self._run("dump binary memory {} {} {}".format(temp_file.name, start, end))
