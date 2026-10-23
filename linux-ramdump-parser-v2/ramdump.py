@@ -932,6 +932,7 @@ class RamDump():
         self.ko_text_address_dict = {}
         self.dump = None
         self.zram_parser_override = options.zram_parser_override
+        self.dcp_elf = options.dcp_elf
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
