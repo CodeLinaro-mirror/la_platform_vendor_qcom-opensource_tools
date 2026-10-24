@@ -10,11 +10,13 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-
 from parser_util import register_parser, RamParser
 from print_out import print_out_str
 from linux_list import ListWalker
 from ramdump import Struct
+from parsers.mdp.dcp_hfi import DcpHfiParser
+from parsers.mdp.drm_commit_state import DrmCommitStateParser
+from parsers.mdp.dma_buf import DmaBufParser
 import sys
 import re
 import string
@@ -106,6 +108,7 @@ class MDPinfo(RamParser):
         self.log_2 = -1
         self.log_3 = -1
         self.log_4 = -1
+        self.log_blend_stage = -1
         self.sde_dbg_evtlog_log_optional = []
         self.counter = 0
         self.ctl_flag = 0
@@ -838,115 +841,62 @@ class MDPinfo(RamParser):
         sde_dbg_evtlog_log_["data"] = tmp
         self.default_parse(sde_dbg_evtlog_log_, output_fd)
 
-    def pipe(self, pipe_id ) :
+    def pipe(self, pipe_id):
+        """
+        Map an absolute enum sde_sspp value to a human-readable pipe name.
 
+        enum sde_sspp (sde_hw_mdss.h):
+            SSPP_NONE  = 0
+            SSPP_VIG0  = 1,  VIG1=2,  VIG2=3,  VIG3=4,
+            SSPP_VIG4  = 5,  VIG5=6,  VIG6=7,  VIG7=8   (VIG_MAX=8)
+            SSPP_DMA0  = 9,  DMA1=10, DMA2=11, DMA3=12,
+            SSPP_DMA4  = 13, DMA5=14                     (DMA_MAX=14)
+            SSPP_CSC0  = 15, CSC1=16                     (CSC_MAX=16)
+            SSPP_REPRO0= 17 .. SSPP_REPRO15=32           (REPRO_MAX=32)
+            SSPP_MAX   = 33
+
+        NOTE: _sde_crtc_blend_setup_mixer logs (sde_plane_pipe(plane) - SSPP_VIG0)
+              in the stage-config SDE_EVT32 (Case C, data_arr[3]).  The caller
+              must add SSPP_VIG0 (=1) before calling this function so that the
+              absolute enum value is passed here.
+        """
+        _SSPP_MAP = {
+            0: "SSPP_NONE",
+            1: "VIG0",
+            2: "VIG1",
+            3: "VIG2",
+            4: "VIG3",
+            5: "VIG4",
+            6: "VIG5",
+            7: "VIG6",
+            8: "VIG7",
+            9: "DMA0",
+            10: "DMA1",
+            11: "DMA2",
+            12: "DMA3",
+            13: "DMA4",
+            14: "DMA5",
+            15: "CSC0",
+            16: "CSC1",
+            17: "REPRO0",
+            18: "REPRO1",
+            19: "REPRO2",
+            20: "REPRO3",
+            21: "REPRO4",
+            22: "REPRO5",
+            23: "REPRO6",
+            24: "REPRO7",
+            25: "REPRO8",
+            26: "REPRO9",
+            27: "REPRO10",
+            28: "REPRO11",
+            29: "REPRO12",
+            30: "REPRO13",
+            31: "REPRO14",
+            32: "REPRO15",
+        }
         pipe_id = int(pipe_id)
-
-        if(self.ramdump.kernel_version  <= (5, 4)) :
-            if pipe_id == 0 :
-                pipe = "ViG0"
-            elif pipe_id == 1 :
-                pipe = "ViG1"
-            elif pipe_id == 2 :
-                pipe = "ViG2"
-            elif pipe_id == 3 :
-                pipe = "ViG3"
-            elif pipe_id == 4 :
-                pipe = "RGB0"
-            elif pipe_id == 5 :
-                pipe = "RGB1"
-            elif pipe_id == 6 :
-                pipe = "RGB2"
-            elif pipe_id == 7 :
-                pipe = "RGB3"
-            elif pipe_id == 8 :
-                pipe = "DMA0"
-            elif pipe_id == 9 :
-                pipe = "DMA1"
-            elif pipe_id == 10 :
-                pipe = "DMA2"
-            elif pipe_id == 11 :
-                pipe = "DMA3"
-            elif pipe_id == 12 :
-                pipe = "SSPP_CURSOR0"
-            elif pipe_id == 13 :
-                pipe = "SSPP_CURSOR1"
-            else :
-                pipe = "PIPE_INVALID"
-
-        elif(self.ramdump.kernel_version  == (5, 10)) :
-            if pipe_id == 0 :
-                pipe = "ViG0"
-            elif pipe_id == 1 :
-                pipe = "ViG1"
-            elif pipe_id == 2 :
-                pipe = "ViG2"
-            elif pipe_id == 3 :
-                pipe = "ViG3"
-            elif pipe_id == 4 :
-                pipe = "ViG3"
-            elif pipe_id == 5 :
-                pipe = "RGB0"
-            elif pipe_id == 6 :
-                pipe = "RGB1"
-            elif pipe_id == 7 :
-                pipe = "RGB2"
-            elif pipe_id == 8 :
-                pipe = "RGB3"
-            elif pipe_id == 9 :
-                pipe = "RGB3"
-            elif pipe_id == 10 :
-                pipe = "DMA0"
-            elif pipe_id == 11 :
-                pipe = "DMA1"
-            elif pipe_id == 12 :
-                pipe = "DMA2"
-            elif pipe_id == 13 :
-                pipe = "DMA3"
-            elif pipe_id == 14 :
-                pipe = "DMA4"
-            elif pipe_id == 15 :
-                pipe = "DMA5"
-            elif pipe_id == 16 :
-                pipe = "DMA5"
-            elif pipe_id == 17 :
-                pipe = "SSPP_CURSOR0"
-            elif pipe_id == 18 :
-                pipe = "SSPP_CURSOR1"
-            elif pipe_id == 19 :
-                pipe = "SSPP_CURSOR1"
-            else :
-                pipe = "PIPE_INVALID"
-
-        elif(self.ramdump.kernel_version  >= (5, 15)) :
-            if pipe_id == 0 :
-                pipe = "ViG0"
-            elif pipe_id == 1 :
-                pipe = "ViG1"
-            elif pipe_id == 2 :
-                pipe = "ViG2"
-            elif pipe_id == 3 :
-                pipe = "ViG3"
-            elif pipe_id == 4 :
-                pipe = "ViG3"
-            elif pipe_id == 5 :
-                pipe = "DMA0"
-            elif pipe_id == 6 :
-                pipe = "DMA1"
-            elif pipe_id == 7 :
-                pipe = "DMA2"
-            elif pipe_id == 8 :
-                pipe = "DMA3"
-            elif pipe_id == 9 :
-                pipe = "DMA4"
-            elif pipe_id == 10 :
-                pipe = "DMA5"
-            elif pipe_id == 11 :
-                pipe = "DMA5"
-            else :
-                pipe = "PIPE_INVALID"
-
-        return pipe
+        return _SSPP_MAP.get(pipe_id, "SSPP_INVALID({})".format(pipe_id))
 
     def multirect_index(self, rect_index):
 
@@ -1035,26 +985,122 @@ class MDPinfo(RamParser):
         return tmp
 
 
-    def composition_parse(self, sde_dbg_evtlog_log_, output_fd) :
+    @staticmethod
+    def _blend_is_fourcc(hex_str):
+        """
+        Return True when hex_str (8 hex digits) encodes a FourCC value
+        where all four bytes are printable ASCII (0x20-0x7e).
+        Used to distinguish stage-config log (arg[7] = pixel_format FourCC)
+        from skip-blend log (arg[7] = crtc_y coordinate).
+        """
+        try:
+            val = int(hex_str, 16)
+            for _ in range(4):
+                byte = val & 0xFF
+                if byte < 0x20 or byte > 0x7e:
+                    return False
+                val >>= 8
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    def composition_parse(self, sde_dbg_evtlog_log_, output_fd):
+        """
+        Decode one _sde_crtc_blend_setup_mixer evtlog entry.
+
+        The kernel emits three SDE_EVT32 calls per plane (sde_crtc.c).
+        Each is identified purely by argument count and, for the two
+        11-arg cases, by whether arg[7] is a printable-ASCII FourCC.
+        No source line numbers are used, so this works across kernel builds.
+
+        Case A  skip-blend path  (exactly 11 args, arg[7] NOT a FourCC):
+            [0]=crtc  [1]=plane
+            [2]=src_x [3]=src_y [4]=src_w  [5]=src_h
+            [6]=crtc_x [7]=crtc_y [8]=crtc_w [9]=crtc_h
+            [10]=rotation
+
+        Case B  normal-blend path  (14 args, unambiguous by count):
+            [0]=crtc  [1]=plane  [2]=fb_id
+            [3]=src_x [4]=src_y  [5]=src_w  [6]=src_h
+            [7]=crtc_x [8]=crtc_y [9]=crtc_w [10]=crtc_h
+            [11]=rotation  [12]=mode  [13]=cac_mode
+
+        Case C  stage-config path  (exactly 11 args, arg[7] IS a FourCC):
+            [0]=crtc  [1]=plane  [2]=stage_idx  [3]=pipe  [4]=stage
+            [5]=multirect_index  [6]=multirect_mode
+            [7]=pixel_format  [8]=fb_modifier
+            [9]=rotation  [10]=layout_idx
+        """
         xlog_data = str(sde_dbg_evtlog_log_["data"])
         data_arr = xlog_data.split(" ")
+        nargs = len(data_arr)
         tmp = xlog_data
-        tmp  = tmp + ((50 - len(str(sde_dbg_evtlog_log_["data"]))) * " ")
+        tmp = tmp + ((50 - len(str(sde_dbg_evtlog_log_["data"]))) * " ")
         tmp = tmp + "==>"
-        if self.log_1 != -1:
-            tmp = tmp + self.rotation(str(int(data_arr[11], 16)))
-            tmp = tmp + "CRTC:" + str(int(data_arr[0], 16)) + "|PLANE:" + str(int(data_arr[1], 16)) +"|FB-id:" + str(int(data_arr[2], 16))
-            tmp = tmp + "|SRC:[ " + str(int(data_arr[3], 16)) + " " + str(int(data_arr[4], 16)) + " " + str(int(data_arr[5], 16)) + " " + str(int(data_arr[6], 16)) + " ]"
-            tmp = tmp + "|DST:[ " + str(int(data_arr[7], 16)) + " " + str(int(data_arr[8], 16)) + " " + str(int(data_arr[9], 16)) + " " + str(int(data_arr[10], 16)) + " ]"
-            tmp = tmp + "|" +self.secure(str(int(data_arr[12], 16)))
-        elif self.log_2 != -1 :
-            self.counter= self.counter+1
-            tmp = tmp +  self.pipe(str(int(data_arr[3], 16))) + "|STAGE:" + str(int(data_arr[4], 16)) + "|"
-            tmp = tmp +  self.multirect_index(str(int(data_arr[5], 16)))
-            a=str(data_arr[7])
-            txt="".join(reversed([a[i:i+2] for i in range(0, len(a), 2)]))
-            tmp = tmp + "/" + self.multirect_mode(str(int(data_arr[6], 16))) + "|" +  "FMT :" +str(''.join([chr(int(''.join(c), 16)) for c in zip(txt[0::2],txt[1::2])]))
-            tmp= tmp + "|MODIFIER: "+ self.fmt_modifier(str(data_arr[8]))
+        decoded = False
+
+        try:
+            if nargs >= 14:
+                # ---- Case B: normal-blend path (14 args) ----
+                tmp = tmp + self.rotation(str(int(data_arr[11], 16)))
+                tmp = tmp + "CRTC:" + str(int(data_arr[0], 16))
+                tmp = tmp + "|PLANE:" + str(int(data_arr[1],  16))
+                tmp = tmp + "|FB-id:" + str(int(data_arr[2],  16))
+                tmp = (tmp + "|SRC:[ " + str(int(data_arr[3], 16)) + " "
+                       + str(int(data_arr[4], 16)) + " "
+                       + str(int(data_arr[5], 16)) + " "
+                       + str(int(data_arr[6], 16)) + " ]")
+                tmp = (tmp + "|DST:[ " + str(int(data_arr[7], 16)) + " "
+                       + str(int(data_arr[8], 16)) + " "
+                       + str(int(data_arr[9], 16)) + " "
+                       + str(int(data_arr[10], 16)) + " ]")
+                tmp = tmp + "|" + self.secure(str(int(data_arr[13], 16)))
+                decoded = True
+
+            elif nargs == 11:
+                if self._blend_is_fourcc(data_arr[7]):
+                    # ---- Case C: stage-config path (11 args, FourCC arg[7]) ----
+                    self.counter = self.counter + 1
+                    # data_arr[3] = sde_plane_pipe(plane) - SSPP_VIG0
+                    # (see SDE_EVT32 in _sde_crtc_blend_setup_mixer).
+                    # Add SSPP_VIG0 (=1) to recover the absolute enum sde_sspp value.
+                    _SSPP_VIG0 = 1
+                    tmp = tmp + self.pipe(str(int(data_arr[3], 16) + _SSPP_VIG0))
+                    tmp = tmp + "|STAGE:" + str(int(data_arr[4], 16)) + "|"
+                    tmp = tmp + self.multirect_index(str(int(data_arr[5], 16)))
+                    a = str(data_arr[7])
+                    txt = "".join(reversed([a[j:j+2] for j in range(0, len(a), 2)]))
+                    tmp = tmp + "/" + self.multirect_mode(str(int(data_arr[6], 16)))
+                    tmp = tmp + "|FMT :" + str("".join(
+                        [chr(int("".join(c), 16)) for c in zip(txt[0::2], txt[1::2])]))
+                    tmp = tmp + "|MODIFIER: " + self.fmt_modifier(str(data_arr[8]))
+                    decoded = True
+                else:
+                    # ---- Case A: skip-blend path (11 args, coordinate arg[7]) ----
+                    tmp = tmp + self.rotation(str(int(data_arr[10], 16)))
+                    tmp = tmp + "CRTC:" + str(int(data_arr[0], 16))
+                    tmp = tmp + "|PLANE:" + str(int(data_arr[1], 16))
+                    tmp = (tmp + "|SRC:[ " + str(int(data_arr[2], 16)) + " "
+                           + str(int(data_arr[3], 16)) + " "
+                           + str(int(data_arr[4], 16)) + " "
+                           + str(int(data_arr[5], 16)) + " ]")
+                    tmp = (tmp + "|DST:[ " + str(int(data_arr[6], 16)) + " "
+                           + str(int(data_arr[7], 16)) + " "
+                           + str(int(data_arr[8], 16)) + " "
+                           + str(int(data_arr[9], 16)) + " ]")
+                    tmp = tmp + "|SKIP_BLEND"
+                    decoded = True
+
+        except (ValueError, IndexError):
+            decoded = False
+
+        if not decoded:
+            print_out_str(
+                "WARNING: _sde_crtc_blend_setup_mixer line:{} "
+                "unrecognised arg count={} - entry written as raw data".format(
+                    sde_dbg_evtlog_log_.get("line_number", "?"), nargs))
+            tmp = tmp + "[DROPPED: unrecognised {} args - see raw data]".format(nargs)
+
         sde_dbg_evtlog_log_["data"] = tmp
         self.default_parse(sde_dbg_evtlog_log_, output_fd)
 
@@ -1405,13 +1451,38 @@ class MDPinfo(RamParser):
                         else:
                             self.composition_parse(sde_dbg_evtlog_log[0], output_fd)
                     else:
-                        if self.log_1 == -1 and int(sde_dbg_evtlog_log[i]["line_number"])< int(sde_dbg_evtlog_log[i+1]["line_number"]):
-                            self.log_1 = int(sde_dbg_evtlog_log[i]["line_number"])
+                        cur_line = int(sde_dbg_evtlog_log[i]["line_number"])
+                        # Identify the three distinct source line numbers emitted
+                        # by _sde_crtc_blend_setup_mixer per plane:
+                        #   log_1        : normal-blend EVT32 (13 args)
+                        #   log_2        : stage-config EVT32 (11 args, pipe/stage/fmt)
+                        #   log_blend_stage: skip-blend EVT32 (11 args, src/dst ROI)
+                        if (self.log_1 == -1
+                                and i + 1 < len(sde_dbg_evtlog_log)
+                                and cur_line < int(sde_dbg_evtlog_log[i + 1]["line_number"])):
+                            self.log_1 = cur_line
                             self.log_2 = -1
+                            self.log_blend_stage = -1
 
-                        elif self.log_2 == -1:
-                            self.log_2 = int(sde_dbg_evtlog_log[i]["line_number"])
+                        elif self.log_2 == -1 and cur_line != self.log_1:
+                            self.log_2 = cur_line
                             self.log_1 = -1
+
+                        elif (self.log_blend_stage == -1
+                              and cur_line != self.log_1
+                              and cur_line != self.log_2):
+                            self.log_blend_stage = cur_line
+
+                        # Route to the correct decode branch via composition_parse
+                        if cur_line == self.log_1:
+                            self.log_2 = -1
+                            self.log_blend_stage = -1
+                        elif cur_line == self.log_2:
+                            self.log_1 = -1
+                            self.log_blend_stage = -1
+                        elif cur_line == self.log_blend_stage:
+                            self.log_1 = -1
+                            self.log_2 = -1
 
                         self.composition_parse(sde_dbg_evtlog_log[i], output_fd)
 
@@ -1517,7 +1588,7 @@ class MDPinfo(RamParser):
     def split_dic(self, output2):
         f_out=self.ramdump.open_file(output2,"r")
         n=f_out.readline()
-        output3="sde_evtlog_parsed.txt"
+        output3="display_info/sde_evtlog_parsed.txt"
         self.outfile = self.ramdump.open_file(output3, "w")
         sde_dbg_evtlog_log = [dict() for x in range( len(f_out.readlines(  )))]
         f_out.seek(0,0)
@@ -1582,7 +1653,7 @@ class MDPinfo(RamParser):
         while {} in contents_for_analysis:
             contents_for_analysis.remove({})
 
-        self.outfile = self.ramdump.open_file('reg_stage_3.txt', 'w')
+        self.outfile = self.ramdump.open_file('display_info/reg_stage_3.txt', 'w')
         for  i in range(len(contents_for_analysis)):
             if "0x5000" in contents_for_analysis[i]["offset"].strip():
                 self.outfile.write("VIG_0 ")
@@ -2459,7 +2530,7 @@ class MDPinfo(RamParser):
 
     def check_rc_hang(self):
         try:
-            dbgbus = self.ramdump.open_file('sde_dbgbus.txt', 'r')
+            dbgbus = self.ramdump.open_file('display_info/sde_dbgbus.txt', 'r')
             lines = dbgbus.readlines()
             rc0_debugbus_point = '00000348 00000034 00000002'
             rc1_debugbus_point = '00000348 00000035 00000002'
@@ -2475,7 +2546,7 @@ class MDPinfo(RamParser):
 
     def check_LTM_status(self):
         try:
-            reg_dump = self.ramdump.open_file('sde_regdump.txt', 'r')
+            reg_dump = self.ramdump.open_file('display_info/sde_regdump.txt', 'r')
             lines = reg_dump.readlines()
             ltm0_status_reg = '0x6a360'
             ltm1_status_reg = '0x6b360'
@@ -2493,7 +2564,7 @@ class MDPinfo(RamParser):
 
     def check_LUTDMA_hang(self):
         try:
-            reg_dump = self.ramdump.open_file('sde_regdump_parsed.txt', 'r')
+            reg_dump = self.ramdump.open_file('display_info/sde_regdump_parsed.txt', 'r')
             lines = reg_dump.readlines()
             LUT_regsister_dump = 'reg_dma'
             reg_dma0_status = '--NA--'
@@ -2531,7 +2602,7 @@ class MDPinfo(RamParser):
         LTM_busy = self.check_LTM_status()
         LUTDMA_hang = self.check_LUTDMA_hang()
         try:
-            self.file = self.ramdump.open_file('sde_evtlog_parsed.txt', 'r+')
+            self.file = self.ramdump.open_file('display_info/sde_evtlog_parsed.txt', 'r+')
             content = self.file.read()
             self.file.seek(0, 0)
             self.file.write('%s \n' % ("---------------------------------------  SDE INITIAL ANALYSIS  ---------------------------------------"))
@@ -2553,155 +2624,61 @@ class MDPinfo(RamParser):
         except:
             pass
 
-
-    def extract_hfi_pal_trace_data(self):
-        print_out_str("Starting extract_hfi_pal_trace_data function")
+    def get_display_operation_mode(self):
+        """Return the display operation mode from msm_drm_private.disp_op."""
         try:
-            mdss_dbg = self.ramdump.read_datatype('fw_trace_mem', 'struct hfi_memory_alloc_info')
-            # Validate cpu_va pointer before using it
-            if not mdss_dbg.cpu_va or mdss_dbg.cpu_va == 0:
-                print_out_str("Error: cpu_va is null or zero, cannot proceed with memory operations")
-                return
+            sde_dbg_base = self.ramdump.address_of('sde_dbg_base')
+            if not sde_dbg_base:
+                raise RuntimeError("sde_dbg_base symbol not found")
 
-            print_out_str(f"Successfully initialized HFI memory allocation info with cpu_va=0x{mdss_dbg.cpu_va:x}")
-        except Exception as e:
-            print_out_str(f"Error: Unable to initialize HFI memory allocation info - {e}")
-            return
+            dbg_dev_off = self.ramdump.field_offset('struct sde_dbg_base', 'dev')
+            driver_data_off = self.ramdump.field_offset('struct device', 'driver_data')
+            dev_private_off = self.ramdump.field_offset('struct drm_device', 'dev_private')
+            disp_op_off = self.ramdump.field_offset(
+                'struct msm_drm_private', 'disp_op')
+            if None in (dbg_dev_off, driver_data_off, dev_private_off, disp_op_off):
+                raise RuntimeError("missing display-operation DWARF field offset")
 
-        try:
-            HFI_CORE_TRACE_EVENT_SIZE = self.ramdump.sizeof('struct hfi_core_trace_event')
-            print_out_str(f"HFI_CORE_TRACE_EVENT_SIZE = {HFI_CORE_TRACE_EVENT_SIZE}")
+            device = self.ramdump.read_pointer(sde_dbg_base + dbg_dev_off)
+            drm_device = self.ramdump.read_pointer(device + driver_data_off) if device else None
+            msm_priv = (self.ramdump.read_pointer(drm_device + dev_private_off)
+                        if drm_device else None)
+            if not msm_priv:
+                raise RuntimeError("msm_drm_private is NULL")
 
-            self.outfile = self.ramdump.open_file('hfi_core_dump_events.txt', 'w')
-            print_out_str("Opened output file successfully")
-
-            # Calculate the actual number of events based on allocated memory size
-            if mdss_dbg.size_allocated > 0 and HFI_CORE_TRACE_EVENT_SIZE > 0:
-                max_events = mdss_dbg.size_allocated // HFI_CORE_TRACE_EVENT_SIZE
-                print_out_str(f"Allocated size: {mdss_dbg.size_allocated}, Max events: {max_events}")
-            else:
-                print_out_str("Invalid size_allocated or HFI_CORE_TRACE_EVENT_SIZE, using default")
-                max_events = 4000
-
-            valid_events = 0
-            for i in range(max_events):
-                try:
-                    addr = mdss_dbg.cpu_va + i * HFI_CORE_TRACE_EVENT_SIZE
-                    event = self.ramdump.read_datatype(addr, 'struct hfi_core_trace_event')
-
-                    # Skip invalid events (time = 0 usually indicates uninitialized)
-                    if event.time == 0:
-                        continue
-
-                    # Sanity check for data_cnt
-                    if event.data_cnt > 100:
-                        print_out_str(f"Event {i}: data_cnt too large ({event.data_cnt}), skipping")
-                        continue
-
-                    # offset of 12 bytes is calculated as - time (8 bytes) + data_cnt (4 bytes)
-                    data = [self.ramdump.read_u32(addr + 12 + j * 4) for j in range(event.data_cnt)]
-                    data_str = ' '.join(f"0x{val:x}" for val in data)
-
-                    self.outfile.write(f"[{i}][t:{event.time}][evt:0x{data[0] if data else 0:x}] data[{event.data_cnt}]:{data_str}\n")
-                    valid_events += 1
-
-                except Exception as e:
-                    print_out_str(f"Exception processing event {i}: {e}")
-                    break
-
-            print_out_str(f"Processed {valid_events} valid events out of {max_events} total events")
-
-            self.outfile.close()
-            print_out_str("HFI pal dump done!")
-
-        except Exception as e:
-            print_out_str(f"HFI pal dump failed with exception: {e}")
-            if hasattr(self, 'outfile') and self.outfile:
-                try:
-                    self.outfile.close()
-                except:
-                    pass
-
-    def dump_hfi_dbg(self):
-        hfi_dbg_addr = self.ramdump.address_of('hfi_dbg')
-        if not hfi_dbg_addr:
-            print_out_str("hfi_dbg not found")
-            return
-
-        hfi_dbg_ptr = self.ramdump.read_pointer(hfi_dbg_addr)
-        if not hfi_dbg_ptr:
-            print_out_str("Pointer to 'hfi_dbg' is NULL")
-            return
-
-        hfi_dbg = self.ramdump.read_datatype(hfi_dbg_ptr, 'struct hfi_dbg')
-
-        # base_buf_addr is already a hfi_shared_addr_map object (auto-dereferenced by Struct class)
-        # We can use it directly
-        base_buf_addr = hfi_dbg.base_buf_addr
-
-        if not base_buf_addr:
-            print_out_str("base_buf_addr object is None")
-            return
-
-        local_addr = base_buf_addr.local_addr
-        size = base_buf_addr.size
-
-        print_out_str(f"HFI debug info: local_addr=0x{local_addr:x}, size={size}")
-
-        if not local_addr or size == 0:
-            print_out_str("Invalid hfi_dbg dump_addr or size")
-            return
-
-        # Check if the address is valid before attempting to read
-        if local_addr < 0x1000:  # Basic sanity check for very low addresses
-            print_out_str(f"Invalid local_addr: 0x{local_addr:x} (too low)")
-            return
-
-        # Apply PAC ignore for MTE + KASAN HW TAG builds
-        local_addr = self.ramdump.pac_ignore(local_addr)
-
-        # local_addr is a vmapped kernel virtual address (scatter pages since
-        # mm-drivers commit 276979d0dec6dc417069a1286ef0b27f15b0d610 replaced
-        # alloc_pages_exact() with per-page scatter allocation + vmap()).
-        # The pages are physically non-contiguous, so we must NOT convert the
-        # virtual address to physical once and then call read_physical() for the
-        # whole buffer — that would only read the first page correctly and return
-        # garbage for every subsequent page.
-        #
-        # get_bin_data() walks the page tables page-by-page (calling
-        # virt_to_phys() per page) and assembles the result, which is exactly
-        # what we need for vmapped scatter memory.
-        try:
-            memory_data = self.ramdump.get_bin_data(local_addr, size)
-            if not memory_data:
-                print_out_str(f"Failed to read memory from local_addr 0x{local_addr:x}, size {size}")
-                return
-
-            self.outfile = self.ramdump.open_file('hfi_dump.txt', 'wb')
-            self.outfile.write(memory_data)
-            self.outfile.close()
-
-            print_out_str(f"Successfully dumped {len(memory_data)} bytes to 'hfi_dump.txt'")
-
-        except Exception as e:
-            print_out_str(f"Exception while reading/writing HFI debug data: {e}")
-            return
+            disp_op = self.ramdump.read_u32(msm_priv + disp_op_off)
+            reported_mode = {0: 'HWIO', 1: 'HFI', 2: 'HYP'}.get(
+                disp_op, 'UNKNOWN')
+            mode = reported_mode if reported_mode in ('HWIO', 'HFI') else 'UNKNOWN'
+            print_out_str("MDPinfo: display operation mode {} ({})".format(
+                reported_mode, disp_op if disp_op is not None else 'unavailable'))
+            return mode
+        except Exception as ex:
+            print_out_str("MDPinfo: could not determine display operation mode: {}"
+                          .format(ex))
+            return 'UNKNOWN'
 
 
     def parse(self):
-        # Extract HFI PAL trace data
-        self.extract_hfi_pal_trace_data()
-        self.dump_hfi_dbg()
+        display_mode = self.get_display_operation_mode()
+        hfi_mode = display_mode == 'HFI'
 
-        mdss_dbg = MdssDbgXlog(self.ramdump, 'mdss_dbg_xlog')
+        if hfi_mode or display_mode == 'UNKNOWN':
+            DcpHfiParser(self.ramdump).parse()
+        DrmCommitStateParser(self.ramdump).parse()
+        DmaBufParser(self.ramdump).parse()
 
-        if mdss_dbg.is_empty():
-            mdss_dbg = SdeDbgBase(self.ramdump, 'sde_dbg_base')
+        mdss_dbg = (SdeDbgBase(self.ramdump, 'sde_dbg_base') if hfi_mode
+                    else MdssDbgXlog(self.ramdump, 'mdss_dbg_xlog'))
+
+        if hfi_mode or mdss_dbg.is_empty():
+            if not hfi_mode:
+                mdss_dbg = SdeDbgBase(self.ramdump, 'sde_dbg_base')
             if mdss_dbg.is_empty():
                 return
             # EVENT LOGS
             try:
-                self.outfile = self.ramdump.open_file('sde_evtlog.txt')
+                self.outfile = self.ramdump.open_file('display_info/sde_evtlog.txt')
 
                 evt_log = Struct(self.ramdump, mdss_dbg.evtlog,
                           struct_name="struct sde_dbg_evtlog",
@@ -2714,21 +2691,14 @@ class MDPinfo(RamParser):
 
                 SDE_EVTLOG_ENTRY = int(self.ramdump.field_offset('struct sde_dbg_evtlog', 'first') / self.ramdump.sizeof('struct sde_dbg_evtlog_log'))
                 self.outfile.write('%-60.50s%-20.5s%-8.5s%-8.5s%s\n' % ("FUNC", "TIME", "PID", "CPU", "DATA"))
-                sde_evtlog_start = 0
-                sde_evtlog_repeat = 0
+                # curr/last are now incremented together on every log call,
+                # so the old curr!=last check no longer detects a wrapped
+                # buffer. Always walk the full ring buffer once instead.
                 sde_evtlog_curr = abs(evt_log.curr % SDE_EVTLOG_ENTRY)
-                if (evt_log.curr != evt_log.last):
-                        sde_evtlog_start = sde_evtlog_curr + 1
-                else:
-                        sde_evtlog_repeat = 1
+                sde_evtlog_start = sde_evtlog_curr + 1
                 sde_evtlog_count = 0
                 while(sde_evtlog_count < SDE_EVTLOG_ENTRY):
                         i = sde_evtlog_start % SDE_EVTLOG_ENTRY
-                        if (i == sde_evtlog_curr):
-                                if (sde_evtlog_repeat):
-                                        break
-                                else:
-                                        sde_evtlog_repeat = 1
                         addr = evt_log.logs + self.ramdump.sizeof('struct sde_dbg_evtlog_log') * i
                         log_log = addr
                         sde_evtlog_start = sde_evtlog_start + 1
@@ -2759,8 +2729,8 @@ class MDPinfo(RamParser):
                 self.outfile.close()
 
                 #Event log Parser
-                tmp_outfile = self.ramdump.open_file('sde_evtlog.txt', 'r')
-                self.outfile = self.ramdump.open_file('evtlog_stage_1.txt')
+                tmp_outfile = self.ramdump.open_file('display_info/sde_evtlog.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/evtlog_stage_1.txt')
                 lines = tmp_outfile.readlines()
 
                 for eachLine in lines:
@@ -2777,8 +2747,8 @@ class MDPinfo(RamParser):
                 self.outfile.close()
 
                 #Event log Verbose
-                tmp_outfile = self.ramdump.open_file('evtlog_stage_1.txt', 'r')
-                self.outfile = self.ramdump.open_file('evtlog_stage_2.txt')
+                tmp_outfile = self.ramdump.open_file('display_info/evtlog_stage_1.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/evtlog_stage_2.txt')
                 title = '{:<50}  {:<10}  {:<15}  {:<15}  {:<15}  {:<100}'.format('FUNCTION_NAME', "LINE_NO", "TIMESTAMP", "PID", "CPU", "DATA"  )
                 self.outfile.write(title)
                 self.outfile.write("\n")
@@ -2788,7 +2758,7 @@ class MDPinfo(RamParser):
                 self.outfile.close()
                 tmp_outfile.close()
 
-                self.outfile = self.ramdump.open_file('evtlog_stage_2.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/evtlog_stage_2.txt', 'r')
                 self.outfile.readline()
                 contents_list = []
                 for line in self.outfile:
@@ -2864,7 +2834,7 @@ class MDPinfo(RamParser):
                         continue
 
                 contents_list.reverse()
-                self.outfile=self.ramdump.open_file('evtlog_stage_2.txt',"w")
+                self.outfile=self.ramdump.open_file('display_info/evtlog_stage_2.txt',"w")
                 for i in range(len(contents_list)) :
                     for j in range(len(contents_list[i])):
                         self.outfile.write(contents_list[i][j])
@@ -2873,15 +2843,19 @@ class MDPinfo(RamParser):
                 self.outfile.write("\n")
                 self.outfile.close()
 
-                self.split_dic('evtlog_stage_2.txt')
+                self.split_dic('display_info/evtlog_stage_2.txt')
             except:
                 pass
-            self.ramdump.remove_file('evtlog_stage_1.txt')
-            self.ramdump.remove_file('evtlog_stage_2.txt')
+            self.ramdump.remove_file('display_info/evtlog_stage_1.txt')
+            self.ramdump.remove_file('display_info/evtlog_stage_2.txt')
+
+            if hfi_mode:
+                print_out_str("MDPinfo: skipping HWIO register, reglog, and debug-bus parsing in HFI mode")
+                return
 
             #Dumps
             try:
-                self.outfile = self.ramdump.open_file('sde_regdump.txt')
+                self.outfile = self.ramdump.open_file('display_info/sde_regdump.txt')
                 dump_list = ListWalker(self.ramdump, mdss_dbg.reg_base_list, 0)
                 if dump_list.is_empty():
                     self.outfile.write('%s \n' % ("BLK DUMPLIST IS EMPTY!!!"))
@@ -2908,16 +2882,16 @@ class MDPinfo(RamParser):
                                 self.print_sderange(node)
                 #Dumps Parse
                 self.outfile.close()
-                f_in = self.ramdump.open_file('sde_regdump.txt', 'r')
-                self.outfile = self.ramdump.open_file('reg_stage_1.txt', 'w')
+                f_in = self.ramdump.open_file('display_info/sde_regdump.txt', 'r')
+                self.outfile = self.ramdump.open_file('display_info/reg_stage_1.txt', 'w')
                 for eachLine in f_in:
                     if not eachLine.isspace() and "-----" not in eachLine and "======" not in eachLine and '["' not in eachLine :
                         self.outfile.write(eachLine)
                 f_in.close()
                 self.outfile.close()
 
-                f_in = self.ramdump.open_file("reg_stage_1.txt", 'r')
-                self.outfile = self.ramdump.open_file('reg_stage_2.txt','w')
+                f_in = self.ramdump.open_file("display_info/reg_stage_1.txt", 'r')
+                self.outfile = self.ramdump.open_file('display_info/reg_stage_2.txt','w')
                 for eachLine in f_in:
                     if '[' in eachLine:
                         break
@@ -2926,18 +2900,18 @@ class MDPinfo(RamParser):
                     self.outfile.write(eachLine)
                 f_in.close()
                 self.outfile.close()
-                contents_for_analysis=self.reg_parser("reg_stage_2.txt")
+                contents_for_analysis=self.reg_parser("display_info/reg_stage_2.txt")
 
                 #Regdump Verbose
                 contents_for_analysis=self.reg_verbose(contents_for_analysis)
-                self.file_write(contents_for_analysis, "sde_regdump_parsed.txt")
+                self.file_write(contents_for_analysis, "display_info/sde_regdump_parsed.txt")
             except:
                 pass
-            self.ramdump.remove_file('reg_stage_1.txt')
-            self.ramdump.remove_file('reg_stage_2.txt')
-            self.ramdump.remove_file('reg_stage_3.txt')
+            self.ramdump.remove_file('display_info/reg_stage_1.txt')
+            self.ramdump.remove_file('display_info/reg_stage_2.txt')
+            self.ramdump.remove_file('display_info/reg_stage_3.txt')
             try:
-                self.outfile = self.ramdump.open_file('sde_reglog.txt')
+                self.outfile = self.ramdump.open_file('display_info/sde_reglog.txt')
                 reg_log = Struct(self.ramdump, mdss_dbg.reglog,
                           struct_name="struct sde_dbg_reglog",
                           fields={'enable': Struct.get_u32,
@@ -2986,57 +2960,82 @@ class MDPinfo(RamParser):
                 pass
 
             #Combining reglog with eventlog
-            f_evtlog = self.ramdump.open_file('sde_evtlog_parsed.txt', 'r')
-            f_reglog = self.ramdump.open_file('sde_reglog.txt', 'r')
-            self.outfile = self.ramdump.open_file('sde_evtlog_reglog_merged.txt', 'w')
-            evtlog = f_evtlog.readline()
-            reglog = f_reglog.readline()
-            curr_timestamp = 0
-            self.outfile.write('{:<54}{:<29}{:<6}{:<3}{:<200}\n'.format("EVTLOG_REGLOG_MERGED", "TIMESTAMP", "PID", "CPU", "DATA"))
-            while (evtlog and reglog):
-                if "FUNCTION_NAME" in evtlog:
-                    evtlog = f_evtlog.readline()
-                if "TIME" in reglog:
-                    reglog = f_reglog.readline()
-                if "COMMIT" in evtlog:
-                    evtlog = f_evtlog.readline()
-                if not evtlog or not reglog:
-                    break
+            f_evtlog = None
+            f_reglog = None
+            merged_evtlog_reglog = None
+            try:
+                f_evtlog = self.ramdump.open_file('display_info/sde_evtlog_parsed.txt', 'r')
+                f_reglog = self.ramdump.open_file('display_info/sde_reglog.txt', 'r')
+                merged_evtlog_reglog = self.ramdump.open_file(
+                    'display_info/sde_evtlog_reglog_merged.txt', 'w')
+                self.outfile = merged_evtlog_reglog
+                evtlog = f_evtlog.readline()
+                reglog = f_reglog.readline()
+                curr_timestamp = 0
+                self.outfile.write('{:<54}{:<29}{:<6}{:<3}{:<200}\n'.format("EVTLOG_REGLOG_MERGED", "TIMESTAMP", "PID", "CPU", "DATA"))
+                while (evtlog and reglog):
+                    if "FUNCTION_NAME" in evtlog:
+                        evtlog = f_evtlog.readline()
+                    if "TIME" in reglog:
+                        reglog = f_reglog.readline()
+                    if "COMMIT" in evtlog:
+                        evtlog = f_evtlog.readline()
+                    if not evtlog or not reglog:
+                        break
 
-                evtlog_tmp = re.split(r'==>|: |\n', evtlog, 2)
-                data_tmp = evtlog_tmp[2].split("[", 1)
-                reglog_tmp = re.sub(r'\s+', ' ', reglog)
-                reglog_tmp = reglog.split()
+                    evtlog_tmp = re.split(r'==>|: |\n', evtlog, 2)
+                    if len(evtlog_tmp) < 3:
+                        evtlog = f_evtlog.readline()
+                        continue
+                    data_tmp = evtlog_tmp[2].split("[", 1)
+                    if len(data_tmp) < 2:
+                        evtlog = f_evtlog.readline()
+                        continue
+                    reglog_tmp = re.sub(r'\s+', ' ', reglog)
+                    reglog_tmp = reglog.split()
 
-                if (int(evtlog_tmp[1]) > int(reglog_tmp[0])):
-                    self.outfile.write('{:<54}{:<29}{:<6}{:<3}{:<200}'.format("sde_reg_write", "==>"+str(reglog_tmp[0])+": "+str(int(reglog_tmp[0]) - curr_timestamp), "["+reglog_tmp[1]+"]","[N]", reglog_tmp[2] + " " + reglog_tmp[3] + " " + reglog_tmp[4]))
-                    reglog = f_reglog.readline()
-                    curr_timestamp = int(reglog_tmp[0])
-                    self.outfile.write('\n')
-                else:
+                    if (int(evtlog_tmp[1]) > int(reglog_tmp[0])):
+                        self.outfile.write('{:<54}{:<29}{:<6}{:<3}{:<200}'.format("sde_reg_write", "==>"+str(reglog_tmp[0])+": "+str(int(reglog_tmp[0]) - curr_timestamp), "["+reglog_tmp[1]+"]","[N]", reglog_tmp[2] + " " + reglog_tmp[3] + " " + reglog_tmp[4]))
+                        reglog = f_reglog.readline()
+                        curr_timestamp = int(reglog_tmp[0])
+                        self.outfile.write('\n')
+                    else:
+                        self.outfile.write('{:<54}{:<29}{:<200}'.format(evtlog_tmp[0], "==>"+str(evtlog_tmp[1])+": "+str(int(evtlog_tmp[1]) - curr_timestamp),"["+data_tmp[1]))
+                        evtlog = f_evtlog.readline()
+                        curr_timestamp = int(evtlog_tmp[1])
+
+                while(evtlog):
+                    evtlog_tmp = re.split(r'==>|: |\n', evtlog, 2)
+                    if len(evtlog_tmp) < 3:
+                        evtlog = f_evtlog.readline()
+                        continue
+                    data_tmp = evtlog_tmp[2].split("[", 1)
+                    if len(data_tmp) < 2:
+                        evtlog = f_evtlog.readline()
+                        continue
                     self.outfile.write('{:<54}{:<29}{:<200}'.format(evtlog_tmp[0], "==>"+str(evtlog_tmp[1])+": "+str(int(evtlog_tmp[1]) - curr_timestamp),"["+data_tmp[1]))
                     evtlog = f_evtlog.readline()
                     curr_timestamp = int(evtlog_tmp[1])
 
-            while(evtlog):
-                evtlog_tmp = re.split(r'==>|: |\n', evtlog, 2)
-                data_tmp = evtlog_tmp[2].split("[", 1)
-                self.outfile.write('{:<54}{:<29}{:<200}'.format(evtlog_tmp[0], "==>"+str(evtlog_tmp[1])+": "+str(int(evtlog_tmp[1]) - curr_timestamp),"["+data_tmp[1]))
-                evtlog = f_evtlog.readline()
-                curr_timestamp = int(evtlog_tmp[1])
+                while(reglog):
+                    reglog_tmp = re.sub(r'\s+', ' ', reglog)
+                    reglog_tmp = reglog.split()
+                    self.outfile.write('{:<54}{:<29}{:<6}{:<3}{:<200}'.format("sde_reg_write", "==>"+str(reglog_tmp[0])+": "+str(int(reglog_tmp[0]) - curr_timestamp), "["+reglog_tmp[1]+"]","[N]", reglog_tmp[2] + " " + reglog_tmp[3] + " " + reglog_tmp[4]))
+                    self.outfile.write('\n')
+                    curr_timestamp = int(reglog_tmp[0])
+                    reglog = f_reglog.readline()
 
-            while(reglog):
-                reglog_tmp = re.sub(r'\s+', ' ', reglog)
-                reglog_tmp = reglog.split()
-                self.outfile.write('{:<54}{:<29}{:<6}{:<3}{:<200}'.format("sde_reg_write", "==>"+str(reglog_tmp[0])+": "+str(int(reglog_tmp[0]) - curr_timestamp), "["+reglog_tmp[1]+"]","[N]", reglog_tmp[2] + " " + reglog_tmp[3] + " " + reglog_tmp[4]))
-                self.outfile.write('\n')
-                curr_timestamp = int(reglog_tmp[0])
-                reglog = f_reglog.readline()
-
-            f_evtlog.close()
-            f_reglog.close()
-            self.outfile.close()
-            self.ramdump.remove_file('sde_reglog.txt')
+            except Exception as err:
+                print_out_str(
+                    "Failed to merge display event and register logs: {}".format(err))
+            finally:
+                if f_evtlog is not None:
+                    f_evtlog.close()
+                if f_reglog is not None:
+                    f_reglog.close()
+                if merged_evtlog_reglog is not None:
+                    merged_evtlog_reglog.close()
+                self.ramdump.remove_file('display_info/sde_reglog.txt')
 
             dbgbus_sde = Struct(self.ramdump, mdss_dbg.dbgbus_sde,
                             struct_name="struct sde_dbg_sde_debug_bus",
@@ -3086,7 +3085,7 @@ class MDPinfo(RamParser):
                             fields={'dumped_content': Struct.get_pointer,
                                     'content_size': Struct.get_u32})
 
-            self.outfile = self.ramdump.open_file('sde_dbgbus.txt', 'w')
+            self.outfile = self.ramdump.open_file('display_info/sde_dbgbus.txt', 'w')
 
             i = 0
             self.outfile.write('---------------------------------\n[dbgbus_sde]\n---------------------------------\n')
@@ -3162,7 +3161,7 @@ class MDPinfo(RamParser):
 
                 # Delays file creation until we have found a non-null array element
                 if not self.outfile:
-                    self.outfile = self.ramdump.open_file('mdpinfo_out.txt')
+                    self.outfile = self.ramdump.open_file('display_info/mdpinfo_out.txt')
 
                 self.outfile.write('mdss_dump_reg_by_ranges:'
                                '=========%s DUMP=========\n' % blk.name)

@@ -77,18 +77,29 @@ class Slabinfo_summary(RamParser):
         total_freeobjects = 0
         slab_summary = {}
         nCounter = 0
+        kernel_version = self.ramdump.kernel_version
         original_slab = self.ramdump.address_of('slab_caches')
-        cpus = self.ramdump.get_num_cpus()
         slab_list_offset = self.ramdump.field_offset(
             'struct kmem_cache', 'list')
         slab_name_offset = self.ramdump.field_offset(
             'struct kmem_cache', 'name')
-        slab_node_offset = self.ramdump.field_offset(
-            'struct kmem_cache', 'node')
         cpu_partial_offset = self.ramdump.field_offset(
                 'struct kmem_cache_cpu', 'partial')
+
+        # Kernel >= 7.2 stores node pointers under kmem_cache.per_node.
+        if kernel_version >= (7, 2):
+            slab_node_base_offset = self.ramdump.field_offset(
+                'struct kmem_cache', 'per_node')
+            slab_node_offset = self.ramdump.field_offset(
+                'struct kmem_cache_per_node_ptrs', 'node')
+        else:
+            slab_node_base_offset = 0
+            slab_node_offset = self.ramdump.field_offset(
+                'struct kmem_cache', 'node')
+
+        # Keep per-cpu partial traversal on cpu_slab when available.
         cpu_slab_offset = self.ramdump.field_offset(
-            'struct kmem_cache', 'cpu_slab')
+                'struct kmem_cache', 'cpu_slab')
         slab_partial_offset = self.ramdump.field_offset(
             'struct kmem_cache_node', 'partial')
         slab = self.ramdump.read_word(original_slab)
@@ -116,13 +127,22 @@ class Slabinfo_summary(RamParser):
             slab = slab - slab_list_offset
             slab_name_addr = self.ramdump.read_word(
                                         slab + slab_name_offset)
-            # actually an array but again, no numa
+            if slab_node_base_offset is None or slab_node_offset is None:
+                slab = self.ramdump.read_word(slab + slab_list_offset)
+                continue
+            # Per-node pointer array; parser currently uses node0 only.
             slab_node_addr = self.ramdump.read_word(
-                                        slab + slab_node_offset)
+                slab + slab_node_base_offset + slab_node_offset)
+            if slab_node_addr is None:
+                slab = self.ramdump.read_word(slab + slab_list_offset)
+                continue
             slab_name = self.ramdump.read_cstring(
                                         slab_name_addr, 48)
-            cpu_slab_addr = self.ramdump.read_word(
-                                        slab + cpu_slab_offset)
+
+            cpu_slab_addr = None
+            if cpu_slab_offset is not None:
+                cpu_slab_addr = self.ramdump.read_word(
+                    slab + cpu_slab_offset)
             oo = self.ramdump.read_structure_field(
                         slab, 'struct kmem_cache', 'oo')
             obj_size = self.ramdump.read_structure_field(
@@ -137,11 +157,11 @@ class Slabinfo_summary(RamParser):
                         'struct kmem_cache_node', 'nr_slabs')
 
             # per cpu slab
-            for i in self.ramdump.iter_cpus():
-                cpu_slabn_addr = cpu_slab_addr + self.ramdump.per_cpu_offset(i)
-                if cpu_slabn_addr == 0 or cpu_slabn_addr is None:
-                    break
-                if cpu_partial_offset is not None:
+            if cpu_slab_addr and cpu_partial_offset is not None:
+                for i in self.ramdump.iter_cpus():
+                    cpu_slabn_addr = cpu_slab_addr + self.ramdump.per_cpu_offset(i)
+                    if cpu_slabn_addr == 0 or cpu_slabn_addr is None:
+                        break
                     total_freeobjects = total_freeobjects + self.cal_free_pages(
                                     (cpu_slabn_addr + cpu_partial_offset),
                                     slab_next, max_page, slab, True)
