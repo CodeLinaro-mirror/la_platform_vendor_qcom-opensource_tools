@@ -56,6 +56,7 @@ def get_shmem_swap_usage(ramdump):
     i = 0
     string = "TOP 3 swapped SHMEM files are:\n"
     pathtracking = FileTracking(ramdump)
+    d_alias_field = 'd_u' if ramdump.field_offset('struct dentry', 'd_u') is not None else 'd_alias'
     for k,v in sortlist:
         #k is struct address_space
         if i < 3:
@@ -69,7 +70,7 @@ def get_shmem_swap_usage(ramdump):
                         'i_dentry')
             if dentry_list is not None:
                 dentry = ramdump.container_of(dentry_list, 'struct dentry',
-                        'd_u')
+                        d_alias_field)
             if dentry is not None:
                 d_name_ptr = (dentry + ramdump.field_offset('struct dentry ',
                     'd_name')) + ramdump.field_offset('struct qstr', 'name')
@@ -106,7 +107,8 @@ def do_dump_process_memory(ramdump):
 
     #######################   File Cache   #######################
     total_shmem_kB = memstat.pages_to_kb(ramdump.read_word('vm_node_stat[NR_SHMEM]'))
-    file_cache_kB =  memstat.pages_to_kb(memstat.calculate_cached_pages())
+    swapcached_kB = memstat.pages_to_kb(memstat.calculate_swapcache_pages())
+    file_cache_kB =  memstat.pages_to_kb(memstat.calculate_cached_pages()) - swapcached_kB
     active_kB = memstat.pages_to_kb(ramdump.read_word('vm_node_stat[NR_ACTIVE_FILE]'))
     inactive_kB = memstat.pages_to_kb(ramdump.read_word('vm_node_stat[NR_INACTIVE_FILE]'))
 
@@ -226,12 +228,9 @@ def do_dump_process_memory(ramdump):
         unaccounted -= z_used_kB
 
     #######################    Swapcached   #######################
-    swapcached_kB = 0
-    swapcached_pages = ramdump.read_word('vm_stat[NR_SWAPCACHE]')
-    swapcached_kB = memstat.pages_to_kb(swapcached_pages)
     memory_file.write('Swapcached       : {:>10,} kB ({:>5.1f}%)\n'.format(
             swapcached_kB, (swapcached_kB * 100 / total_mem_kB)))
-    unaccounted += swapcached_kB
+    # /proc/meminfo Cached = NR_FILE_PAGES - total_swapcache_pages()
 
     #######################   Unaccounted   #######################
     memory_file.write('Unaccounted      : {:>10,} kB ({:>5.1f}%)\n'.format(

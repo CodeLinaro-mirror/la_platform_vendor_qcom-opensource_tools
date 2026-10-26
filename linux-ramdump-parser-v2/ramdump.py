@@ -927,9 +927,12 @@ class RamDump():
             'sizeof':{}, 'unwindsym':{}
         }
         self.ko_file_dict = {}
+        self.ko_dir_vermagic_match = {}
+        self.ko_dirs = set()
         self.ko_text_address_dict = {}
         self.dump = None
         self.zram_parser_override = options.zram_parser_override
+        self.dcp_elf = options.dcp_elf
 
         if gdb_ndk_path:
             self.gdbmi = gdbmi.GdbMI(self.gdb_ndk_path, self.vmlinux,
@@ -2022,17 +2025,7 @@ class RamDump():
                         startup_script.write('sYmbol.AUTOLOAD.CHECKCOMMAND  ' + '"do /opt/t32/demo/arm/kernel/linux/etc/gdb/gdb_autoload.cmm"' + '\n')
                         startup_script.write(')\n')
                 if self.module_table.sym_path_list:
-                    # Recursively find all subdirectories containing .ko files and add to y.spath
-                    ko_dirs = set()
-                    for path in self.module_table.sym_path_list:
-                        if not os.path.exists(path):
-                            continue
-                        for root, dirs, files in os.walk(path):
-                            for f in files:
-                                if f.endswith(".ko"):
-                                    ko_dirs.add(root)
-                                    break
-                    for ko_dir in sorted(ko_dirs):
+                    for ko_dir in sorted(self.ko_dirs):
                         startup_script.write("y.spath +=  " +'"{0}"'.format(ko_dir)+ '\n')
                 else:
                     startup_script.write('sYmbol.SourcePATH.Set ' + '"' + mod_dir + '"' + "\n")
@@ -2940,7 +2933,55 @@ class RamDump():
                     self.lookup_table.append(sym)
         self.lookup_table.sort()
 
+    @staticmethod
+    def vermagic_key(vermagic):
+        # (kernel version, page size) of a vermagic string
+        release = vermagic.strip().split(' ')[0]
+        m = re.match(r'^(\d+\.\d+\.\d+(?:-android\d+-\d+)?)', release)
+        version = m.group(1) if m else release
+        m = re.search(r'-(\d+k)$', release)
+        return (version, m.group(1) if m else '4k')
+
+    def kernel_vermagic_key(self, kernel_vermagic):
+        version, page = self.vermagic_key(kernel_vermagic)
+        if self.get_config_val('CONFIG_PAGE_SHIFT') or self.get_config_val('CONFIG_ARM64_PAGE_SHIFT'):
+            page = '{0}k'.format(self.get_page_size() >> 10)
+        return (version, page)
+
+    def vermagic_match(self, kernel_vermagic, ko_vermagic):
+        if ko_vermagic == kernel_vermagic:
+            return 2
+        if self.vermagic_key(ko_vermagic) == self.kernel_vermagic_key(kernel_vermagic):
+            return 1
+        return 0
+
+    def get_ko_vermagic(self, filepath):
+        with open(filepath, 'rb') as f:
+            try:
+                modinfo = ELFFile(f).get_section_by_name('.modinfo')
+                if modinfo is None:
+                    return None
+                for entry in modinfo.data().split(b'\0'):
+                    if entry.startswith(b'vermagic='):
+                        return entry[len(b'vermagic='):].decode('ascii', 'ignore')
+            except OSError:
+                raise
+            except Exception:
+                pass
+        return None
+
     def traverse_module(self):
+        try:
+            kernel_vermagic = self.read_cstring('vermagic', 256, allow_elf=True)
+        except Exception:
+            kernel_vermagic = None
+        if not kernel_vermagic:
+            print_out_str('kernel vermagic not readable: ko folders are not checked')
+        # vermagic is checked on one ko per directory (e.g. 4k vs 16k-mode builds)
+        dir_vermagic_match = self.ko_dir_vermagic_match
+        skipped_dirs = []
+        compatible_dirs = []
+        unreadable_kos = []
         for path in self.module_table.sym_path_list:
             def on_file(file):
                 if file.endswith('.ko.unstripped'):
@@ -2949,6 +2990,26 @@ class RamDump():
                     name = file[:-len('.ko')]
                 else:
                     return
+
+                if kernel_vermagic:
+                    ko_dir = os.path.dirname(file)
+                    if ko_dir not in dir_vermagic_match:
+                        try:
+                            ko_vermagic = self.get_ko_vermagic(file)
+                        except OSError as err:
+                            unreadable_kos.append(file)
+                            return
+                        if ko_vermagic is not None:
+                            level = self.vermagic_match(kernel_vermagic, ko_vermagic)
+                            dir_vermagic_match[ko_dir] = level > 0
+                            if level == 0:
+                                skipped_dirs.append((ko_dir, ko_vermagic))
+                            elif level == 1:
+                                compatible_dirs.append((ko_dir, ko_vermagic))
+                    if not dir_vermagic_match.get(ko_dir, True):
+                        return
+                if file.endswith('.ko'):
+                    self.ko_dirs.add(os.path.dirname(file))
 
                 name = os.path.basename(name).replace("-", "_")
                 old_ko = self.ko_file_dict.get(name)
@@ -2968,6 +3029,17 @@ class RamDump():
                 self.ko_file_dict[name] = file
                 self.ko_file_names.append(name)
             self.walk_depth(path, on_file)
+
+        if skipped_dirs or compatible_dirs or unreadable_kos:
+            print_out_str('kernel vermagic: "{0}"'.format(kernel_vermagic))
+        for label, dirs in (('compatible', compatible_dirs), ('skipped', skipped_dirs)):
+            counts = {}
+            for ko_dir, ko_vermagic in dirs:
+                counts[ko_vermagic] = counts.get(ko_vermagic, 0) + 1
+            for ko_vermagic, n in counts.items():
+                print_out_str('{0} vermagic "{1}": {2} folder(s)'.format(label, ko_vermagic, n))
+        if unreadable_kos:
+            print_out_str('{0} ko file(s) could not be opened, skipped'.format(len(unreadable_kos)))
 
     def win_safe_name_for_path(self, name: str) -> str:
         """
@@ -3925,7 +3997,9 @@ class RamDump():
                 addr_or_name += pcpu_offset + self.per_cpu_offset(cpu)
             addr = self.virt_to_phys(addr_or_name)
             if allow_elf and addr is None:
-                s = self.gdbmi.read_memory(addr_or_name, '{}+{}'.format(addr_or_name, max_length))
+                va = self.resolve_virt(addr_or_name)
+                if va is not None:
+                    s = self.gdbmi.read_memory('0x{:x}'.format(va), '0x{:x}'.format(va + max_length))
         if not s:
             s = self.read_physical(addr, max_length)
         if s is not None:
@@ -3969,7 +4043,9 @@ class RamDump():
                 per_cpu_string = ' with per-cpu offset of ' + hex(pcpu_offset)
             addr = self.virt_to_phys(addr_or_name)
             if allow_elf and addr is None:
-                s = self.gdbmi.read_memory(addr_or_name, '{}+{}'.format(addr_or_name, struct.calcsize(format_string)))
+                va = self.resolve_virt(addr_or_name)
+                if va is not None:
+                    s = self.gdbmi.read_memory('0x{:x}'.format(va), '0x{:x}'.format(va + struct.calcsize(format_string)))
         if not s:
             s = self.read_physical(addr, struct.calcsize(format_string))
         if (s is None) or (s == ''):

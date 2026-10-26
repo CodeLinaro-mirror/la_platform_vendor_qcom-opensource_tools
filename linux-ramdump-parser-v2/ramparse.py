@@ -269,6 +269,8 @@ if __name__ == '__main__':
                       Specify a separate program to parse ZRAM-compressed pages with. The program must take in
                       compressed input through stdin and output decompressed output through stdout.
                       """)
+    parser.add_option('', '--dcp_elf', dest='dcp_elf',
+                      help='DCP ELF for --print-mdssinfo; resolves DCP event function names')
 
     for p in parser_util.get_parsers():
         parser.add_option(p.shortopt or '',

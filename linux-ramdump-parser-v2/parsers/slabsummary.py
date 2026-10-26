@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -77,7 +77,6 @@ class Slabinfo_summary(RamParser):
         total_freeobjects = 0
         slab_summary = {}
         nCounter = 0
-        kernel_version = self.ramdump.kernel_version
         original_slab = self.ramdump.address_of('slab_caches')
         slab_list_offset = self.ramdump.field_offset(
             'struct kmem_cache', 'list')
@@ -86,8 +85,7 @@ class Slabinfo_summary(RamParser):
         cpu_partial_offset = self.ramdump.field_offset(
                 'struct kmem_cache_cpu', 'partial')
 
-        # Kernel >= 7.2 stores node pointers under kmem_cache.per_node.
-        if kernel_version >= (7, 2):
+        if self.ramdump.field_offset('struct kmem_cache', 'per_node') is not None:
             slab_node_base_offset = self.ramdump.field_offset(
                 'struct kmem_cache', 'per_node')
             slab_node_offset = self.ramdump.field_offset(
