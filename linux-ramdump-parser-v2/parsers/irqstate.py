@@ -290,7 +290,11 @@ class IrqParse(RamParser):
 
     def print_irq_state_sparse_irq(self, ram_dump):
         irq_descs = []
-        nr_irqs = ram_dump.read_int(ram_dump.address_of('nr_irqs'))
+        if ram_dump.kernel_version >= (7, 2, 0):
+            nr_irqs = ram_dump.read_int(ram_dump.address_of('total_nr_irqs'))
+        else:
+            nr_irqs = ram_dump.read_int(ram_dump.address_of('nr_irqs'))
+
         cpu_str = ''
         for i in ram_dump.iter_cpus():
             cpu_str = cpu_str + '{0:10} '.format('CPU{0}'.format(i))

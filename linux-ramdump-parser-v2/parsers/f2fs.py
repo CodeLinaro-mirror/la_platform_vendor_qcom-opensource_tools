@@ -13,6 +13,7 @@
 from parser_util import register_parser, RamParser, cleanupString
 from print_out import print_out_str
 from struct_print import struct_print_class
+import rb_tree
 
 def parse_mountpoint(ramdump, dentry):
     d_iname_offset = ramdump.field_offset('struct dentry', 'd_iname')
@@ -35,11 +36,21 @@ def print_f2fs_data(ramdump):
     output_file = ramdump.open_file("f2fs_info.txt")
     init_nsproxy_addr = ramdump.address_of('init_nsproxy')
     mnt_ns = ramdump.read_structure_field(init_nsproxy_addr, 'struct nsproxy', 'mnt_ns')
+    mounts = []
     mnt_ns_list_offset = ramdump.field_offset('struct mnt_namespace', 'list')
-    mnt_ns_list_head = mnt_ns + mnt_ns_list_offset
-    next_offset = ramdump.field_offset('struct list_head', 'next')
-    mnt_ns_entry = ramdump.read_word(mnt_ns_list_head + next_offset)
-    mount_list_offset = ramdump.field_offset('struct mount', 'mnt_list')
+    if mnt_ns_list_offset is None:
+        mount_rbnode_addr = mnt_ns + ramdump.field_offset('struct mnt_namespace', 'mounts')
+        mntnode_offset = ramdump.field_offset('struct mount', 'mnt_node')
+        rb_node = ramdump.read_pointer(mount_rbnode_addr)
+        rb_tree.RbTreeWalker(ramdump).walk(rb_node, lambda node, offset: mounts.append(node - offset), mntnode_offset)
+    else:
+        mnt_ns_list_head = mnt_ns + mnt_ns_list_offset
+        next_offset = ramdump.field_offset('struct list_head', 'next')
+        mnt_ns_entry = ramdump.read_word(mnt_ns_list_head + next_offset)
+        mount_list_offset = ramdump.field_offset('struct mount', 'mnt_list')
+        while mnt_ns_entry != mnt_ns_list_head:
+            mounts.append(mnt_ns_entry - mount_list_offset)
+            mnt_ns_entry = ramdump.read_structure_field(mnt_ns_entry, 'struct list_head', 'next')
 
     mount_mnt_o = ramdump.field_offset('struct mount', 'mnt')
     mount_mnt_rcu_o = ramdump.field_offset('struct mount', 'mnt_rcu')
@@ -57,8 +68,7 @@ def print_f2fs_data(ramdump):
 
     dentry_d_child_o = ramdump.field_offset('struct dentry', 'd_child')
     output_file.write("(struct mount *)     (struct super_block *)    [FS_TYPE]   \t\t[DEVNAME]                               [DIRNAME]                       [SB_ID]       [umount_RW_LOCK_count]  [READ_ONLY]  [writer FROZEN (1=YES,generally)]\n")
-    while mnt_ns_entry != mnt_ns_list_head:
-        root = mnt_ns_entry - mount_list_offset
+    for root in mounts:
         root_mnt_devname = ramdump.read_structure_cstring(root, 'struct mount', 'mnt_devname', 40)
         root_mnt_sb = ramdump.read_word(root + mnt_o + mnt_sb_o)
         sb_s_type = ramdump.read_structure_field(root_mnt_sb, 'struct super_block', 's_type')
@@ -451,8 +461,6 @@ def print_f2fs_data(ramdump):
             gc.process()
             gc.print_struct()
             break
-
-        mnt_ns_entry = ramdump.read_structure_field(mnt_ns_entry, 'struct list_head', 'next')
     output_file.close()
 
 @register_parser('--print-f2fs', 'Extract F2FS super_block info')

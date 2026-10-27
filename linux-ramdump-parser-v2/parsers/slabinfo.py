@@ -1,5 +1,5 @@
 # Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -102,6 +102,12 @@ class struct_member_offset(object):
             'struct kmem_cache', 'name')
         self.kmemcache_node = ramdump.field_offset(
             'struct kmem_cache', 'node')
+        if self.kmemcache_node is None:
+            per_node = ramdump.field_offset('struct kmem_cache', 'per_node')
+            per_node_node = ramdump.field_offset(
+                'struct kmem_cache_per_node_ptrs', 'node')
+            if per_node is not None and per_node_node is not None:
+                self.kmemcache_node = per_node + per_node_node
         self.kmemcache_cpu_page = ramdump.field_offset(
             'struct kmem_cache_cpu', 'page')
         self.kmemcpucache_cpu_slab = ramdump.field_offset(
@@ -555,7 +561,9 @@ class Slabinfo(RamParser):
             if g_Optimization is False:
                 out_slabs_addrs.write(
                     '\nslab address of : {0}'.format(slab_name))
-            cpu_slab_addr = self.ramdump.read_word(
+            cpu_slab_addr = None
+            if cpu_slab_offset is not None:
+                cpu_slab_addr = self.ramdump.read_word(
                                         slab + cpu_slab_offset)
 
             if self.ramdump.is_config_defined('CONFIG_SLUB_DEBUG'):
@@ -586,6 +594,8 @@ class Slabinfo(RamParser):
 
             # per cpu slab
             for i in self.ramdump.iter_cpus():
+                if cpu_slab_offset is None:
+                    break
                 cpu_slabn_addr = cpu_slab_addr + self.ramdump.per_cpu_offset(i)
                 if cpu_slabn_addr == 0 or None:
                     break
