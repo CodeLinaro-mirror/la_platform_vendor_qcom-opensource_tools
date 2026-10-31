@@ -1,5 +1,5 @@
 # Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -342,7 +342,21 @@ class RegulatorDump(RamParser):
         self.mutex_waiters[mutex] = []
         # Fill mutex_waiting_map to facilitate mutex deadlock detection
         mutex_owner = self.mutex_owner(mutex)
-        if mutex_owner:
+        if mutex_owner and self.ramdump.field_offset('struct mutex', 'first_waiter') is not None:
+            first = self.ramdump.read_structure_field(mutex, 'struct mutex', 'first_waiter')
+            offset = self.ramdump.field_offset('struct mutex_waiter', 'list')
+            waiter = first
+            seen = set()
+            while waiter and waiter not in seen:
+                seen.add(waiter)
+                self.mutex_map_gen_walker(waiter, mutex, mutex_owner, lock_name)
+                nxt = self.ramdump.read_pointer(waiter + offset)
+                if nxt is None:
+                    break
+                waiter = nxt - offset
+                if waiter == first:
+                    break
+        elif mutex_owner:
             wait_list = self.ramdump.struct_field_addr(mutex, 'struct mutex', 'wait_list')
             offset = self.ramdump.field_offset('struct mutex_waiter', 'list')
             wait_list_walker = llist.ListWalker(self.ramdump, wait_list, offset)

@@ -1,4 +1,4 @@
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -10,6 +10,7 @@
 # GNU General Public License for more details.
 
 from parser_util import register_parser, RamParser
+from .memstat import MemStats
 
 @register_parser('--print-proc_meminfo', 'Print /proc/meminfo stats ')
 class ProcMeminfo(RamParser):
@@ -163,12 +164,18 @@ class ProcMeminfo(RamParser):
             # MemAvailable:    4166504 kB
             print("MemAvailable:    {:>8} kB".format(self.get_mem_mavailable()), file = out_meminfo)
             # Buffers:           11436 kB
-            # TODO: Add buffers
+            memstat = MemStats(self.ramdump)
+            buffers_kb = self.pages_to_kb(memstat.calculate_bufferram_pages())
+            print("Buffers:         {:>8} kB".format(buffers_kb), file = out_meminfo)
 
             # Cached:          1482412 kB
-            print("Cached:          {:>8} kB".format(self.getVmStatKB("NR_FILE_PAGES", default = -1)), file = out_meminfo)
+            swapcached_kb = self.pages_to_kb(memstat.calculate_swapcache_pages())
+            cached_kb = self.getVmStatKB("NR_FILE_PAGES", default = -1)
+            if cached_kb >= 0:
+                cached_kb -= swapcached_kb + buffers_kb
+            print("Cached:          {:>8} kB".format(cached_kb), file = out_meminfo)
             # SwapCached:          308 kB
-            print("SwapCached:      {:>8} kB".format(self.global_node_page_state_KB("NR_SWAPCACHE", default = -1)), file = out_meminfo)
+            print("SwapCached:      {:>8} kB".format(swapcached_kb), file = out_meminfo)
 
             # Active:          1200128 kB
             # Inactive:         556132 kB
@@ -192,13 +199,13 @@ class ProcMeminfo(RamParser):
             # Mlocked:          112000 kB
             print("Mlocked:         {:>8} kB".format(self.global_zone_page_state_KB("NR_MLOCK", default = 0)), file = out_meminfo)
             # SwapTotal:       4194300 kB
-            print("SwapTotal:       {:>8} kB".format(self.ramdump.read_word('total_swap_pages')), file = out_meminfo)
+            print("SwapTotal:       {:>8} kB".format(self.pages_to_kb(self.ramdump.read_word('total_swap_pages'))), file = out_meminfo)
             # SwapFree:        3671036 kB
-            print("SwapFree:        {:>8} kB".format(self.ramdump.read_word('nr_swap_pages')), file = out_meminfo)
+            print("SwapFree:        {:>8} kB".format(self.pages_to_kb(self.ramdump.read_word('nr_swap_pages'))), file = out_meminfo)
             # Dirty:               304 kB
             print("Dirty:           {:>8} kB".format(self.global_node_page_state_KB("NR_FILE_DIRTY", default = 0)), file = out_meminfo)
             # Writeback:             0 kB
-            print("Writeback:       {:>8} kB".format(self.global_zone_page_state_KB("NR_WRITEBACK", default = 0)), file = out_meminfo)
+            print("Writeback:       {:>8} kB".format(self.getVmStatKB("NR_WRITEBACK", default = 0)), file = out_meminfo)
             # AnonPages:        364372 kB
             anon = self.global_node_page_state_KB("NR_ANON_MAPPED", default = vmstat_active_anon + vmstat_inactive_anon)
             print("AnonPages:       {:>8} kB".format(anon), file = out_meminfo)
@@ -257,7 +264,7 @@ class ProcMeminfo(RamParser):
 
             if self.ramdump.is_config_defined('CONFIG_CMA'):
                 # CmaTotal:         188416 kB
-                print("CmaTotal:        {:>8} kB".format(self.ramdump.read_word('totalcma_pages')), file = out_meminfo)
+                print("CmaTotal:        {:>8} kB".format(self.pages_to_kb(self.ramdump.read_word('totalcma_pages'))), file = out_meminfo)
                 # CmaFree:               0 kB
                 print("CmaFree:         {:>8} kB".format(self.global_zone_page_state_KB("NR_FREE_CMA_PAGES", default = 0)), file = out_meminfo)
 

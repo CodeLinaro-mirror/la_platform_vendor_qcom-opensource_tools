@@ -1,5 +1,5 @@
 # Copyright (c) 2012,2014-2015,2017-2020 The Linux Foundation. All rights reserved.
-# Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -64,6 +64,7 @@ class FileTracking(RamParser):
 
     def get_file_metadata(self, page):
         addr_space = inode = dentry_list = dentry = a_ops = None
+        d_alias_field = 'd_u' if self.ramdump.field_offset('struct dentry', 'd_u') is not None else 'd_alias'
         name = path = ''
         if page is not None:
             addr_space = self.ramdump.read_structure_field(page, 'struct page', 'mapping')
@@ -75,7 +76,7 @@ class FileTracking(RamParser):
         if inode is not None:
             dentry_list = self.ramdump.read_structure_field(inode, 'struct inode', 'i_dentry')
         if dentry_list is not None:
-            dentry = self.ramdump.container_of(dentry_list, 'struct dentry', 'd_u')
+            dentry = self.ramdump.container_of(dentry_list, 'struct dentry', d_alias_field)
         if dentry is not None:
             d_name_ptr = (dentry + self.ramdump.field_offset('struct dentry ', 'd_name')) + \
                     self.ramdump.field_offset('struct qstr', 'name')

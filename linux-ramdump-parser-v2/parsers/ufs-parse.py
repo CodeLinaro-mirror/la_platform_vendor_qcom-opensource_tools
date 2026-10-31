@@ -1,6 +1,5 @@
 # Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
-# Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
-#
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 and
@@ -99,10 +98,11 @@ class UfsHba():
                 active_uic_cmd_addr + self.ramdump.field_offset('struct uic_command', 'argument2'))))
             print_out_ufs('\t\targument3 = 0x%x' % (self.ramdump.read_int(
                 active_uic_cmd_addr + self.ramdump.field_offset('struct uic_command', 'argument3'))))
-            print_out_ufs('\t\tcmd_active = %d' % (self.ramdump.read_int(
-                active_uic_cmd_addr + self.ramdump.field_offset('struct uic_command', 'cmd_active'))))
-            print_out_ufs('\t\tresult = %d' % (self.ramdump.read_int(
-                active_uic_cmd_addr + self.ramdump.field_offset('struct uic_command', 'result'))))
+            print_out_ufs('\t\tcmd_active = %d' % (self.ramdump.read_structure_field(
+                active_uic_cmd_addr, 'struct uic_command', 'cmd_active')))
+            if self.ramdump.field_offset('struct uic_command', 'result') is not None:
+                print_out_ufs('\t\tresult = %d' % (self.ramdump.read_int(
+                    active_uic_cmd_addr + self.ramdump.field_offset('struct uic_command', 'result'))))
             print_out_ufs('\t}')
         except:
             print_out_ufs('\t\tactive_uic_cmd = 0x0\n\t}')
@@ -156,10 +156,11 @@ class UfsHba():
     def dump_ufs_stats(self):
         ufs_stats_addr = self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'ufs_stats')
         print_out_ufs('\tstruct ufs_stats = 0x%x {' %(ufs_stats_addr))
-        print_out_ufs('\t\tlast_intr_status = %d' %(self.ramdump.read_int(
-            ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'last_intr_status'))))
-        print_out_ufs('\t\tlast_intr_ts = %d' %(self.ramdump.read_u64(
-            ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'last_intr_ts'))))
+        if self.ramdump.field_offset('struct ufs_stats', 'last_intr_status') is not None:
+            print_out_ufs('\t\tlast_intr_status = %d' %(self.ramdump.read_int(
+                ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'last_intr_status'))))
+            print_out_ufs('\t\tlast_intr_ts = %d' %(self.ramdump.read_u64(
+                ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'last_intr_ts'))))
         print_out_ufs('\t\thibern8_exit_cnt = %d' %(self.ramdump.read_int(
             ufs_stats_addr + self.ramdump.field_offset('struct ufs_stats', 'hibern8_exit_cnt'))))
         print_out_ufs('\t\tlast_hibern8_exit_tstamp = %d' % (self.ramdump.read_u64(
@@ -366,7 +367,8 @@ class UfsHba():
         print_out_ufs("\t\t\tpm_only = %d" %(self.ramdump.read_int(queue + self.ramdump.field_offset(
                                         'struct request_queue', 'pm_only'))))
         try:
-            print_out_ufs("\t\t\tnr_pending = %d" %(self.ramdump.read_int(queue + self.ramdump.field_offset(
+            if self.ramdump.field_offset('struct request_queue', 'nr_pending') is not None:
+                print_out_ufs("\t\t\tnr_pending = %d" %(self.ramdump.read_int(queue + self.ramdump.field_offset(
                                         'struct request_queue', 'nr_pending'))))
             print_out_ufs("\t\t\trpm_status = %s" %self.ufs_rpm_status_l[(self.ramdump.read_int(
                                         queue + self.ramdump.field_offset(
@@ -430,14 +432,14 @@ class UfsHba():
                                         'struct Scsi_Host', '__devices')
         sdev_list_first = self.ramdump.read_pointer(sdev_list_addr + self.ramdump.field_offset(
                                         'struct list_head', 'next'))
-        sdev_list_next = self.ramdump.read_pointer(sdev_list_first + self.ramdump.field_offset(
-                                        'struct list_head', 'next'))
         sdev_base_p = self.get_scsi_device()
-        sdev_offest = sdev_list_first - sdev_base_p
+        sdev_offest = self.ramdump.field_offset('struct scsi_device', 'siblings')
         self.get_sdev_info(sdev_base_p)
 
+        sdev_list_next = sdev_list_first
         while sdev_list_next != sdev_list_addr:
-            self.get_sdev_info(sdev_list_next - sdev_offest)
+            if sdev_list_next - sdev_offest != sdev_base_p:
+                self.get_sdev_info(sdev_list_next - sdev_offest)
             sdev_list_next = self.ramdump.read_pointer(sdev_list_next + self.ramdump.field_offset(
                                         'struct list_head', 'next'))
 
@@ -630,11 +632,13 @@ class UfsHba():
             self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'urgent_bkops_lvl')))]))
         print_out_ufs("\tis_urgent_bkops_lvl_checked = %d" % (self.ramdump.read_bool(
             self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'is_urgent_bkops_lvl_checked'))))
-        print_out_ufs("\tscsi_block_reqs_cnt = %d" % (self.ramdump.read_int(
-            self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'scsi_block_reqs_cnt'))))
+        if self.ramdump.field_offset('struct ufs_hba', 'scsi_block_reqs_cnt') is not None:
+            print_out_ufs("\tscsi_block_reqs_cnt = %d" % (self.ramdump.read_int(
+                self.ufs_hba_addr + self.ramdump.field_offset('struct ufs_hba', 'scsi_block_reqs_cnt'))))
         self.dump_ufs_vreg()
         self.dump_ufs_clk()
-        self.dump_ufs_lrb()
+        if self.ramdump.field_offset('struct ufs_hba', 'lrb') is not None:
+            self.dump_ufs_lrb()
         self.dump_sdev_info()
         print_out_ufs("}")
         return
@@ -732,16 +736,17 @@ class UfsQcHost():
         bus_vote_offset = self.ramdump.field_offset('struct ufs_qcom_host', 'bus_vote')
         bus_vote_addr = self.ufs_qc_host_addr + bus_vote_offset
         print_out_ufs("\tbus_vote = {")
-        print_out_ufs("\t\tcurr_vote = %d" %(self.ramdump.read_int(
-            bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'curr_vote'))))
-        print_out_ufs("\t\tmin_vote = %d" %(self.ramdump.read_int(
-            bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'min_bw_vote'))))
-        print_out_ufs("\t\tmax_vote = %d" % (self.ramdump.read_int(
-            bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'max_bw_vote'))))
-        print_out_ufs("\t\tsaved_vote = %d" % (self.ramdump.read_int(
-            bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'saved_vote'))))
-        print_out_ufs("\t\tis_max_bw_needed = %d" % (self.ramdump.read_int(
-            bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'is_max_bw_needed'))))
+        if self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'curr_vote') is not None:
+            print_out_ufs("\t\tcurr_vote = %d" %(self.ramdump.read_int(
+                bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'curr_vote'))))
+            print_out_ufs("\t\tmin_vote = %d" %(self.ramdump.read_int(
+                bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'min_bw_vote'))))
+            print_out_ufs("\t\tmax_vote = %d" % (self.ramdump.read_int(
+                bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'max_bw_vote'))))
+            print_out_ufs("\t\tsaved_vote = %d" % (self.ramdump.read_int(
+                bus_vote_addr + self.ramdump.field_offset('struct ufs_qcom_bus_vote', 'saved_vote'))))
+        print_out_ufs("\t\tis_max_bw_needed = %d" % (self.ramdump.read_structure_field(
+            bus_vote_addr, 'struct ufs_qcom_bus_vote', 'is_max_bw_needed')))
         print_out_ufs("\t}")
 
         # PA Layer Attributes

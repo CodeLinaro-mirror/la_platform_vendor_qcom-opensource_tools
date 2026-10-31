@@ -15,6 +15,7 @@ from print_out import print_out_str
 import minidump_util
 import os
 import linux_radix_tree
+from linux_list import ListWalker
 from .vmalloc import Vmalloc
 
 @register_parser('--print-memstat', 'Print memory stats ')
@@ -24,7 +25,7 @@ class MemStats(RamParser):
 
         if (self.ramdump.kernel_version >= (5, 4)):
             self.zram_dev_rtw = linux_radix_tree.RadixTreeWalker(self.ramdump)
-            self.zram_mem_mb = 0
+            self.zram_mem_pages = 0
 
         self.out_mem_stat = None
 
@@ -141,6 +142,46 @@ class MemStats(RamParser):
         return self.ramdump.read_word(
                         'vm_stat[NR_FILE_PAGES]')
 
+    def calculate_swapcache_pages(self):
+        swapcache_pages = self.ramdump.read_word('vm_node_stat[NR_SWAPCACHE]')
+        if swapcache_pages is not None:
+            return swapcache_pages
+        swapper_spaces = self.ramdump.address_of('swapper_spaces')
+        nr_swapper_spaces = self.ramdump.address_of('nr_swapper_spaces')
+        if swapper_spaces is None or nr_swapper_spaces is None:
+            return 0
+        nrpages_offset = self.ramdump.field_offset('struct address_space', 'nrpages')
+        space_size = self.ramdump.sizeof('struct address_space')
+        word_size = 8 if self.ramdump.arm64 else 4
+        max_swapfiles = self.ramdump.sizeof('swapper_spaces') // word_size
+        swapcache_pages = 0
+        for i in range(max_swapfiles):
+            spaces = self.ramdump.read_word(swapper_spaces + i * word_size)
+            nr = self.ramdump.read_u32(nr_swapper_spaces + i * 4)
+            if not spaces or not nr:
+                continue
+            for j in range(nr):
+                nrpages = self.ramdump.read_word(spaces + j * space_size + nrpages_offset)
+                if nrpages:
+                    swapcache_pages += nrpages
+        return swapcache_pages
+
+    def calculate_bufferram_pages(self):
+        blockdev_superblock = self.ramdump.read_word('blockdev_superblock')
+        if not blockdev_superblock:
+            return 0
+        s_inodes = blockdev_superblock + self.ramdump.field_offset('struct super_block', 's_inodes')
+        i_sb_list_offset = self.ramdump.field_offset('struct inode', 'i_sb_list')
+        i_mapping_offset = self.ramdump.field_offset('struct inode', 'i_mapping')
+        nrpages_offset = self.ramdump.field_offset('struct address_space', 'nrpages')
+        bufferram_pages = 0
+        for inode in ListWalker(self.ramdump, s_inodes, i_sb_list_offset):
+            i_mapping = self.ramdump.read_word(inode + i_mapping_offset)
+            nrpages = self.ramdump.read_word(i_mapping + nrpages_offset) if i_mapping else None
+            if nrpages:
+                bufferram_pages += nrpages
+        return bufferram_pages
+
     def calculate_ionmem_pages(self):
         # Returns memory in MB
         if self.ramdump.kernel_version >= (5, 10):
@@ -181,9 +222,14 @@ class MemStats(RamParser):
         grandtotal = self.bytes_to_pages(grandtotal)
         return grandtotal
 
-    def calculate_zram_dev_mem_allocated_MB(self, zram):
+    def calculate_zram_dev_mem_allocated_pages(self, zram):
+        if self.ramdump.field_offset('struct zram', 'disksize') is not None:
+            if not self.ramdump.read_structure_field(zram, 'struct zram', 'disksize'):
+                return
         mem_pool = zram + self.ramdump.field_offset('struct zram', 'mem_pool')
         mem_pool = self.ramdump.read_word(mem_pool)
+        if not mem_pool:
+            return
 
         pages_allocated = mem_pool + self.ramdump.field_offset('struct zs_pool',
                                                               'pages_allocated')
@@ -191,10 +237,8 @@ class MemStats(RamParser):
         stat_val = self.ramdump.read_word(pages_allocated)
         if stat_val is None:
             stat_val = 0
-        else:
-            stat_val = self.pages_to_mb(stat_val)
 
-        self.zram_mem_mb += stat_val
+        self.zram_mem_pages += stat_val
 
     def calculate_slab_mem_pages(self):
         # Returns memory in pages
@@ -235,9 +279,10 @@ class MemStats(RamParser):
             else:
                 #'struct radix_tree_root' was replaced by 'struct xarray' on kernel 5.4+
                 if self.ramdump.kernel_version >= (5, 4):
+                    self.zram_mem_pages = 0
                     self.zram_dev_rtw.walk_radix_tree(zram_index_idr,
-                                          self.calculate_zram_dev_mem_allocated_MB)
-                    stat_val = self.zram_mem_mb
+                                          self.calculate_zram_dev_mem_allocated_pages)
+                    stat_val = self.zram_mem_pages
                 else:
                     if self.ramdump.kernel_version >= (4, 14):
                         idr_layer_ary_offset = self.ramdump.field_offset(
