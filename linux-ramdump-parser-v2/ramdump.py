@@ -1452,7 +1452,7 @@ class RamDump():
         if self.gdbmi_hyp:
             self.gdbmi_hyp.close()
 
-    def open_file(self, file_name, mode='wt'):
+    def open_file(self, file_name, mode='wt', encoding=None):
         """Open a file in the out directory.
 
         Example:
@@ -1466,7 +1466,10 @@ class RamDump():
             dir_path = os.path.dirname(file_path)
             if not os.path.exists(dir_path) and ('w' in mode or 'a' in mode):
                 os.makedirs(dir_path)
-            f = open(file_path, mode)
+            if encoding is None:
+                f = open(file_path, mode)
+            else:
+                f = open(file_path, mode, encoding=encoding)
         except:
             print_out_str('Could not open path {0}'.format(file_path))
             print_out_str('Do you have write/read permissions on the path?')

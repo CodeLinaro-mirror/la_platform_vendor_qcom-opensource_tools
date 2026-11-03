@@ -1651,15 +1651,58 @@ def get_upstream_wdog_timing(ramdump):
     jiffies = ramdump.read_word('jiffies')
     last_jiffies_update = ramdump.read_s64('last_jiffies_update')
     tick_do_timer_cpu = ramdump.read_s32('tick_do_timer_cpu')
+    major, minor, patch = ramdump.kernel_version
     pet_timer_off = ramdump.field_offset('struct watchdog_core_data', 'timer')
-    timer_node_off = ramdump.field_offset('struct hrtimer', 'node')
-    timer_expires_off = ramdump.field_offset('struct timerqueue_node', 'expires')
-    pet_timer_expires = ramdump.read_word(
-        wdog_data_addr + pet_timer_off + timer_node_off + timer_expires_off)
 
-    timer_state_off = ramdump.field_offset('struct hrtimer', 'state')
-    pet_timer_state = ramdump.read_word(
-        wdog_data_addr + pet_timer_off + timer_state_off)
+    # Kernel v7.2 changed hrtimer layout: timerqueue_node became
+    # timerqueue_linked_node and state was replaced by boolean flags
+    # (including is_queued). Handle both layouts explicitly.
+    pet_timer_expires = None
+    pet_timer_state = None
+    if (major, minor) >= (7, 2):
+        # Kernel >= 7.2 path.
+        timer_node_off = ramdump.field_offset('struct hrtimer', 'node')
+        timer_expires_off = ramdump.field_offset('struct timerqueue_linked_node', 'expires')
+        if timer_node_off is None or timer_expires_off is None:
+            print_out_str('!!! Failed to resolve hrtimer node/expires offsets')
+        else:
+            pet_timer_expires = ramdump.read_word(
+                wdog_data_addr + pet_timer_off + timer_node_off + timer_expires_off)
+        # is_queued (u8) replaces the old 'state' bitmask.
+        is_queued_off = ramdump.field_offset('struct hrtimer', 'is_queued')
+        if is_queued_off is None:
+            print_out_str('!!! Failed to resolve is_queued field offset of hrtimer')
+        else:
+            is_queued = ramdump.read_byte(
+                wdog_data_addr + pet_timer_off + is_queued_off)
+            if is_queued is None:
+                print_out_str('!!! Failed to read is_queued field of hrtimer')
+            else:
+                # Normalize to a shared state across kernels:
+                # 0x01 = queued/active, 0x00 = idle/inactive.
+                pet_timer_state = 0x01 if is_queued else 0x00
+    else:
+        # Kernel < 7.2 path with legacy state bitmask.
+        timer_node_off = ramdump.field_offset('struct hrtimer', 'node')
+        timer_expires_off = ramdump.field_offset(
+            'struct timerqueue_node', 'expires')
+        if timer_node_off is None or timer_expires_off is None:
+            print_out_str('!!! Failed to resolve legacy hrtimer node/expires offsets')
+        else:
+            pet_timer_expires = ramdump.read_word(
+                wdog_data_addr + pet_timer_off + timer_node_off + timer_expires_off)
+        timer_state_off = ramdump.field_offset('struct hrtimer', 'state')
+        if timer_state_off is None:
+            print_out_str('!!! Failed to resolve legacy hrtimer state offset')
+        else:
+            legacy_pet_timer_state = ramdump.read_word(
+                wdog_data_addr + pet_timer_off + timer_state_off)
+            if legacy_pet_timer_state is None:
+                print_out_str('!!! Failed to read legacy hrtimer state')
+            else:
+                # Legacy bit0 indicates queued state. Convert to the same
+                # representation used for kernels >= 7.2.
+                pet_timer_state = 0x01 if (legacy_pet_timer_state & 0x01) else 0x00
 
     wdog_last_pet = ramdump.read_structure_field(
         wdog_data_addr, 'struct watchdog_core_data', 'last_hw_keepalive')
@@ -1763,7 +1806,7 @@ def get_upstream_wdog_timing(ramdump):
 
         else:
             print_out_str('Watchdog pet timer not expired')
-            if jiffies > pet_timer_expires:
+            if pet_timer_expires is not None and jiffies > pet_timer_expires:
                 print_out_str('Current jiffies crossed pet_timer expires jiffies')
     print_out_str('Watchdog status: {0}'.format(wdog_status))
     print_out_str('CPU online bits: {0:08b}'.format(cpu_online_bits))
@@ -1772,8 +1815,14 @@ def get_upstream_wdog_timing(ramdump):
     if (ramdump.kernel_version >= (5, 15, 0)):
         cpu_dying_bits = ramdump.read_word('__cpu_dying_mask')
         print_out_str('CPU dying bits: {0:08b}'.format(cpu_dying_bits))
-    print_out_str('pet_timer_state: 0x{0:x}'.format(pet_timer_state))
-    print_out_str('pet_timer_expires: {0}'.format(pet_timer_expires))
+    if pet_timer_state is None:
+        print_out_str('pet_timer_state: unavailable')
+    else:
+        print_out_str('pet_timer_state: 0x{0:x}'.format(pet_timer_state))
+    if pet_timer_expires is None:
+        print_out_str('pet_timer_expires: unavailable')
+    else:
+        print_out_str('pet_timer_expires: {0}'.format(pet_timer_expires))
     print_out_str('Current jiffies  : {0}'.format(jiffies))
     print_out_str(
         'Timestamp of last timer interrupt(last_jiffies_update): {0}'.format(
