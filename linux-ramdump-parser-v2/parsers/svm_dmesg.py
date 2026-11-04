@@ -32,8 +32,15 @@ class svmdmesg(RamParser):
                     qcom_dmesg_dumper = self.ramdump.read_datatype(qcom_dmesg_dumper_address, 'struct qcom_dmesg_dumper')
                     base = qcom_dmesg_dumper.base
                     size = qcom_dmesg_dumper.size
-                    log = self.ramdump.get_bin_data(base, size)
-                    fout.write(cleanupString(log.decode('ascii', 'ignore')))
+                    try:
+                        log = self.ramdump.get_bin_data(base, size)
+                    except TypeError:
+                        log = None
+                    if not log:
+                        fout.write('qcom_dmesg_dumper buffer 0x{0:x} size 0x{1:x} not present in dump\n'.format(base, size))
+                        print_out_str('svmdmesg: buffer 0x{0:x} size 0x{1:x} not present in dump'.format(base, size))
+                    else:
+                        fout.write(cleanupString(log.decode('ascii', 'ignore')))
                 break
     def parse(self):
         self.f = self.ramdump.open_file("svmdmesg.txt")
@@ -80,8 +87,8 @@ def process_svmdmesg(svmdmesg, min_svmktime_ns, max_svmktime_ns, svmktime_p, pvm
                     if max_svmktime_ns in svmktime_s:
                         a = min([ktime for ktime in svmktime_s if ktime > max_svmktime_ns], default=None)
                         if a and timestamp_ns < a:
-                            offset_index = svmktime_numbers1.index(max_svmktime_ns)
-                            new_timestamp_ns = timestamp_ns + pvm_svm_offset_numbers1[offset_index]
+                            offset_index = svmktime_p.index(max_svmktime_ns)
+                            new_timestamp_ns = timestamp_ns + pvm_svm_offset_p[offset_index]
                             new_timestamp_sec = new_timestamp_ns / 1e9
                             line = f"[{new_timestamp_sec:.6f}] " + line
                         else:
