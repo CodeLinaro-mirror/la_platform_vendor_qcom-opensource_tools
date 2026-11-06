@@ -28,10 +28,20 @@ class CmaAreas(RamParser):
         str3 = "{0} pfn : 0x{1:x}--0x{2:x} head_page : 0x{3:x} count : {4} " \
                "_mapcount : {5:x}  {6}\n"
         page_flags = ramdump.read_structure_field(page, 'struct page', 'flags')
-        tail_page = ramdump.read_structure_field(
-            page, 'struct page', 'compound_head')
-        if (tail_page & 1) == 1:
-            page = tail_page - 1
+        if ramdump.field_offset('struct page', 'compound_info') is not None:
+            tail_page = ramdump.read_structure_field(
+                page, 'struct page', 'compound_info')
+            if (tail_page & 1) == 1:
+                if (ramdump.is_config_defined('CONFIG_HUGETLB_PAGE_OPTIMIZE_VMEMMAP')
+                        and page_size & (page_size - 1) == 0):
+                    page = page & tail_page
+                else:
+                    page = tail_page - 1
+        else:
+            tail_page = ramdump.read_structure_field(
+                page, 'struct page', 'compound_head')
+            if (tail_page & 1) == 1:
+                page = tail_page - 1
         nr_pages = 1
         page_count = ramdump.read_structure_field(
             page, 'struct page', '_refcount.counter')
